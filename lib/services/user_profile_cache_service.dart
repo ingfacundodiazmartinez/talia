@@ -174,8 +174,8 @@ class UserProfileCacheService {
   Stream<DocumentSnapshot> getUserDataStream(String userId) {
     return _firestore.collection('users').doc(userId).snapshots().distinct(
       (prev, next) {
-        final prevData = prev.data() as Map<String, dynamic>?;
-        final nextData = next.data() as Map<String, dynamic>?;
+        final prevData = prev.data();
+        final nextData = next.data();
 
         // Solo comparar campos relevantes para display
         return prevData?['name'] == nextData?['name'] &&

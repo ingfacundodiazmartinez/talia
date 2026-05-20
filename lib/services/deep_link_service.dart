@@ -191,7 +191,10 @@ class DeepLinkService {
 
       if (!storyDoc.exists) {
         ReleaseLogger.log('🔗 [DeepLink] Story not found: $storyId');
-        _showErrorSnackBar(navigator.context, 'Historia no encontrada');
+        if (navigator.context.mounted) {
+          // ignore: use_build_context_synchronously
+          _showErrorSnackBar(navigator.context, 'Historia no encontrada');
+        }
         return;
       }
 
@@ -229,7 +232,10 @@ class DeepLinkService {
 
     } catch (e) {
       ReleaseLogger.error('🔗 [DeepLink] Error loading story: $e');
-      _showErrorSnackBar(navigator.context, 'Error al cargar la historia');
+      if (navigator.context.mounted) {
+        // ignore: use_build_context_synchronously
+        _showErrorSnackBar(navigator.context, 'Error al cargar la historia');
+      }
     }
   }
 

@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -63,8 +64,7 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
         options: HttpsCallableOptions(timeout: const Duration(seconds: 30)),
       );
 
-      final result = await callable.call({'childId': widget.childId});
-      final data = result.data as Map<String, dynamic>;
+      await callable.call({'childId': widget.childId});
 
       ReleaseLogger.log(
         '✅ Solicitud de ubicación enviada exitosamente',
@@ -141,7 +141,7 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
                 _errorMessage =
                   '${widget.childName} aún no ha compartido su ubicación.\n\n'
                   'Pídele que:\n\n'
-                  '1. Abra la app Talia en su dispositivo\n'
+                  '1. Abra la app Tália en su dispositivo\n'
                   '2. Acepte los permisos de ubicación\n\n'
                   'La ubicación aparecerá aquí automáticamente.';
               });
@@ -155,7 +155,7 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
                   error.toString().contains('PERMISSION_DENIED')) {
                 friendlyMessage =
                   '${widget.childName} necesita:\n\n'
-                  '1. Abrir la app Talia en su dispositivo\n'
+                  '1. Abrir la app Tália en su dispositivo\n'
                   '2. Aceptar los permisos de ubicación\n'
                   '3. Mantener la app abierta unos segundos\n\n'
                   'Luego podrás ver su ubicación aquí.';
@@ -289,7 +289,7 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
                   Container(
                     padding: EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Color(0xFF9D7FE8).withValues(alpha: 0.1),
+                      color: ThemeService.primaryColor.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Column(
@@ -326,7 +326,7 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
       backgroundColor: Colors.white,
       appBar: AppBar(
         title: Text('Ubicación de ${widget.childName}'),
-        backgroundColor: Color(0xFF9D7FE8),
+        backgroundColor: ThemeService.primaryColor,
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
@@ -351,7 +351,7 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+                  CircularProgressIndicator(color: ThemeService.primaryColor),
                   SizedBox(height: 16),
                   Text(
                     'Cargando ubicación...',
@@ -382,7 +382,7 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
                       _loadChildLocation();
                     },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Color(0xFF9D7FE8),
+                      backgroundColor: ThemeService.primaryColor,
                       foregroundColor: Colors.white,
                     ),
                     child: Text('Reintentar'),
@@ -413,7 +413,7 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
                         children: [
                           Icon(
                             Icons.location_on,
-                            color: Color(0xFF9D7FE8),
+                            color: ThemeService.primaryColor,
                             size: 20,
                           ),
                           SizedBox(width: 8),
@@ -485,7 +485,7 @@ class _ChildLocationScreenState extends State<ChildLocationScreen> {
       floatingActionButton: _childLocation != null
           ? FloatingActionButton(
               onPressed: () => _moveToLocation(_childLocation!),
-              backgroundColor: Color(0xFF9D7FE8),
+              backgroundColor: ThemeService.primaryColor,
               child: Icon(Icons.my_location, color: Colors.white),
             )
           : null,

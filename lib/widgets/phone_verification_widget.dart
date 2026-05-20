@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
@@ -40,14 +41,12 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
   late AnimationController _buttonController;
   late AnimationController _progressController;
   late Animation<double> _buttonAnimation;
-  late Animation<double> _progressAnimation;
 
   // Estado
   String _selectedCountryCode = '+54';
   int _currentStep = 0; // 0: teléfono, 1: código
   bool _isLoading = false;
   String? _errorMessage;
-  String? _verificationId;
 
   // Countdown para reenvío
   Timer? _countdownTimer;
@@ -81,15 +80,12 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
   /// vea datos del usuario anterior
   Future<void> _clearFirestoreCache() async {
     try {
-      print('🧹 Limpiando cache de Firestore...');
       await FirebaseFirestore.instance.clearPersistence();
-      print('✅ Cache de Firestore limpiado exitosamente');
     } catch (e) {
       // ✅ Este error es NORMAL cuando hay listeners activos de Firestore
       // El mensaje de error "failed-precondition" con "ensure it has been indexed"
       // es confuso pero NO significa que falten índices - es un mensaje genérico
       // de Firestore cuando clearPersistence() no puede ejecutarse.
-      print('ℹ️ Cache de Firestore no limpiado (normal si hay streams activos)');
     }
   }
 
@@ -106,10 +102,6 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
 
     _buttonAnimation = Tween<double>(begin: 1.0, end: 0.95).animate(
       CurvedAnimation(parent: _buttonController, curve: Curves.easeInOut),
-    );
-
-    _progressAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _progressController, curve: Curves.easeInOut),
     );
   }
 
@@ -162,7 +154,6 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
       } else if (result.isError) {
         _setError(result.error ?? 'Error desconocido');
       } else if (result.isCodeSent) {
-        _verificationId = result.verificationId;
         // Ya se manejó en onCodeSent
       }
     } catch (e) {
@@ -329,7 +320,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.1),
             blurRadius: 20,
             offset: Offset(0, 10),
           ),
@@ -378,10 +369,10 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
             Container(
               padding: EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Color(0xFF9D7FE8).withOpacity(0.1),
+                color: ThemeService.primaryColor.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
-              child: Icon(Icons.phone_android, size: 32, color: Color(0xFF9D7FE8)),
+              child: Icon(Icons.phone_android, size: 32, color: ThemeService.primaryColor),
             ),
             SizedBox(height: 16),
             Text(
@@ -426,7 +417,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
             height: 2,
             margin: EdgeInsets.symmetric(horizontal: 16),
             decoration: BoxDecoration(
-              color: _currentStep >= 1 ? Color(0xFF9D7FE8) : Colors.grey[300],
+              color: _currentStep >= 1 ? ThemeService.primaryColor : Colors.grey[300],
               borderRadius: BorderRadius.circular(1),
             ),
           ),
@@ -446,7 +437,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
           width: 32,
           height: 32,
           decoration: BoxDecoration(
-            color: isActive ? Color(0xFF9D7FE8) : Colors.grey[300],
+            color: isActive ? ThemeService.primaryColor : Colors.grey[300],
             shape: BoxShape.circle,
           ),
           child: Icon(
@@ -460,7 +451,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
           label,
           style: TextStyle(
             fontSize: 12,
-            color: isActive ? Color(0xFF9D7FE8) : Colors.grey[600],
+            color: isActive ? ThemeService.primaryColor : Colors.grey[600],
             fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
           ),
         ),
@@ -537,7 +528,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
-                  color: Color(0xFF9D7FE8),
+                  color: ThemeService.primaryColor,
                 ),
               ),
             ],
@@ -547,7 +538,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Color(0xFF9D7FE8)),
+          borderSide: BorderSide(color: ThemeService.primaryColor),
         ),
       ),
       inputFormatters: [
@@ -578,7 +569,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Color(0xFF9D7FE8)),
+              borderSide: BorderSide(color: ThemeService.primaryColor),
             ),
           ),
           inputFormatters: [
@@ -600,9 +591,9 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
     return Container(
       padding: EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.1),
+        color: Colors.red.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.red.withOpacity(0.3)),
+        border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
@@ -633,7 +624,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
                   ? null
                   : (_currentStep == 0 ? _sendVerificationCode : _verifyCode),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF9D7FE8),
+                backgroundColor: ThemeService.primaryColor,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
@@ -688,7 +679,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
             onPressed: _isLoading ? null : _resendCode,
             child: Text(
               'Reenviar código',
-              style: TextStyle(color: Color(0xFF9D7FE8)),
+              style: TextStyle(color: ThemeService.primaryColor),
             ),
           ),
         TextButton(
@@ -717,16 +708,18 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
       final token = await FirebaseAppCheck.instance.getToken();
 
       // Cerrar diálogo de carga
+      if (!mounted) return;
       Navigator.of(context).pop();
 
       // Mostrar el token
+      if (!mounted) return;
       if (token != null) {
         showDialog(
           context: context,
           builder: (context) => AlertDialog(
             title: Row(
               children: [
-                Icon(Icons.info_outline, color: Color(0xFF9D7FE8)),
+                Icon(Icons.info_outline, color: ThemeService.primaryColor),
                 SizedBox(width: 8),
                 Text('Debug Token'),
               ],
@@ -796,6 +789,7 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
       }
     } catch (e) {
       // Cerrar diálogo de carga si está abierto
+      if (!mounted) return;
       Navigator.of(context).pop();
       _showErrorDialog('Error obteniendo token: $e');
     }
@@ -867,12 +861,12 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
                       style: TextStyle(
                         fontWeight: FontWeight.w600,
                         color: isSelected
-                            ? Color(0xFF9D7FE8)
+                            ? ThemeService.primaryColor
                             : Colors.grey[600],
                       ),
                     ),
                     selected: isSelected,
-                    selectedTileColor: Color(0xFF9D7FE8).withOpacity(0.1),
+                    selectedTileColor: ThemeService.primaryColor.withValues(alpha: 0.1),
                     onTap: () {
                       setState(() {
                         _selectedCountryCode = country['code']!;

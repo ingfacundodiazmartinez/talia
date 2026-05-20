@@ -5,6 +5,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../../../controllers/parent_archived_chats_controller.dart';
 import '../../../groups/groups.dart'; // GroupChatScreenV2
 import '../../../services/chats/chat_preferences_cache.dart';
+import '../../../services/block_service.dart';
 import '../../../utils/chat_utils.dart';
 import '../../../utils/release_logger.dart';
 import '../../chat_detail_screen.dart';
@@ -13,7 +14,7 @@ import '../../../theme_service.dart';
 /// Pantalla de chats archivados para padres
 ///
 /// ✅ CORREGIDO: Usa EXACTAMENTE el mismo patrón que ParentChatsScreen:
-/// - Stream<QuerySnapshot> CRUDO de Firestore (sin .map())
+/// - `Stream<QuerySnapshot>` CRUDO de Firestore (sin .map())
 /// - Filtrado EN EL BUILDER (se ejecuta en cada rebuild)
 /// - ValueKey con _preferencesVersion para forzar rebuild
 class ParentArchivedChatsScreen extends StatefulWidget {
@@ -329,13 +330,19 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
             children: [
               Stack(
                 children: [
-                  CircleAvatar(
+                  StreamBuilder<bool>(
+                    stream: BlockService().shouldHidePhotoOfStream(userId),
+                    initialData: false,
+                    builder: (context, hideSnap) {
+                      final hidePhoto = hideSnap.data ?? false;
+                      final effectivePhoto = hidePhoto ? null : photoURL;
+                      return CircleAvatar(
                     radius: 28,
                     backgroundColor: colorScheme.primary.withValues(alpha: 0.2),
-                    child: photoURL != null && photoURL.isNotEmpty
+                    child: effectivePhoto != null && effectivePhoto.isNotEmpty
                         ? ClipOval(
                             child: CachedNetworkImage(
-                              imageUrl: photoURL,
+                              imageUrl: effectivePhoto,
                               width: 56,
                               height: 56,
                               fit: BoxFit.cover,
@@ -365,6 +372,8 @@ class _ParentArchivedChatsScreenState extends State<ParentArchivedChatsScreen> {
                               color: colorScheme.primary,
                             ),
                           ),
+                      );
+                    },
                   ),
                   if (isBlocked)
                     Positioned(

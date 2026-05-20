@@ -51,7 +51,6 @@ class StoryCacheManager {
       _cacheHits++;
       return _mergeOptimisticCache(_cachedStories!);
     }
-
     _cacheMisses++;
     return _mergeOptimisticCache([]);
   }

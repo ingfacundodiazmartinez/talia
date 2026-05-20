@@ -36,14 +36,20 @@ class WhitelistScreen extends StatefulWidget {
 }
 
 class _WhitelistScreenState extends State<WhitelistScreen>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, TickerProviderStateMixin {
   late WhitelistController _controller;
+  late TabController _tabController;
+
+  // Orden de tabs (define los estados visibles, en orden de prioridad para el padre)
+  static const List<String> _tabFilters = ['pending', 'approved', 'rejected', 'revoked'];
 
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
-  // Filtros
-  String _statusFilter = 'all'; // all, pending, approved, rejected, revoked
+  // Filtro por estado (derivado del tab seleccionado)
+  String get _statusFilter => _tabFilters[_tabController.index];
+
+  // Filtro por hijo
   late String _childFilter;
 
   // Estado
@@ -54,6 +60,11 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   // Contadores para badges
   int _pendingCount = 0;
 
+  // Selection mode (solo en tab "Pendientes")
+  final Set<String> _selectedContactIds = {};
+  bool _isBulkProcessing = false;
+  bool get _isSelecting => _selectedContactIds.isNotEmpty;
+
   @override
   bool get wantKeepAlive => true;
 
@@ -61,6 +72,18 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   void initState() {
     super.initState();
     _childFilter = widget.initialChildFilter ?? 'all';
+
+    // Default: arrancar en "Pendientes" (lo más relevante para el padre)
+    _tabController = TabController(length: _tabFilters.length, vsync: this);
+    _tabController.addListener(() {
+      if (!_tabController.indexIsChanging) {
+        // Al salir de "Pendientes", limpiar selección
+        if (_statusFilter != 'pending' && _selectedContactIds.isNotEmpty) {
+          _selectedContactIds.clear();
+        }
+        setState(() {});
+      }
+    });
 
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
@@ -145,6 +168,7 @@ class _WhitelistScreenState extends State<WhitelistScreen>
 
   @override
   void dispose() {
+    _tabController.dispose();
     _controller.onDataChanged = null; // Limpiar callback
     _searchController.dispose();
     _controller.dispose();
@@ -195,7 +219,11 @@ class _WhitelistScreenState extends State<WhitelistScreen>
                   ),
                   child: Column(
                     children: [
-                      _buildSearchAndFilters(context),
+                      // En selection mode mostrar barra de bulk arriba; sino los filtros normales.
+                      if (_isSelecting)
+                        _buildBulkActionBar(context)
+                      else
+                        _buildSearchAndFilters(context),
                       Expanded(child: _buildBody(context)),
                     ],
                   ),
@@ -204,6 +232,43 @@ class _WhitelistScreenState extends State<WhitelistScreen>
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildBulkActionBar(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      color: colorScheme.surface,
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.close),
+            onPressed: _isBulkProcessing ? null : _clearSelection,
+            tooltip: 'Cancelar selección',
+          ),
+          Expanded(
+            child: Text(
+              '${_selectedContactIds.length} seleccionado${_selectedContactIds.length == 1 ? '' : 's'}',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: colorScheme.onSurface,
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close_rounded, color: Colors.red),
+            onPressed: _isBulkProcessing ? null : _bulkRejectSelected,
+            tooltip: 'Rechazar todas',
+          ),
+          IconButton(
+            icon: const Icon(Icons.check_rounded, color: Colors.green),
+            onPressed: _isBulkProcessing ? null : _bulkApproveSelected,
+            tooltip: 'Aprobar todas',
+          ),
+        ],
       ),
     );
   }
@@ -288,74 +353,75 @@ class _WhitelistScreenState extends State<WhitelistScreen>
             ),
           ),
           SizedBox(height: 12),
-          // Filtros
-          Row(
-            children: [
-              // Filtro por estado
-              Expanded(
-                child: _buildFilterDropdown(
-                  value: _statusFilter,
-                  items: [
-                    DropdownMenuItem(value: 'all', child: Text('Todos')),
-                    DropdownMenuItem(
-                      value: 'pending',
-                      child: Row(
-                        children: [
-                          Text('Pendientes'),
-                          if (_pendingCount > 0) ...[
-                            SizedBox(width: 6),
-                            Container(
-                              padding: EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.orange,
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Text(
-                                '$_pendingCount',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    DropdownMenuItem(value: 'approved', child: Text('Aprobados')),
-                    DropdownMenuItem(value: 'rejected', child: Text('Rechazados')),
-                    DropdownMenuItem(value: 'revoked', child: Text('Revocados')),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) setState(() => _statusFilter = value);
-                  },
-                  icon: Icons.filter_list,
-                ),
-              ),
-              SizedBox(width: 12),
-              // Filtro por hijo
-              Expanded(
-                child: _buildFilterDropdown(
-                  value: _childFilter,
-                  items: [
-                    DropdownMenuItem(value: 'all', child: Text('Todos los hijos')),
-                    ..._linkedChildren.map((child) => DropdownMenuItem(
-                          value: child['id'],
-                          child: Text(child['name'] ?? 'Hijo'),
-                        )),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) setState(() => _childFilter = value);
-                  },
-                  icon: Icons.child_care,
-                ),
-              ),
-            ],
-          ),
+          // Filtro por hijo (chip-like dropdown)
+          if (_linkedChildren.isNotEmpty)
+            _buildFilterDropdown(
+              value: _childFilter,
+              items: [
+                DropdownMenuItem(value: 'all', child: Text('Todos los hijos')),
+                ..._linkedChildren.map((child) => DropdownMenuItem(
+                      value: child['id'],
+                      child: Text(child['name'] ?? 'Hijo'),
+                    )),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _childFilter = value);
+              },
+              icon: Icons.child_care,
+            ),
+          SizedBox(height: 12),
+          // Tabs por estado
+          _buildStatusTabs(context),
         ],
       ),
+    );
+  }
+
+  Widget _buildStatusTabs(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return TabBar(
+      controller: _tabController,
+      isScrollable: true,
+      tabAlignment: TabAlignment.start,
+      labelColor: colorScheme.primary,
+      unselectedLabelColor: colorScheme.onSurfaceVariant,
+      indicatorColor: colorScheme.primary,
+      indicatorSize: TabBarIndicatorSize.label,
+      labelStyle: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      unselectedLabelStyle: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+      dividerColor: Colors.transparent,
+      tabs: [
+        Tab(child: _tabLabel('Pendientes', count: _pendingCount)),
+        const Tab(text: 'Aprobados'),
+        const Tab(text: 'Rechazados'),
+        const Tab(text: 'Revocados'),
+      ],
+    );
+  }
+
+  Widget _tabLabel(String text, {int count = 0}) {
+    if (count <= 0) return Text(text);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(text),
+        const SizedBox(width: 6),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.orange,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            '$count',
+            style: const TextStyle(
+              fontSize: 11,
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -414,6 +480,8 @@ class _WhitelistScreenState extends State<WhitelistScreen>
       return _buildEmptyState(context);
     }
 
+    final canSelect = _statusFilter == 'pending';
+
     return RefreshIndicator(
       onRefresh: _refresh,
       child: ListView.builder(
@@ -421,13 +489,59 @@ class _WhitelistScreenState extends State<WhitelistScreen>
         itemCount: filteredContacts.length,
         itemBuilder: (context, index) {
           final contact = filteredContacts[index];
-          return GroupedContactCard(
+          final isSelected = _selectedContactIds.contains(contact.contactId);
+          final colorScheme = Theme.of(context).colorScheme;
+
+          final card = GroupedContactCard(
             contact: contact,
             controller: _controller,
             searchQuery: _searchQuery,
-            onTap: () => _showContactDetail(contact),
+            onTap: _isSelecting && canSelect
+                ? () => _toggleContactSelection(contact.contactId)
+                : () => _showContactDetail(contact),
             onApprove: _handleApprove,
             onReject: _handleReject,
+          );
+
+          // Solo permitir bulk-select en tab Pendientes.
+          if (!canSelect) return card;
+
+          return GestureDetector(
+            onLongPress: _isBulkProcessing
+                ? null
+                : () => _toggleContactSelection(contact.contactId),
+            child: Stack(
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(bottom: 4),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isSelected
+                          ? colorScheme.primary
+                          : Colors.transparent,
+                      width: 2,
+                    ),
+                  ),
+                  child: card,
+                ),
+                if (isSelected)
+                  Positioned(
+                    top: 12,
+                    right: 12,
+                    child: Container(
+                      width: 26,
+                      height: 26,
+                      decoration: BoxDecoration(
+                        color: colorScheme.primary,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: const Icon(Icons.check, color: Colors.white, size: 16),
+                    ),
+                  ),
+              ],
+            ),
           );
         },
       ),
@@ -540,6 +654,164 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   // EVENT HANDLERS - Usan nuevos métodos del controller
   // ═══════════════════════════════════════════════════════════════
 
+  // ──────── Selection mode (bulk approve/reject) ────────
+
+  void _toggleContactSelection(String contactId) {
+    setState(() {
+      if (_selectedContactIds.contains(contactId)) {
+        _selectedContactIds.remove(contactId);
+      } else {
+        _selectedContactIds.add(contactId);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() => _selectedContactIds.clear());
+  }
+
+  /// Bulk approve: aprueba todas las relations pending de los contactos seleccionados.
+  Future<void> _bulkApproveSelected() async {
+    if (_selectedContactIds.isEmpty || _isBulkProcessing) return;
+
+    final selectedContacts = _groupedContacts
+        .where((c) => _selectedContactIds.contains(c.contactId))
+        .toList();
+
+    final pendingRelations = <ChildRelation>[];
+    for (final c in selectedContacts) {
+      pendingRelations.addAll(c.childRelations.where((r) => r.status == 'pending'));
+    }
+    if (pendingRelations.isEmpty) return;
+
+    setState(() => _isBulkProcessing = true);
+
+    int success = 0;
+    int failed = 0;
+    for (final r in pendingRelations) {
+      try {
+        Map<String, dynamic> result;
+        if (r.type == 'group_v2') {
+          result = await _controller.approveGroupV2Request(
+            requestId: r.contactDocId,
+            groupId: r.data['groupId'] ?? '',
+            childId: r.childId,
+          );
+        } else {
+          result = await _controller.approveContact(
+            contactDocId: r.contactDocId,
+            childId: r.childId,
+          );
+        }
+        if (result['success'] == true) {
+          success++;
+        } else {
+          failed++;
+        }
+      } catch (_) {
+        failed++;
+      }
+    }
+
+    await UnreadMessagesService().updateBadgeCount();
+    await _loadData();
+
+    if (!mounted) return;
+    setState(() {
+      _selectedContactIds.clear();
+      _isBulkProcessing = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failed > 0
+            ? '$success aprobadas, $failed con error'
+            : '$success aprobada${success == 1 ? '' : 's'}'),
+        backgroundColor: failed > 0 ? Colors.orange : Colors.green,
+      ),
+    );
+  }
+
+  /// Bulk reject: rechaza todas las relations pending de los contactos seleccionados.
+  Future<void> _bulkRejectSelected() async {
+    if (_selectedContactIds.isEmpty || _isBulkProcessing) return;
+
+    final selectedContacts = _groupedContacts
+        .where((c) => _selectedContactIds.contains(c.contactId))
+        .toList();
+
+    final pendingRelations = <ChildRelation>[];
+    for (final c in selectedContacts) {
+      pendingRelations.addAll(c.childRelations.where((r) => r.status == 'pending'));
+    }
+    if (pendingRelations.isEmpty) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rechazar contactos'),
+        content: Text('¿Rechazar ${pendingRelations.length} solicitud${pendingRelations.length == 1 ? '' : 'es'}? Tu hijo no podrá hablar con estos contactos.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Rechazar todas'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    setState(() => _isBulkProcessing = true);
+
+    int success = 0;
+    int failed = 0;
+    for (final r in pendingRelations) {
+      try {
+        Map<String, dynamic> result;
+        if (r.type == 'group_v2') {
+          result = await _controller.rejectGroupV2Request(
+            requestId: r.contactDocId,
+          );
+        } else {
+          result = await _controller.rejectContact(
+            contactDocId: r.contactDocId,
+            childId: r.childId,
+          );
+        }
+        if (result['success'] == true) {
+          success++;
+        } else {
+          failed++;
+        }
+      } catch (_) {
+        failed++;
+      }
+    }
+
+    await UnreadMessagesService().updateBadgeCount();
+    await _loadData();
+
+    if (!mounted) return;
+    setState(() {
+      _selectedContactIds.clear();
+      _isBulkProcessing = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failed > 0
+            ? '$success rechazadas, $failed con error'
+            : '$success rechazada${success == 1 ? '' : 's'}'),
+        backgroundColor: failed > 0 ? Colors.orange : Colors.green,
+      ),
+    );
+  }
+
   Future<void> _handleApprove(ChildRelation relation) async {
     ReleaseLogger.log('🔄 [HandleApprove] Iniciando - type: ${relation.type}, contactDocId: ${relation.contactDocId}, childId: ${relation.childId}', tag: 'WhitelistScreen');
 
@@ -585,6 +857,10 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     ReleaseLogger.log('📥 [HandleApprove] Resultado: $result', tag: 'WhitelistScreen');
 
     await UnreadMessagesService().updateBadgeCount();
+
+    // Marcar notificación contact_request relacionada como leída
+    // (badge de Familia depende de notifs unread)
+    _controller.markNotificationsAsRead();
 
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -636,6 +912,7 @@ class _WhitelistScreenState extends State<WhitelistScreen>
     }
 
     await UnreadMessagesService().updateBadgeCount();
+    _controller.markNotificationsAsRead();
 
     if (mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();

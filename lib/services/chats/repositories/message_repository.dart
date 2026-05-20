@@ -44,7 +44,7 @@ class MessageRepository {
 
     // ✅ FIX: Si hay clearedAt, solo mostrar mensajes posteriores
     if (clearedAt != null) {
-      query = query.where('timestamp', isGreaterThan: clearedAt) as Query<Map<String, dynamic>>;
+      query = query.where('timestamp', isGreaterThan: clearedAt);
     }
 
     return query.snapshots();
@@ -52,10 +52,14 @@ class MessageRepository {
 
   /// Crear mensaje optimista
   /// ✅ FIX: Actualiza también el chat document con lastMessage, lastMessageId, etc.
+  ///
+  /// [extraFields] permite agregar campos extra al doc del mensaje (ej:
+  /// `videoFrames` para que el trigger de moderación los consuma).
   Future<String> createOptimisticMessage({
     required String chatId,
     required ChatMessage message,
     bool isGroup = false,
+    Map<String, dynamic>? extraFields,
   }) async {
     try {
       final collection = isGroup ? 'groups_v2' : 'chats';
@@ -82,6 +86,9 @@ class MessageRepository {
       // El timestamp local se ignora y el servidor genera el timestamp real
       final messageData = message.toMap();
       messageData['timestamp'] = FieldValue.serverTimestamp();
+      if (extraFields != null) {
+        messageData.addAll(extraFields);
+      }
 
       batch.set(messageRef, messageData);
 

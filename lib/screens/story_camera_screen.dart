@@ -1,23 +1,17 @@
+import 'package:talia/theme_service.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart' show FlashMode;
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
-import 'package:cached_network_image/cached_network_image.dart';
 import '../controllers/story_camera_controller.dart';
-import '../theme_service.dart';
-import '../models/character.dart';
-import '../services/deepar_service.dart';
 import '../services/ad_service.dart';
-import '../services/usage_limits_service.dart';
-import '../services/subscription_service.dart';
+import '../services/bottom_nav_visibility.dart';
 import '../utils/release_logger.dart';
 import '../widgets/permission_dialog.dart';
-import '../widgets/character_selector_dialog.dart';
-import '../widgets/premium_paywall_dialog.dart';
 import '../widgets/camera/flutter_camera_view.dart';
-import '../widgets/camera/deepar_camera_view.dart';
 import 'package:flutter_story_editor/flutter_story_editor.dart';
+// ignore: implementation_imports
 import 'package:flutter_story_editor/src/controller/controller.dart';
 import 'trivia/trivia_creation_screen.dart';
 
@@ -40,41 +34,28 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   // ✅ CORRECTO: Solo controller y estado UI local
   late StoryCameraController _controller;
   final AdService _adService = AdService();
-  final UsageLimitsService _usageLimitsService = UsageLimitsService();
 
   // Estado UI únicamente
   bool _isVideoMode = false; // Estado para modo foto/video
   double _baseZoom = 1.0; // Para pinch-to-zoom
   bool _showZoomIndicator = false; // Mostrar indicador de zoom temporalmente
-  Character? _selectedFaceSwapCharacter; // Personaje seleccionado para Face Swap
   bool _showScreenFlash = false; // ✅ Screen flash para Android (cámara frontal)
-
-  // Face-swap pulsing animation (para usuarios que nunca lo han usado)
-  late AnimationController _faceSwapPulseController;
-  late Animation<double> _faceSwapPulseAnimation;
-  bool _hasUsedFaceSwap = true; // Default true para no mostrar animación hasta cargar
+  // Default true para no mostrar el pulse antes de saber si ya lo usó (evita
+  // un flash de animación que luego se apaga al cargar Hive).
+  bool _hasUsedFaceSwap = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
+    // Ocultar bottom navbar durante la creación de historia
+    BottomNavVisibility.instance.registerFullScreen();
+
     // ✅ Bloquear orientación a portrait para evitar problemas de rotación de cámara
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
     ]);
-
-    // Inicializar animación de pulso para face-swap
-    _faceSwapPulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    );
-    _faceSwapPulseAnimation = Tween<double>(begin: 1.0, end: 1.15).animate(
-      CurvedAnimation(
-        parent: _faceSwapPulseController,
-        curve: Curves.easeInOut,
-      ),
-    );
 
     // ✅ CORRECTO: Solo inicializar controller y configurar callbacks
     final currentUserId = firebase_auth.FirebaseAuth.instance.currentUser?.uid ?? '';
@@ -83,27 +64,20 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     // Configurar callbacks para comunicación controller → screen
     _setupControllerCallbacks();
 
-    // Verificar si el usuario ya usó face-swap
-    _loadFaceSwapStatus();
-
     // Inicializar controller
     _controller.initialize(context: context);
 
-    // ✅ Pre-cargar rewarded ad para face-swap
+    // ✅ Pre-cargar rewarded ad para face-swap (se usa en el editor)
     _adService.loadRewardedAd();
+
+    // Cargar flag de primer uso de face-swap para decidir si mostrar el pulse.
+    _loadFaceSwapState();
   }
 
-  /// Cargar estado de uso de face-swap
-  Future<void> _loadFaceSwapStatus() async {
-    final hasUsed = await _controller.hasUsedFaceSwap();
-    if (mounted) {
-      setState(() {
-        _hasUsedFaceSwap = hasUsed;
-      });
-      // Si no ha usado, iniciar animación de pulso
-      if (!hasUsed) {
-        _faceSwapPulseController.repeat(reverse: true);
-      }
+  Future<void> _loadFaceSwapState() async {
+    final used = await _controller.hasUsedFaceSwap();
+    if (mounted && used != _hasUsedFaceSwap) {
+      setState(() => _hasUsedFaceSwap = used);
     }
   }
 
@@ -158,12 +132,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       }
     };
 
+    // Apagar el pulse del botón face-swap cuando el usuario lo usa por
+    // primera vez (Hive ya queda marcado por el controller).
     _controller.onFaceSwapFirstUse = () {
       if (mounted) {
-        setState(() {
-          _hasUsedFaceSwap = true;
-        });
-        _faceSwapPulseController.stop();
+        setState(() => _hasUsedFaceSwap = true);
       }
     };
   }
@@ -171,7 +144,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _faceSwapPulseController.dispose();
+    BottomNavVisibility.instance.unregisterFullScreen();
 
     // ✅ Restaurar orientaciones permitidas al salir
     SystemChrome.setPreferredOrientations([
@@ -191,10 +164,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
 
-    if (state == AppLifecycleState.paused) {
-      // Pausar cámara cuando la app va al background
-      _controller.cleanupDeepAR();
-    } else if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed) {
       // ✅ FIX: Solo reinicializar si la cámara YA estaba inicializada antes
       // Esto evita race condition cuando el diálogo de permisos de Android
       // causa un cambio de lifecycle (pause -> resume) que dispara otra inicialización
@@ -224,37 +194,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   Future<void> _closeScreen() async {
-    await _controller.cleanupDeepAR();
     if (mounted) {
       Navigator.pop(context);
     }
   }
 
   /// ===== MÉTODOS DE ACCIÓN (LLAMAN AL CONTROLLER) =====
-
-  /// Mostrar selector de personajes para Face Swap
-  Future<void> _showFaceSwapSelector() async {
-    // ✅ OPTIMISTIC: Mostrar dialog inmediatamente sin esperar usage data
-    // El chequeo real de límites se hace en _processFaceSwapPhoto después de tomar la foto
-    final selectedCharacter = await showDialog<Character>(
-      context: context,
-      builder: (context) => const CharacterSelectorDialog(),
-    );
-
-    if (selectedCharacter != null && mounted) {
-      setState(() {
-        _selectedFaceSwapCharacter = selectedCharacter;
-      });
-      ReleaseLogger.log('🎭 Personaje seleccionado: ${selectedCharacter.name}', tag: 'StoryCameraScreen');
-    }
-  }
-
-  /// Cancelar modo Face Swap
-  void _cancelFaceSwapMode() {
-    setState(() {
-      _selectedFaceSwapCharacter = null;
-    });
-  }
 
   Future<void> _takePicture() async {
     // ✅ Screen flash para Android: mostrar pantalla blanca antes de la foto
@@ -274,225 +219,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
 
     if (imagePath != null) {
-      // Si hay un personaje seleccionado, procesar Face Swap
-      if (_selectedFaceSwapCharacter != null) {
-        await _processFaceSwapPhoto(imagePath);
-      } else {
-        await _navigateToStoryEditor(imagePath, 'image');
-      }
+      await _navigateToStoryEditor(imagePath, 'image');
     }
   }
 
-  /// Procesar foto con Face Swap usando el personaje pre-seleccionado
-  Future<void> _processFaceSwapPhoto(String imagePath) async {
-    final character = _selectedFaceSwapCharacter;
-    if (character == null) return;
-
-    // ✅ PASO 1: Verificar límites de uso diario
-    final usageData = await _usageLimitsService.getFaceSwapDailyUsage();
-    final remaining = usageData['remaining'] as int;
-    final limit = usageData['limit'] as int;
-    final tier = usageData['tier'] as String;
-    final isUnlimited = usageData['unlimited'] == true;
-
-    // Si no quedan transformaciones (y NO es unlimited), mostrar paywall
-    // remaining == -1 significa unlimited, no límite alcanzado
-    if (!isUnlimited && remaining <= 0) {
-      if (mounted) {
-        ReleaseLogger.log('⚠️ Límite de face-swap alcanzado ($limit/día para tier $tier)', tag: 'StoryCameraScreen');
-        await PremiumPaywallDialog.show(
-          context,
-          feature: PremiumFeature(
-            id: 'face_swap_limit',
-            name: 'Face Swap',
-            description: 'Has alcanzado el límite de $limit transformaciones por día. Actualiza a Premium para obtener más transformaciones diarias.',
-            iconName: '🎭',
-            requiredTier: SubscriptionTier.premium,
-          ),
-        );
-        // Limpiar selección
-        setState(() {
-          _selectedFaceSwapCharacter = null;
-        });
-      }
-      return;
-    }
-
-    // ✅ PASO 2: Verificar si necesita ver ads o tiene Premium
-    final canShowAds = await _adService.canShowAds();
-    if (canShowAds) {
-      // Mostrar diálogo con opciones: Ver video O Activar Premium
-      final dialogResult = await showDialog<String>(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          backgroundColor: Colors.grey[900],
-          title: Row(
-            children: [
-              Icon(Icons.face_retouching_natural, color: Color(0xFF9D7FE8), size: 28),
-              SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Transformar foto',
-                  style: TextStyle(color: Colors.white),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Mira un breve video para transformarte en ${character.name}.',
-                style: TextStyle(fontSize: 15, color: Colors.white70),
-              ),
-              SizedBox(height: 12),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Icon(isUnlimited ? Icons.all_inclusive : Icons.info_outline, color: Colors.white54, size: 16),
-                    SizedBox(width: 8),
-                    Text(
-                      isUnlimited ? 'Sin límite de uso' : '$remaining de $limit restantes hoy',
-                      style: TextStyle(fontSize: 13, color: Colors.white54),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'cancel'),
-              child: Text('Cancelar', style: TextStyle(color: Colors.grey)),
-            ),
-            // Botón Premium (solo si premium está habilitado)
-            if (!isUnlimited)
-              OutlinedButton(
-                onPressed: () => Navigator.pop(context, 'premium'),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: Color(0xFFFFD700)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.star, color: Color(0xFFFFD700), size: 18),
-                    SizedBox(width: 4),
-                    Text('Premium', style: TextStyle(color: Color(0xFFFFD700))),
-                  ],
-                ),
-              ),
-            // Botón Ver video
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context, 'watch'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF9D7FE8),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              child: Text('Ver video'),
-            ),
-          ],
-        ),
-      );
-
-      if (dialogResult == 'cancel' || dialogResult == null) {
-        // Usuario canceló, limpiar selección
-        setState(() {
-          _selectedFaceSwapCharacter = null;
-        });
-        return;
-      }
-
-      if (dialogResult == 'premium') {
-        // Mostrar paywall de Premium
-        if (mounted) {
-          PremiumPaywallDialog.show(
-            context,
-            feature: PremiumFeature(
-              id: 'face_swap_no_ads',
-              name: 'Face Swap sin anuncios',
-              description: 'Con Premium puedes usar Face Swap sin ver anuncios y con más transformaciones diarias.',
-              iconName: '🎭',
-              requiredTier: SubscriptionTier.premium,
-            ),
-          );
-        }
-        // Limpiar selección
-        setState(() {
-          _selectedFaceSwapCharacter = null;
-        });
-        return;
-      }
-
-      // dialogResult == 'watch': Mostrar rewarded ad
-      final rewarded = await _adService.showRewardedAd();
-      if (!rewarded) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Debes ver el video completo para usar Face Swap'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-          // Limpiar selección
-          setState(() {
-            _selectedFaceSwapCharacter = null;
-          });
-        }
-        return;
-      }
-    }
-
-    try {
-      // ✅ PASO 3: Procesar transformación
-      final transformedPath = await _controller.applyFaceSwapWithCharacter(
-        context,
-        File(imagePath),
-        character,
-      );
-
-      if (transformedPath != null && mounted) {
-        // Nota: El contador de uso se incrementa en el servidor (transformations.js)
-        // Limpiar selección de personaje
-        setState(() {
-          _selectedFaceSwapCharacter = null;
-        });
-        // Navegar al editor con la imagen transformada
-        await _navigateToStoryEditor(transformedPath, 'image');
-      } else if (mounted) {
-        // Face swap falló silenciosamente
-        ReleaseLogger.error('❌ Face swap retornó null', tag: 'StoryCameraScreen');
-        setState(() {
-          _selectedFaceSwapCharacter = null;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error al procesar Face Swap. Intenta de nuevo.'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-    } catch (e) {
-      ReleaseLogger.error('❌ Error procesando Face Swap: $e', tag: 'StoryCameraScreen');
-      // El controller ya maneja el error con mensaje amigable,
-      // solo limpiar selección si el error no fue manejado
-      // Limpiar selección en caso de error
-      if (mounted) {
-        setState(() {
-          _selectedFaceSwapCharacter = null;
-        });
-      }
-    }
-  }
 
   Future<void> _toggleVideoRecording() async {
     if (_controller.isRecordingVideo) {
@@ -514,15 +244,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
   Future<void> _switchCamera() async {
     await _controller.switchCamera();
-    // Forzar rebuild para que FlutterCameraView reciba el nuevo selectedCameraIndex
+    // Forzar rebuild para que FlutterCameraView reciba el nuevo CameraController
+    // creado por StoryCameraController.switchCamera().
     if (mounted) {
       setState(() {});
     }
-  }
-
-  Future<void> _applyARFilter(String filterName) async {
-    await _controller.applyARFilter(filterName);
-    setState(() {}); // Rebuild UI
   }
 
   // Métodos de character transformation removidos - ahora están en el story editor
@@ -591,6 +317,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             onFaceSwapClickListener: (currentFile, currentIndex) async {
               return await _handleFaceSwap(currentFile, currentIndex);
             },
+            // Pulse el botón solo si el usuario nunca usó face-swap, para
+            // destacarlo como feature insignia la primera vez.
+            showFaceSwapPulse: !_hasUsedFaceSwap,
           ),
         ),
       );
@@ -629,11 +358,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     // Si no hay permisos o hubo error, no mostrar loading overlay
     if (!_controller.hasCameraPermissions || _controller.hasInitializationFailed) {
       return false;
-    }
-
-    // Para DeepAR: verificar si está inicializado
-    if (_controller.filterType == 'deepar') {
-      return _controller.isDeepARInitialized;
     }
 
     // Para cámara Flutter: verificar si está inicializada
@@ -687,34 +411,9 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     // Widget de cámara base
     Widget cameraWidget;
 
-    // ✅ FIX: Verificar DeepAR PRIMERO, antes de verificar Flutter camera
-    // Cuando se activa DeepAR, Flutter camera se dispone (isCameraInitialized = false)
-    // por lo que debemos verificar DeepAR antes de mostrar loading
-    if (_controller.filterType == 'deepar') {
-      if (_controller.isDeepARInitialized) {
-        cameraWidget = DeepARCameraView(
-          key: ValueKey(_controller.deepARReinitCounter),
-          onInitialized: () {
-            // DeepAR initialized callback
-          },
-          deepARService: DeepARService(),
-          isDeepARInitialized: _controller.isDeepARInitialized,
-          reinitCounter: _controller.deepARReinitCounter, // ✅ FIX #6: Pasar contador para forzar recreación del platform view
-        );
-      } else {
-        // DeepAR está inicializando
-        return _buildLoadingUI();
-      }
-    } else if (_controller.cameraController != null && _controller.isCameraInitialized) {
+    if (_controller.cameraController != null && _controller.isCameraInitialized) {
       cameraWidget = FlutterCameraView(
-        cameras: _controller.cameras,
-        selectedCameraIndex: _controller.selectedCameraIndex,
-        onCameraInitialized: (controller) {
-          // Camera initialized callback
-        },
-        onCameraDisposed: () {
-          // Camera disposed callback
-        },
+        controller: _controller.cameraController!,
       );
     } else if (!_controller.isCameraInitialized) {
       // Flutter camera está inicializando
@@ -828,7 +527,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+          CircularProgressIndicator(color: ThemeService.primaryColor),
           SizedBox(height: 16),
           Text(
             'Inicializando cámara...',
@@ -852,11 +551,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
 
         // Controles principales
         _buildMainControls(),
-
-        const SizedBox(height: 20),
-
-        // Filtros
-        _buildFiltersSection(),
 
         const SizedBox(height: 40),
       ],
@@ -971,11 +665,8 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   Widget _buildMainControls() {
     return Column(
       children: [
-        // Indicador de Face Swap activo
-        if (_selectedFaceSwapCharacter != null) _buildFaceSwapIndicator(),
-
-        // Selector de modo: FOTO | VIDEO (ocultar si Face Swap activo)
-        if (_selectedFaceSwapCharacter == null) _buildModeSelector(),
+        // Selector de modo: FOTO | VIDEO
+        _buildModeSelector(),
 
         SizedBox(height: 20),
 
@@ -983,20 +674,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            // Galería o botones de features (Face Swap + Trivia)
+            // Galería o botón de Trivia
             _isVideoMode
                 ? _buildShadowedIconButton(
                     onPressed: _pickFromGallery,
                     icon: Icons.photo_library,
                   )
-                : Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildFaceSwapButton(),
-                      const SizedBox(width: 12),
-                      _buildTriviaButton(),
-                    ],
-                  ),
+                : _buildTriviaButton(),
 
             // Botón principal (cambia según modo)
             _isVideoMode ? _buildVideoButton() : _buildPhotoButton(),
@@ -1011,147 +695,6 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           ],
         ),
       ],
-    );
-  }
-
-  /// Botón de Face Swap prominente
-  Widget _buildFaceSwapButton() {
-    final isActive = _selectedFaceSwapCharacter != null;
-
-    // Si el usuario nunca ha usado face-swap y el botón no está activo, mostrar con animación
-    final showPulsingAnimation = !_hasUsedFaceSwap && !isActive;
-
-    Widget button = GestureDetector(
-      onTap: isActive ? _cancelFaceSwapMode : _showFaceSwapSelector,
-      child: Container(
-        width: 56,
-        height: 56,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: isActive
-              ? LinearGradient(
-                  colors: [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
-                )
-              : showPulsingAnimation
-                  ? LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        context.customColors.gradientStart,
-                        context.customColors.gradientEnd,
-                      ],
-                    )
-                  : null,
-          color: (isActive || showPulsingAnimation) ? null : Colors.black.withValues(alpha: 0.5),
-          border: Border.all(
-            color: isActive
-                ? Color(0xFF9D7FE8)
-                : showPulsingAnimation
-                    ? context.customColors.gradientStart
-                    : Colors.white,
-            width: showPulsingAnimation ? 3 : 2,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: isActive
-                  ? Color(0xFF9D7FE8).withValues(alpha: 0.5)
-                  : showPulsingAnimation
-                      ? context.customColors.gradientStart.withValues(alpha: 0.6)
-                      : Colors.black.withValues(alpha: 0.4),
-              blurRadius: isActive ? 12 : (showPulsingAnimation ? 16 : 8),
-              spreadRadius: isActive ? 2 : (showPulsingAnimation ? 4 : 1),
-            ),
-          ],
-        ),
-        child: isActive && _selectedFaceSwapCharacter!.thumbnailUrl.isNotEmpty
-            ? ClipOval(
-                child: CachedNetworkImage(
-                  imageUrl: _selectedFaceSwapCharacter!.thumbnailUrl,
-                  width: 52,
-                  height: 52,
-                  fit: BoxFit.cover,
-                  placeholder: (context, url) => Icon(
-                    Icons.face_retouching_natural,
-                    color: Colors.white,
-                    size: 28,
-                  ),
-                  errorWidget: (context, url, error) => Icon(
-                    Icons.face_retouching_natural,
-                    color: Colors.white,
-                    size: 28,
-                  ),
-                ),
-              )
-            : Icon(
-                Icons.face_retouching_natural,
-                color: Colors.white,
-                size: 28,
-              ),
-      ),
-    );
-
-    // Envolver con animación de pulso si es primera vez
-    if (showPulsingAnimation) {
-      return ScaleTransition(
-        scale: _faceSwapPulseAnimation,
-        child: button,
-      );
-    }
-
-    return button;
-  }
-
-  /// Indicador visual de Face Swap activo
-  Widget _buildFaceSwapIndicator() {
-    final character = _selectedFaceSwapCharacter;
-    if (character == null) return const SizedBox.shrink();
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            Color(0xFF9D7FE8).withValues(alpha: 0.9),
-            Color(0xFFB39DDB).withValues(alpha: 0.9),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(25),
-        boxShadow: [
-          BoxShadow(
-            color: Color(0xFF9D7FE8).withValues(alpha: 0.4),
-            blurRadius: 10,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.face_retouching_natural, color: Colors.white, size: 20),
-          const SizedBox(width: 8),
-          Text(
-            'Face Swap: ${character.name}',
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 14,
-            ),
-          ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: _cancelFaceSwapMode,
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.3),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.close, color: Colors.white, size: 16),
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1239,7 +782,7 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       child: Container(
         padding: EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected ? Color(0xFF9D7FE8) : Colors.transparent,
+          color: isSelected ? ThemeService.primaryColor : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(
@@ -1310,83 +853,11 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     );
   }
 
-  Widget _buildFiltersSection() {
-    return SizedBox(
-      height: 100,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.symmetric(horizontal: 20),
-        children: [
-          // Filtros AR
-          ..._controller.getAvailableDeepARFilters().entries.map((entry) =>
-            _buildARFilterButton(entry.key, entry.value['name'], entry.value['emoji'])
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildARFilterButton(String filterId, String name, String emoji) {
-    final isSelected = _controller.selectedARFilter == filterId;
-    // Deshabilitar filtros mientras la cámara está inicializando
-    final isDisabled = !_isCameraViewReady() || _controller.isLoading;
-
-    return GestureDetector(
-      onTap: isDisabled ? null : () => _applyARFilter(filterId),
-      child: Opacity(
-        opacity: isDisabled ? 0.4 : 1.0,
-        child: Container(
-          width: 70,
-          margin: EdgeInsets.only(right: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(35),
-            color: Colors.black.withValues(alpha: 0.3),
-            border: Border.all(
-              color: isSelected ? Color(0xFF9D7FE8) : Colors.white,
-              width: isSelected ? 3 : 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
-                blurRadius: 6,
-                spreadRadius: 1,
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(emoji, style: TextStyle(fontSize: 32)),
-              SizedBox(height: 4),
-              Text(
-                name,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 8,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                  shadows: [
-                    Shadow(
-                      color: Colors.black,
-                      blurRadius: 4,
-                    ),
-                  ],
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildLoadingOverlay() {
     return Container(
       color: Colors.black54,
       child: Center(
-        child: CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+        child: CircularProgressIndicator(color: ThemeService.primaryColor),
       ),
     );
   }

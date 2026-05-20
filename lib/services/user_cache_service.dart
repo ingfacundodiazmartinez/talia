@@ -334,4 +334,51 @@ class UserCacheService {
       ReleaseLogger.error('Error en batch refresh: $e', tag: 'UserCache');
     }
   }
+
+  /// Watch user data as a stream
+  /// Provides real-time updates while also updating the cache
+  Stream<Map<String, dynamic>?> watchUser(String userId) {
+    if (userId.isEmpty) {
+      return Stream.value(null);
+    }
+
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(userId)
+        .snapshots(includeMetadataChanges: true)
+        .map((doc) {
+      if (!doc.exists) return null;
+
+      final firestoreData = doc.data()!;
+
+      // Preservar datos locales
+      final existingData = getUserDataSync(userId);
+      final existingAlias = existingData?['alias'] as String?;
+      final existingLocalName = existingData?['localName'] as String?;
+
+      // Parsear birthDate si existe
+      dynamic birthDate = firestoreData['birthDate'];
+      if (birthDate is Timestamp) {
+        birthDate = birthDate.toDate().toIso8601String();
+      }
+
+      final data = {
+        'name': firestoreData['name'] ?? 'Usuario',
+        'photoURL': firestoreData['photoURL'],
+        'phone': firestoreData['phone'],
+        'birthDate': birthDate,
+        'isOnline': firestoreData['isOnline'] ?? false,
+        'role': firestoreData['role'],
+        'alias': existingAlias,
+        'localName': existingLocalName,
+        'cachedAt': DateTime.now().millisecondsSinceEpoch,
+      };
+
+      // Update cache
+      _box?.put(userId, data);
+      _memoryCache[userId] = data;
+
+      return data;
+    });
+  }
 }

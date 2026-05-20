@@ -163,7 +163,7 @@ class CallKitService {
       final params = CallKitParams(
         id: uuid,
         nameCaller: displayName,
-        appName: 'Talia',
+        appName: 'Tália',
         avatar: avatarUrl, // Foto del caller o null para grupales
         handle: displayName, // ✅ FIX: Use nombre en lugar de UID para Android ConnectionService
         type: isAudioCall ? 1 : 0, // 1 = audio, 0 = video

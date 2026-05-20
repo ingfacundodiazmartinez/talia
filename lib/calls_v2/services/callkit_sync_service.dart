@@ -1,13 +1,13 @@
-/// CallKit Sync Service
-///
-/// Synchronizes state between Flutter and native CallKit (iOS) and ConnectionService (Android).
-/// ✅ PHASE 1B: Provides methods to query active CallKit calls
-/// and end specific CallKit UIs to prevent duplicates.
-///
-/// This service bridges Flutter and native call systems to ensure:
-/// - No duplicate CallKit UIs for the same call
-/// - Proper cleanup when calls end
-/// - State synchronization across native and Flutter layers
+// CallKit Sync Service
+//
+// Synchronizes state between Flutter and native CallKit (iOS) and ConnectionService (Android).
+// ✅ PHASE 1B: Provides methods to query active CallKit calls
+// and end specific CallKit UIs to prevent duplicates.
+//
+// This service bridges Flutter and native call systems to ensure:
+// - No duplicate CallKit UIs for the same call
+// - Proper cleanup when calls end
+// - State synchronization across native and Flutter layers
 
 import 'dart:io';
 import 'package:flutter/services.dart';

@@ -22,6 +22,7 @@ plugins {
     id("com.android.application") version "8.9.1" apply false
     // START: FlutterFire Configuration
     id("com.google.gms.google-services") version("4.4.2") apply false
+    id("com.google.firebase.firebase-perf") version("1.4.1") apply false
     id("com.google.firebase.crashlytics") version "3.0.2" apply false
     // END: FlutterFire Configuration
     id("org.jetbrains.kotlin.android") version "2.1.0" apply false
@@ -31,10 +32,6 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // DeepAR SDK repository
-        maven {
-            url = uri("https://sdk.developer.deepar.ai/maven-android-repository/releases/")
-        }
     }
 }
 

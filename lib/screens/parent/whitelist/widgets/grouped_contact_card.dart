@@ -119,8 +119,8 @@ class GroupedContactCard extends StatelessWidget {
                 width: 44,
                 height: 44,
                 fit: BoxFit.cover,
-                placeholder: (_, __) => _buildInitial(color),
-                errorWidget: (_, __, ___) => _buildInitial(color),
+                placeholder: (context, url) => _buildInitial(color),
+                errorWidget: (context, url, error) => _buildInitial(color),
               ),
             )
           : _buildInitial(color),

@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -32,7 +33,9 @@ class ImageService {
       }
 
       // ✅ AHORA que el crop terminó, mostrar loading
+      // ignore: use_build_context_synchronously
       if (context.mounted) {
+        // ignore: use_build_context_synchronously
         showDialog(
           context: context,
           barrierDismissible: false,
@@ -58,14 +61,18 @@ class ImageService {
         }
 
         // Cerrar loading dialog
+        // ignore: use_build_context_synchronously
         if (context.mounted) {
+          // ignore: use_build_context_synchronously
           Navigator.of(context, rootNavigator: true).pop();
         }
 
         return downloadUrl;
       } catch (uploadError) {
         // Cerrar loading dialog en caso de error
+        // ignore: use_build_context_synchronously
         if (context.mounted) {
+          // ignore: use_build_context_synchronously
           Navigator.of(context, rootNavigator: true).pop();
         }
         rethrow;
@@ -76,12 +83,14 @@ class ImageService {
       // Si es error de permisos, verificar y mostrar diálogo
       if (e.code == 'camera_access_denied' || e.code == 'photo_access_denied') {
         // Verificar estado real del permiso
+        // ignore: use_build_context_synchronously
         final bool hasPermission = await _requestPermissionsWithContext(source, context);
         if (!hasPermission) {
           throw Exception('Permisos de ${source == ImageSource.camera ? 'cámara' : 'galería'} denegados');
         }
         // Si llegamos aquí, los permisos están OK, reintentar
         ReleaseLogger.log('🔄 Permisos verificados, reintentando...', tag: 'ImageService');
+        // ignore: use_build_context_synchronously
         return await pickAndUploadProfileImage(source: source, context: context);
       }
       rethrow;
@@ -115,6 +124,7 @@ class ImageService {
       final delayMs = Platform.isIOS ? 500 : 300;
       await Future.delayed(Duration(milliseconds: delayMs));
 
+      // ignore: use_build_context_synchronously
       if (!context.mounted) {
         ReleaseLogger.error('❌ [pickAndCropCircularImage] Context no está mounted', tag: 'ImageService');
         return null;
@@ -122,6 +132,7 @@ class ImageService {
 
       ReleaseLogger.log('✅ [pickAndCropCircularImage] Context mounted, mostrando crop...', tag: 'ImageService');
 
+      // ignore: use_build_context_synchronously
       final CroppedFile? croppedFile = await cropImageCircular(image.path, context);
 
       if (croppedFile == null) {
@@ -258,6 +269,7 @@ class ImageService {
           return true;
         } else if (iosStatus == PermissionStatus.permanentlyDenied) {
           ReleaseLogger.log('❌ iOS: Permiso denegado permanentemente', tag: 'ImageService');
+          if (!context.mounted) return false;
           return await _handlePermanentlyDeniedPermission(context, title, source);
         } else {
           ReleaseLogger.log('❌ iOS: Permiso denegado: $iosStatus', tag: 'ImageService');
@@ -276,6 +288,7 @@ class ImageService {
           ReleaseLogger.log('✅ Android: Permiso concedido directamente', tag: 'ImageService');
           return true;
         } else if (directStatus == PermissionStatus.permanentlyDenied) {
+          if (!context.mounted) return false;
           return await _handlePermanentlyDeniedPermission(context, title, source);
         }
         // Si sigue siendo denied, continuamos con el flujo normal de diálogos
@@ -283,6 +296,7 @@ class ImageService {
 
       // Si el permiso fue denegado permanentemente, ir directo a configuración
       if (currentStatus == PermissionStatus.permanentlyDenied) {
+        if (!context.mounted) return false;
         return await _handlePermanentlyDeniedPermission(context, title, source);
       }
 
@@ -290,6 +304,7 @@ class ImageService {
       ReleaseLogger.log('📋 Android: Mostrando diálogo de solicitud de permiso', tag: 'ImageService');
 
       // Mostrar diálogo explicativo antes de solicitar el permiso
+      if (!context.mounted) return false;
       final bool userAccepted = await PermissionDialog.showPermissionDialog(
         context: context,
         title: title,
@@ -312,10 +327,12 @@ class ImageService {
         ReleaseLogger.log('✅ Android: Permiso concedido exitosamente', tag: 'ImageService');
         return true;
       } else if (status == PermissionStatus.permanentlyDenied) {
+        if (!context.mounted) return false;
         return await _handlePermanentlyDeniedPermission(context, title, source);
       } else {
         // Permiso denegado pero no permanentemente
         ReleaseLogger.log('❌ Android: Permiso denegado: $status', tag: 'ImageService');
+        if (!context.mounted) return false;
         await PermissionDialog.showPermissionDeniedDialog(
           context: context,
           title: 'Permiso Denegado',
@@ -502,7 +519,7 @@ class ImageService {
                             title: 'Galería',
                             subtitle: 'Elegir foto',
                             source: ImageSource.gallery,
-                            color: Color(0xFF9D7FE8),
+                            color: ThemeService.primaryColor,
                           ),
                         ],
                       ),
@@ -558,10 +575,10 @@ class ImageService {
           width: 120,
           padding: EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            color: color.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: color.withOpacity(0.3),
+              color: color.withValues(alpha: 0.3),
               width: 1,
             ),
           ),

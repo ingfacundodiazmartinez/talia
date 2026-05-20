@@ -3,6 +3,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { checkRateLimit, RATE_LIMITS, sendDirectPushNotification } = require("./helpers");
 const { _moderateMultimediaInternal, _checkUserPremiumPlus } = require("./moderation");
+const { updateChatLastMessageIfNewer } = require("./moderation-utils");
 
 // ═══════════════════════════════════════════════════════════════
 // TTL CONFIGURATION FOR MESSAGE SECURITY
@@ -254,10 +255,21 @@ exports.onChatMessageCreated = onDocumentCreated(
       // Solo aplica si hay texto para moderar
       const hasTextContent = messageData.text && messageData.text.trim().length > 0;
 
+      // ✅ Mensaje silencioso: visibleTo restringe la visibilidad a solo el sender
+      // (típicamente porque el receptor lo bloqueó). NO debemos bumpear lastMessage
+      // para este mensaje — el receptor no lo verá ni lo "recibió" para read receipts.
+      // Esto mantiene al sender en 1 tilde.
+      const visibleTo = Array.isArray(messageData.visibleTo) ? messageData.visibleTo : null;
+      const isSilentForReceiver =
+        visibleTo !== null && receiverId && !visibleTo.includes(receiverId);
+
       // Determinar si debemos dejar que moderateMessage maneje TODO el update
       // Cuando hay moderación, NO actualizamos lastMessageTime aquí para evitar
       // que ChatDocsListener en Flutter detecte el cambio antes de que la moderación termine
-      const shouldSkipAllUpdates = hasPendingModeration || (chatHasModerationEnabled && hasTextContent);
+      const shouldSkipAllUpdates =
+        hasPendingModeration ||
+        (chatHasModerationEnabled && hasTextContent) ||
+        isSilentForReceiver;
 
       if (isCallMessage) {
         // For call messages, only update visibility (let onCallV2Updated handle lastMessage)
@@ -266,13 +278,17 @@ exports.onChatMessageCreated = onDocumentCreated(
         });
         console.log(`✅ Call message processed for ${receiverId}, skipping lastMessage update (handled by onCallV2Updated)`);
       } else if (shouldSkipAllUpdates) {
-        // Para mensajes con moderación: SOLO actualizar visible
-        // lastMessageTime, lastMessage, lastMessageSender serán actualizados por moderateMessage
-        // Esto evita que ChatDocsListener detecte el cambio antes de que la moderación termine
+        // Para mensajes con moderación O silenciados (visibleTo excluye al receptor):
+        // SOLO actualizar visible. lastMessage/lastMessageTime no se tocan, así
+        // ChatDocsListener del receptor no detecta el cambio (no le aparece
+        // notificación, no marca lastReceivedAt → sender queda en 1 tilde).
         await chatRef.update({
           visible: true,
         });
-        console.log(`🔒 Mensaje con moderación pendiente para ${receiverId}, SOLO actualizando visible (moderateMessage manejará el resto)`);
+        const skipReason = isSilentForReceiver
+          ? `silenciado (visibleTo=${JSON.stringify(visibleTo)})`
+          : "moderación pendiente";
+        console.log(`🔒 Mensaje ${skipReason} para ${receiverId}, SOLO actualizando visible`);
       } else {
         // For regular messages (no moderation), update everything including lastMessage
         // ✅ FIX: Para mensajes de media (audio, video, imagen), usar preview apropiado
@@ -290,14 +306,16 @@ exports.onChatMessageCreated = onDocumentCreated(
           lastMsgType = "video";
         }
 
-        await chatRef.update({
-          visible: true,
-          lastMessageAt: Timestamp.now(),
-          lastMessageTime: Timestamp.now(),
+        // Asegurar visibilidad fuera de la transacción (no depende del orden)
+        await chatRef.update({ visible: true });
+
+        // ✅ FIX RACE: actualización condicional por timestamp para evitar que
+        // triggers concurrentes pisen el lastMessage con uno más viejo.
+        await updateChatLastMessageIfNewer(db, chatId, messageData.timestamp, {
           lastMessage: lastMessagePreview,
           lastMessageSender: senderId,
-          lastMessageId: messageId, // ✅ FIX: Guardar ID para excluir de cleanup
-          lastMessageType: lastMsgType, // ✅ FIX: Evitar cursiva incorrecta
+          lastMessageId: messageId,
+          lastMessageType: lastMsgType,
         });
         console.log(`✅ Mensaje procesado para ${receiverId}, chat visible: true, lastMessage: "${lastMessagePreview}"`);
       }
@@ -888,13 +906,28 @@ exports.sendChatMessage = onCall(
 
         if (requiresModeration) {
           messageData.moderationStatus = "pending";
-          console.log(`🔒 [sendChatMessage] Mensaje guardado con moderationStatus: pending`);
+          // ✅ Restringir visibilidad al sender mientras pasa la moderación.
+          // El trigger moderateMessage expande la lista al aprobar.
+          messageData.visibleTo = [senderId];
+          console.log(`🔒 [sendChatMessage] Mensaje guardado con moderationStatus: pending, visibleTo=[${senderId}]`);
         } else {
           // ✅ FIX: Establecer approved cuando NO hay moderación para evitar race condition
           // Sin esto, el trigger moderateMessage marca como pending temporalmente,
           // y si Flutter recibe el snapshot en ese momento, descarta el mensaje
           messageData.moderationStatus = "approved";
-          console.log(`✅ [sendChatMessage] Mensaje guardado con moderationStatus: approved (sin moderación)`);
+          // ✅ Si el chat está bloqueado y el sender NO es el bloqueador,
+          // ocultar el mensaje al receptor. Caso normal: visible para ambos.
+          const chatDataForVisibility = chatDoc.exists ? chatDoc.data() : {};
+          const chatBlocked = chatDataForVisibility.isBlocked === true;
+          const blocker = chatDataForVisibility.blockedBy;
+          const blockedReason = chatDataForVisibility.blockedReason;
+          if (chatBlocked && blocker && blocker !== senderId && blockedReason !== "parent_revoked") {
+            messageData.visibleTo = [senderId];
+            console.log(`🔇 [sendChatMessage] Mensaje silenciado por bloqueo del receptor, visibleTo=[${senderId}]`);
+          } else {
+            messageData.visibleTo = [senderId, receiverId].filter((id) => id);
+            console.log(`✅ [sendChatMessage] Mensaje guardado con moderationStatus: approved, visibleTo=${JSON.stringify(messageData.visibleTo)}`);
+          }
         }
 
         // ═══════════════════════════════════════════════════════════════

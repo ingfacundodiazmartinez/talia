@@ -385,6 +385,15 @@ class StoryViewerController {
         return false;
       }
 
+      // Optimista: actualizar lastMessage del chat con el owner antes de la CF.
+      // La CF lo va a re-escribir con el mismo dato, pero el usuario ve el cambio
+      // instantáneo en la lista de chats al salir del visor.
+      _optimisticChatLastMessage(
+        currentUserId: userId,
+        receiverId: receiverId,
+        text: text,
+      );
+
       await _storyService.replyToStory(
         storyId: storyId,
         text: text,
@@ -395,6 +404,37 @@ class StoryViewerController {
     } catch (e) {
       ReleaseLogger.error('Error enviando respuesta a historia: $e', tag: 'StoryViewer');
       return false;
+    }
+  }
+
+  /// Buscar el chat 1-1 con el receiver y actualizar lastMessage de forma
+  /// optimista. Si el chat no existe, no hace nada (la CF lo creará).
+  /// Las rules permiten que un participante actualice el doc del chat.
+  Future<void> _optimisticChatLastMessage({
+    required String currentUserId,
+    required String receiverId,
+    required String text,
+  }) async {
+    try {
+      final participants = [currentUserId, receiverId]..sort();
+      final query = await _firestore
+          .collection('chats')
+          .where('participants', isEqualTo: participants)
+          .limit(1)
+          .get();
+      if (query.docs.isEmpty) return;
+      final preview = '📖 Respuesta a historia: ${text.trim()}';
+      await _firestore.collection('chats').doc(query.docs.first.id).update({
+        'lastMessage': preview,
+        'lastMessageTime': FieldValue.serverTimestamp(),
+        'lastMessageSender': currentUserId,
+      });
+    } catch (e) {
+      // Falla silenciosa: la CF actualizará después.
+      ReleaseLogger.warning(
+        'Optimistic chat update falló (no crítico): $e',
+        tag: 'StoryViewer',
+      );
     }
   }
 

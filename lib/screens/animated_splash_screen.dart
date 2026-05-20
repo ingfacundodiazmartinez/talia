@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'dart:async';
@@ -102,11 +103,11 @@ class _AnimatedSplashScreenState extends State<AnimatedSplashScreen>
                     const SizedBox(height: 24),
                     // Nombre de la app
                     Text(
-                      'Talia',
+                      'Tália',
                       style: TextStyle(
                         fontSize: 32,
                         fontWeight: FontWeight.bold,
-                        color: const Color(0xFF9D7FE8),
+                        color: ThemeService.primaryColor,
                         letterSpacing: 2,
                       ),
                     ),

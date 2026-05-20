@@ -141,8 +141,10 @@ class FaceFilterService {
       _detectedFaces = faces;
 
       if (faces.isNotEmpty) {
+        // Face detected - can be processed by caller
       }
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - face detection errors should not crash the app
     }
   }
 

@@ -63,14 +63,19 @@ async function getParentIds(childId) {
 }
 
 /**
- * Helper: Check if user has auto-approve groups enabled
+ * Helper: Check if user has auto-approve groups enabled.
+ *
+ * Default: ENABLED (true). Para que el padre tenga que opt-out explícitamente.
+ * Esto reduce fricción: el hijo entra al grupo automáticamente y el padre
+ * recibe notificación + puede remover si no le gusta.
  */
 async function hasAutoApproveEnabled(userId) {
   const userDoc = await db.collection("users").doc(userId).get();
-  if (!userDoc.exists) return false;
+  if (!userDoc.exists) return true; // Default ON
 
   const userData = userDoc.data();
-  return userData.groupSettings?.autoApproveGroups === true;
+  // Default ON salvo que el padre lo haya desactivado explícitamente.
+  return userData.groupSettings?.autoApproveGroups !== false;
 }
 
 /**
@@ -320,6 +325,8 @@ exports.createGroupV2 = onCall(
       // Classify members
       const approvedMembers = [];
       const pendingChildren = [];
+      // Notifs a enviar tras crear el grupo (con groupId real)
+      const autoApprovedNotifs = [];
 
       // Creator handling
       const creatorRole = creatorData.role || "adult";
@@ -337,9 +344,11 @@ exports.createGroupV2 = onCall(
         } else {
           // Check if any parent has auto-approve enabled
           let autoApproved = false;
+          let approvingParentId = null;
           for (const parentId of creatorParentIds) {
             if (await hasAutoApproveEnabled(parentId)) {
               autoApproved = true;
+              approvingParentId = parentId;
               break;
             }
           }
@@ -349,6 +358,14 @@ exports.createGroupV2 = onCall(
               ...creatorData,
               addedBy: creatorId,
             });
+            if (approvingParentId) {
+              autoApprovedNotifs.push({
+                parentId: approvingParentId,
+                childId: creatorId,
+                childName: creatorData.name || "Tu hijo",
+                action: "created",
+              });
+            }
           } else {
             creatorNeedsApproval = true;
             pendingChildren.push({
@@ -409,18 +426,14 @@ exports.createGroupV2 = onCall(
                 addedBy: creatorId,
               });
 
-              // Send informative notification to the parent who auto-approved
+              // Recolectar notif para enviar después con groupId real
               if (approvingParentId) {
-                await sendPushNotification(
-                  approvingParentId,
-                  "Nuevo grupo",
-                  `${memberData.name} se unió al grupo '${name.trim()}'`,
-                  {
-                    type: "group_auto_approved",
-                    groupId: "pending", // Will be updated after group creation
-                    childId: memberId,
-                  }
-                );
+                autoApprovedNotifs.push({
+                  parentId: approvingParentId,
+                  childId: memberId,
+                  childName: memberData.name || "Tu hijo",
+                  action: "joined",
+                });
               }
             } else {
               // Needs parent approval
@@ -510,6 +523,29 @@ exports.createGroupV2 = onCall(
           console.log(
             `📨 [createGroupV2] Solicitud creada para parent ${parentId} -> child ${pending.userData.id}`
           );
+        }
+      }
+
+      // Notificar a padres con auto-aprobación (con groupId real)
+      const groupName = name.trim();
+      for (const notif of autoApprovedNotifs) {
+        try {
+          const body = notif.action === "created"
+              ? `${notif.childName} creó el grupo "${groupName}". Tap para ver y gestionar.`
+              : `${notif.childName} se unió al grupo "${groupName}". Tap para ver y gestionar.`;
+          await sendPushNotification(
+            notif.parentId,
+            "Nuevo grupo de tu hijo",
+            body,
+            {
+              type: "group_auto_approved",
+              groupId,
+              childId: notif.childId,
+            }
+          );
+          console.log(`📨 [createGroupV2] Notif auto-approved → padre ${notif.parentId}, hijo ${notif.childId}`);
+        } catch (e) {
+          console.error(`⚠️ [createGroupV2] Error enviando notif auto-approved a ${notif.parentId}:`, e);
         }
       }
 
@@ -2050,6 +2086,14 @@ exports.sendGroupV2Message = onCall(
       if (replyTo) {
         messageData.replyTo = replyTo;
       }
+
+      // ✅ Setear visibleTo coherente con el flujo nuevo:
+      // - Si quedó como bloqueado (moderación bloqueó) → todos ven el placeholder.
+      // - Si pasó moderación (o no había): visible para todos los miembros.
+      // En esta CF legacy no consideramos bloqueos individuales en grupo (no
+      // existe ese concepto aún). El cliente nuevo computa visibleTo más
+      // granular si aplica.
+      messageData.visibleTo = members.slice();
 
       // Create message
       const messageRef = await db

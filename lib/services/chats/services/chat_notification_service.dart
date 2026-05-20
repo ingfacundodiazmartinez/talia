@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'package:firebase_auth/firebase_auth.dart';
 
-import '../repositories/chat_repository.dart';
 import '../../../utils/release_logger.dart';
 
 /// Servicio de notificaciones automáticas para chats
@@ -12,9 +10,6 @@ import '../../../utils/release_logger.dart';
 /// - Workflow de aprobación automática vs manual
 /// - Configuración de settings de notificación
 class ChatNotificationService {
-  final ChatRepository _chatRepository;
-  final FirebaseAuth _auth;
-
   // TODO: Integrar con servicio de notificaciones existente cuando esté disponible
   // final NotificationService _notificationService;
 
@@ -23,11 +18,7 @@ class ChatNotificationService {
   final Duration _cacheTimeout = Duration(minutes: 5);
   final Map<String, DateTime> _cacheTimestamps = {};
 
-  ChatNotificationService({
-    required ChatRepository chatRepository,
-    FirebaseAuth? auth,
-  }) : _chatRepository = chatRepository,
-       _auth = auth ?? FirebaseAuth.instance;
+  ChatNotificationService();
 
   // ═══════════════════════════════════════════════════════════════
   // PARENT NOTIFICATION TRIGGERS

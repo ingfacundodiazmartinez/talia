@@ -84,6 +84,12 @@ class GroupMessage {
   // Local ID for optimistic UI matching
   final String? localId;
 
+  /// Lista de UIDs que pueden ver este mensaje.
+  /// null = visible para todos (backwards compat).
+  /// Para bloqueos en grupos: excluye a los que bloquearon al sender.
+  /// Para moderación: solo [senderId] hasta que CF apruebe.
+  final List<String>? visibleTo;
+
   const GroupMessage({
     required this.id,
     required this.senderId,
@@ -111,12 +117,16 @@ class GroupMessage {
     this.moderationStatus,
     this.moderationReason,
     this.localId,
+    this.visibleTo,
   });
 
   factory GroupMessage.fromFirestore(String id, Map<String, dynamic> data) {
     // Parse reactions
+    // ✅ Defensive: handle corrupted data where field might be List instead of Map
     final reactionsMap = <String, List<String>>{};
-    final rawReactions = data['reactions'] as Map<String, dynamic>? ?? {};
+    final rawReactions = data['reactions'] is Map
+        ? data['reactions'] as Map<String, dynamic>
+        : <String, dynamic>{};
     for (final entry in rawReactions.entries) {
       if (entry.value is List) {
         reactionsMap[entry.key] = List<String>.from(entry.value as List);
@@ -155,6 +165,10 @@ class GroupMessage {
       moderationReason: data['moderationReason'] as String?,
       // Local ID for optimistic UI matching
       localId: data['localId'] as String?,
+      // Visibilidad por destinatario
+      visibleTo: data['visibleTo'] != null
+          ? List<String>.from(data['visibleTo'] as List)
+          : null,
     );
   }
 
@@ -184,6 +198,8 @@ class GroupMessage {
       if (originalSenderId != null) 'originalSenderId': originalSenderId,
       // Local ID for optimistic UI matching
       if (localId != null) 'localId': localId,
+      // Visibilidad por destinatario
+      if (visibleTo != null) 'visibleTo': visibleTo,
     };
   }
 
@@ -266,6 +282,7 @@ class GroupMessage {
     String? moderationStatus,
     String? moderationReason,
     String? localId,
+    List<String>? visibleTo,
   }) {
     return GroupMessage(
       id: id ?? this.id,
@@ -294,8 +311,14 @@ class GroupMessage {
       moderationStatus: moderationStatus ?? this.moderationStatus,
       moderationReason: moderationReason ?? this.moderationReason,
       localId: localId ?? this.localId,
+      visibleTo: visibleTo ?? this.visibleTo,
     );
   }
+
+  /// Indica si este mensaje es visible para [userId].
+  /// Backwards compat: si `visibleTo` es null, visible para todos.
+  bool isVisibleTo(String userId) =>
+      visibleTo == null || visibleTo!.contains(userId);
 
   @override
   String toString() => 'GroupMessage(id: $id, senderId: $senderId, text: ${text?.substring(0, text!.length > 20 ? 20 : text!.length)})';

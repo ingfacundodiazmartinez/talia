@@ -29,7 +29,6 @@ class _EmergencyButtonState extends State<EmergencyButton>
   late Animation<double> _scaleAnimation;
 
   bool _isActivating = false;
-  bool _isPressed = false;
   bool _isInCooldown = false;
 
   @override
@@ -84,7 +83,6 @@ class _EmergencyButtonState extends State<EmergencyButton>
     if (_isActivating || _isInCooldown) return;
 
     setState(() {
-      _isPressed = true;
       _isActivating = true;
     });
 
@@ -129,7 +127,6 @@ class _EmergencyButtonState extends State<EmergencyButton>
 
     if (mounted) {
       setState(() {
-        _isPressed = false;
         _isActivating = false;
       });
     }

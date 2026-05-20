@@ -1,7 +1,8 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../services/child_contacts_management_service.dart';
 import '../../../utils/release_logger.dart';
 
 /// Pantalla que muestra los contactos de un hijo específico
@@ -28,8 +29,8 @@ class ChildContactsFilterScreen extends StatefulWidget {
 }
 
 class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseFunctions _functions = FirebaseFunctions.instance;
+  final ChildContactsManagementService _contactsService = ChildContactsManagementService();
   String _searchQuery = '';
   bool _isLoading = false;
   bool _isLoadingContacts = true;
@@ -96,52 +97,14 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
         throw Exception('No se pudo verificar el vínculo padre-hijo. Intenta de nuevo.');
       }
 
-      // 2. Query directo a Firestore (más rápido que Cloud Function)
-      final contactsSnapshot = await _firestore
-          .collection('contacts')
-          .where('users', arrayContains: widget.childId)
-          .get()
+      // 2. Obtener contactos via servicio
+      final contacts = await _contactsService.getChildContacts(widget.childId)
           .timeout(
             Duration(seconds: 15),
             onTimeout: () => throw Exception('Timeout cargando contactos'),
           );
 
       if (!mounted) return;
-
-      // 3. Construir lista de contactos usando datos del documento de contacto
-      // NOTA: Usamos userNames y userPhotoURLs del documento de contacto
-      // para evitar query adicional a users (que falla por permisos)
-      final contacts = <Map<String, dynamic>>[];
-
-      for (final doc in contactsSnapshot.docs) {
-        final data = doc.data();
-        final status = data['status'] as String? ?? '';
-        if (status != 'approved' && status != 'pending') continue;
-
-        final users = List<String>.from(data['users'] ?? []);
-        final otherUserId = users.firstWhere((u) => u != widget.childId, orElse: () => '');
-        if (otherUserId.isEmpty) continue;
-
-        // Usar datos desnormalizados del documento de contacto
-        final userNames = Map<String, dynamic>.from(data['userNames'] ?? {});
-        final userPhotoURLs = Map<String, dynamic>.from(data['userPhotoURLs'] ?? {});
-
-        final contactName = userNames[otherUserId] as String? ?? 'Usuario';
-        final contactPhotoURL = userPhotoURLs[otherUserId] as String?;
-
-        final chatId = [widget.childId, otherUserId]..sort();
-
-        contacts.add({
-          'contactId': otherUserId,
-          'name': contactName,
-          'photoURL': contactPhotoURL,
-          'status': status,
-          'chatId': '${chatId[0]}_${chatId[1]}',
-        });
-      }
-
-      // Ordenar por nombre
-      contacts.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
 
       ReleaseLogger.log('✅ Cargados ${contacts.length} contactos', tag: 'ChildContactsFilter');
 
@@ -167,7 +130,7 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text('Contactos de ${widget.childName}'),
-        backgroundColor: Color(0xFF9D7FE8),
+        backgroundColor: ThemeService.primaryColor,
         foregroundColor: Colors.white,
         actions: [
           IconButton(
@@ -209,7 +172,7 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
               },
               decoration: InputDecoration(
                 hintText: 'Buscar contactos...',
-                prefixIcon: Icon(Icons.search, color: Color(0xFF9D7FE8)),
+                prefixIcon: Icon(Icons.search, color: ThemeService.primaryColor),
                 suffixIcon: _searchQuery.isNotEmpty
                     ? IconButton(
                         icon: Icon(Icons.clear),
@@ -242,7 +205,7 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
     if (_isLoadingContacts) {
       return Center(
         child: CircularProgressIndicator(
-          color: Color(0xFF9D7FE8),
+          color: ThemeService.primaryColor,
         ),
       );
     }
@@ -346,7 +309,7 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
 
     return RefreshIndicator(
       onRefresh: _loadContacts,
-      color: Color(0xFF9D7FE8),
+      color: ThemeService.primaryColor,
       child: ListView.builder(
         padding: EdgeInsets.all(16),
         itemCount: filteredContacts.length,
@@ -380,7 +343,7 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
             // Avatar
             CircleAvatar(
               radius: 28,
-              backgroundColor: Color(0xFF9D7FE8).withValues(alpha: 0.1),
+              backgroundColor: ThemeService.primaryColor.withValues(alpha: 0.1),
               backgroundImage: contact['photoURL'] != null
                   ? CachedNetworkImageProvider(contact['photoURL'])
                   : null,
@@ -390,7 +353,7 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
                       style: TextStyle(
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF9D7FE8),
+                        color: ThemeService.primaryColor,
                       ),
                     )
                   : null,
@@ -516,15 +479,10 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
       final contactDocId = '${users[0]}_${users[1]}';
 
       // Buscar grupos donde ambos (hijo y contacto) son miembros
-      final sharedGroupsQuery = await _firestore
-          .collection('groups')
-          .where('members', arrayContains: widget.childId)
-          .get();
-
-      final sharedGroups = sharedGroupsQuery.docs.where((doc) {
-        final members = List<String>.from(doc.data()['members'] ?? []);
-        return members.contains(contactUserId);
-      }).toList();
+      final sharedGroups = await _contactsService.getSharedGroups(
+        childId: widget.childId,
+        contactId: contactUserId,
+      );
 
       if (!mounted) return;
 
@@ -614,11 +572,10 @@ class _ChildContactsFilterScreenState extends State<ChildContactsFilterScreen> {
       });
 
       // Remover al hijo de los grupos compartidos
-      for (final group in sharedGroups) {
-        await _firestore.collection('groups').doc(group.id).update({
-          'members': FieldValue.arrayRemove([widget.childId]),
-        });
-      }
+      await _contactsService.removeChildFromGroups(
+        groups: sharedGroups,
+        childId: widget.childId,
+      );
 
       // Recargar contactos
       await _loadContacts();

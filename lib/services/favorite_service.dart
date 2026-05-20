@@ -142,7 +142,7 @@ class FavoriteService {
   }
 
   /// ✅ NEW: Obtiene solo los IDs de mensajes favoritos (eficiente para UI)
-  /// Retorna un Stream de Set<String> con los IDs de mensajes favoritos
+  /// Retorna un Stream de `Set<String>` con los IDs de mensajes favoritos
   Stream<Set<String>> getFavoriteMessageIdsStream({
     required String chatId,
     required bool isGroupChat,

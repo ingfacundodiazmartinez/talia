@@ -1,5 +1,4 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../utils/release_logger.dart';
 
 /// Estado de solicitud de amistad para historias
 ///
@@ -203,20 +202,31 @@ class Contact {
 
   factory Contact.fromMap(String id, Map<String, dynamic> data) {
     // Parsear approvals map
-    final approvalsRaw = data['approvals'] as Map<String, dynamic>? ?? {};
+    // ✅ Defensive: handle corrupted data where field might be List instead of Map
+    final approvalsRaw = data['approvals'] is Map
+        ? data['approvals'] as Map<String, dynamic>
+        : <String, dynamic>{};
     final approvals = <String, ApprovalStatus>{};
     for (final entry in approvalsRaw.entries) {
-      approvals[entry.key] = ApprovalStatus.fromMap(
-        entry.value as Map<String, dynamic>,
-      );
+      if (entry.value is Map) {
+        approvals[entry.key] = ApprovalStatus.fromMap(
+          entry.value as Map<String, dynamic>,
+        );
+      }
     }
 
     // Parsear phones map
-    final phonesRaw = data['phones'] as Map<String, dynamic>? ?? {};
+    // ✅ Defensive: handle corrupted data
+    final phonesRaw = data['phones'] is Map
+        ? data['phones'] as Map<String, dynamic>
+        : <String, dynamic>{};
     final phones = phonesRaw.map((k, v) => MapEntry(k, v.toString()));
 
     // Parsear friendRequest
-    final friendRequestRaw = data['friendRequest'] as Map<String, dynamic>?;
+    // ✅ Defensive: handle corrupted data
+    final friendRequestRaw = data['friendRequest'] is Map
+        ? data['friendRequest'] as Map<String, dynamic>?
+        : null;
     final friendRequest = friendRequestRaw != null
         ? FriendRequestStatus.fromMap(friendRequestRaw)
         : null;
@@ -379,8 +389,15 @@ class Contact {
       return 'pending_other';
     }
 
-    // FIX: Si el status base es 'pending', mantenerlo como 'pending_other'
-    // aunque no haya approval entry para este usuario (ej: user sin parent)
+    // Si todas las aprobaciones requeridas (las que están en el map) están
+    // aprobadas, considerar el contacto como aprobado. El status base puede
+    // tardar en sincronizar pero el cliente puede derivarlo localmente.
+    if (approvals.isNotEmpty) {
+      return 'approved';
+    }
+
+    // approvals vacío + status pending = caso raro; preferimos 'pending_other'
+    // para no mostrar como aprobado lo que server-side aún no confirmó.
     if (isPending) {
       return 'pending_other';
     }

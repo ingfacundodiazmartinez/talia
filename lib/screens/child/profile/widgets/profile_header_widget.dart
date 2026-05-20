@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
@@ -36,7 +37,7 @@ class ProfileHeaderWidget extends StatelessWidget {
                             colorScheme.primary.withValues(alpha: 0.6),
                             colorScheme.primary.withValues(alpha: 0.4),
                           ]
-                        : [const Color(0xFF9D7FE8), const Color(0xFFB39DDB)],
+                        : [ThemeService.primaryColor, const Color(0xFFB39DDB)],
                   ),
                 ),
                 child: CircleAvatar(

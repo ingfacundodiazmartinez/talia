@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../models/child.dart';
 import '../../../../theme_service.dart';
 import '../../../../services/dashboard_cache_service.dart';
+import '../../../../services/notification_query_service.dart';
 import '../../../../services/permission_sync_service.dart';
 import '../../../../widgets/synced_user_widgets.dart';
 import '../../../child_location_screen.dart';
@@ -482,11 +483,11 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
                     'incluso cuando no tiene la app abierta.',
                 howToFix: isIOS
                     ? 'En el iPhone de $childName:\n'
-                        '1. Ir a Ajustes → Talia\n'
+                        '1. Ir a Ajustes → Tália\n'
                         '2. Tocar "Ubicación"\n'
                         '3. Seleccionar "Siempre"'
                     : 'En el teléfono de $childName:\n'
-                        '1. Ir a Ajustes → Apps → Talia\n'
+                        '1. Ir a Ajustes → Apps → Tália\n'
                         '2. Tocar "Permisos" → "Ubicación"\n'
                         '3. Seleccionar "Permitir siempre"',
                 isDarkMode: isDarkMode,
@@ -506,11 +507,11 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
                     'contactos aprobados.',
                 howToFix: isIOS
                     ? 'En el iPhone de $childName:\n'
-                        '1. Ir a Ajustes → Talia\n'
+                        '1. Ir a Ajustes → Tália\n'
                         '2. Tocar "Contactos"\n'
                         '3. Seleccionar "Acceso completo"'
                     : 'En el teléfono de $childName:\n'
-                        '1. Ir a Ajustes → Apps → Talia\n'
+                        '1. Ir a Ajustes → Apps → Tália\n'
                         '2. Tocar "Permisos" → "Contactos"\n'
                         '3. Activar el permiso',
                 isDarkMode: isDarkMode,
@@ -800,42 +801,19 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
       );
     }
 
+    final notificationService = NotificationQueryService();
+
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('notifications')
-          .where('userId', isEqualTo: currentUserId)
-          .where('read', isEqualTo: false)
-          .snapshots(),
+      stream: notificationService.watchUnreadNotifications(currentUserId),
       builder: (context, snapshot) {
-        // Contar notificaciones no leídas relacionadas a este hijo
-        // EXCLUYENDO las notificaciones de mensajes de chat
-        // ✅ FIX: Usar la MISMA lógica que ChildNotificationsController.filterNotificationsForChild
+        // Contar notificaciones no leidas relacionadas a este hijo
+        // usando el servicio que encapsula la logica de filtrado
         int unreadCount = 0;
         if (snapshot.hasData) {
-          final notifications = snapshot.data!.docs;
-
-          for (final doc in notifications) {
-            final data = doc.data() as Map<String, dynamic>;
-            final notifData = data['data'] as Map<String, dynamic>?;
-            final type = data['type'] as String?;
-
-            // Filtrar notificaciones de chat (misma lógica que controller)
-            if (type == 'chat_message') {
-              continue; // Skip chat notifications
-            }
-
-            // ✅ FIX: Verificar si la notificación está relacionada con este hijo
-            // SOLO usar campos que realmente identifican al hijo:
-            // - notifData['childId']: La notificación es SOBRE este hijo
-            // - notifData['senderId']: La notificación fue ENVIADA por este hijo
-            // NO usar data['senderId'] ya que puede ser cualquier remitente
-            final isRelated = notifData?['childId'] == child.id ||
-                notifData?['senderId'] == child.id;
-
-            if (isRelated) {
-              unreadCount++;
-            }
-          }
+          unreadCount = notificationService.countUnreadForChild(
+            snapshot.data!,
+            child.id,
+          );
         }
 
         return Material(

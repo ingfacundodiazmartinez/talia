@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-01-24T20:14:29.553098",
+  "query": "Analiza el c\u00f3digo del proyecto buscando violaciones de los principios DRY (Don't Repeat Yourself) y SST (Single Source of Truth). Identifica c\u00f3digo duplicado, l\u00f3gica repetida, y lugares donde la misma informaci\u00f3n se define en m\u00faltiples lugares. Prioriza los casos m\u00e1s cr\u00edticos.",
+  "input_tokens": 3125,
+  "output_tokens": 2976,
+  "cache_creation_tokens": 0,
+  "cache_read_tokens": 0,
+  "total_tokens": 6101,
+  "cost_usd": 0,
+  "duration_ms": 0,
+  "prompt_length": 12502,
+  "response_length": 11907,
+  "project": "/Users/olagg/Personal/talia"
+}

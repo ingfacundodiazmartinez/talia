@@ -6,7 +6,7 @@ const { getMessaging } = require("firebase-admin/messaging");
 const { getStorage } = require("firebase-admin/storage");
 const { analyzeMessageWithGemini } = require("./gemini-analyzer");
 const { sendDirectPushNotification } = require("./helpers");
-const { shouldBlockByModerationLevel, getParticipantsInfo, getMessagePreview, getModerationSettings } = require("./moderation-utils");
+const { shouldBlockByModerationLevel, getParticipantsInfo, getMessagePreview, getModerationSettings, updateChatLastMessageIfNewer } = require("./moderation-utils");
 const {
   CONTEXT_CACHE_TTL_MS,
   CONTEXT_CACHE_MAX_SIZE,
@@ -486,14 +486,17 @@ exports.moderateMessage = onDocumentCreated(
             console.log(`📝 [Pre-aprobado] Actualizando lastMessage="${messagePreview}" para chat ${chatId}`);
 
             try {
-              await db.collection("chats").doc(chatId).update({
+              // ✅ FIX RACE: condicional por timestamp para evitar que triggers
+              // concurrentes de mensajes anteriores pisen el lastMessage.
+              const updated = await updateChatLastMessageIfNewer(db, chatId, messageData.timestamp, {
                 lastMessage: messagePreview,
-                lastMessageTime: FieldValue.serverTimestamp(),
                 lastMessageSender: senderId,
                 lastMessageId: messageId,
-                lastMessageType: messageData.type || "text", // ✅ FIX: Evitar cursiva incorrecta
+                lastMessageType: messageData.type || "text",
               });
-              console.log(`✅ [Pre-aprobado] lastMessage actualizado correctamente`);
+              console.log(updated
+                ? `✅ [Pre-aprobado] lastMessage actualizado correctamente`
+                : `⏭️ [Pre-aprobado] lastMessage NO actualizado (mensaje más nuevo ya existe)`);
             } catch (updateError) {
               console.error(`❌ [Pre-aprobado] Error actualizando lastMessage:`, updateError);
             }
@@ -547,14 +550,16 @@ exports.moderateMessage = onDocumentCreated(
           // ✅ FIX: Actualizar lastMessage también para mensajes pre-moderados
           // sendChatMessage no lo hace cuando requiresModeration=true
           try {
-            await db.collection("chats").doc(chatId).update({
+            // ✅ FIX RACE: condicional por timestamp.
+            const updated = await updateChatLastMessageIfNewer(db, chatId, messageData.timestamp, {
               lastMessage: messagePreview,
-              lastMessageTime: FieldValue.serverTimestamp(),
               lastMessageSender: senderId,
               lastMessageId: messageId,
-              lastMessageType: messageData.type || "text", // ✅ FIX: Evitar cursiva incorrecta
+              lastMessageType: messageData.type || "text",
             });
-            console.log(`📝 Chat sincronizado (pre-moderado): lastMessage="${messagePreview}"`);
+            console.log(updated
+              ? `📝 Chat sincronizado (pre-moderado): lastMessage="${messagePreview}"`
+              : `⏭️ Chat NO actualizado (pre-moderado, mensaje más nuevo ya existe)`);
           } catch (updateError) {
             console.error("Error actualizando chat (pre-moderado):", updateError);
           }
@@ -841,6 +846,29 @@ exports.moderateMessage = onDocumentCreated(
         console.log(`💾 Mensaje bloqueado - guardando originalText para edición`);
       }
 
+      // ✅ Expandir visibleTo. Cliente nuevo escribe [senderId] cuando hay
+      // moderación; acá la CF lo expande para que el receptor también lo vea
+      // (mensaje aprobado → texto normal; bloqueado → placeholder "🚫 Mensaje
+      // bloqueado" mostrado por el widget). Si el cliente es viejo y no
+      // escribió `visibleTo`, igual lo setamos correcto para el flujo nuevo.
+      // Para mensajes silenciados por bloqueo unidireccional (visibleTo
+      // solo con [senderId] sin moderación activa) la CF no se ejecuta o no
+      // hay nada que expandir, así que el destinatario queda invisible.
+      if (moderationStatus === "approved" || moderationStatus === "blocked") {
+        const currentVisible = Array.isArray(messageData.visibleTo)
+          ? messageData.visibleTo
+          : null;
+        const expanded = [senderId, receiverId];
+        // Solo escribir si cambia algo (evita writes redundantes)
+        const changed = currentVisible === null ||
+          currentVisible.length !== 2 ||
+          !currentVisible.includes(senderId) ||
+          !currentVisible.includes(receiverId);
+        if (changed) {
+          updateData.visibleTo = expanded;
+        }
+      }
+
       await event.data.ref.update(updateData);
 
       // 6. Crear notificación de chat si el mensaje fue APROBADO
@@ -879,14 +907,16 @@ exports.moderateMessage = onDocumentCreated(
 
         // ✅ SINCRONIZACIÓN: Actualizar lastMessage inmediatamente después de notificación
         try {
-          await db.collection("chats").doc(chatId).update({
+          // ✅ FIX RACE: condicional por timestamp.
+          const updated = await updateChatLastMessageIfNewer(db, chatId, messageData.timestamp, {
             lastMessage: messagePreview,
-            lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: senderId,
-            lastMessageId: messageId, // ✅ FIX: Incluir ID para que ChatDocsListener trackee correctamente
-            lastMessageType: messageData.type || "text", // ✅ FIX: Evitar cursiva incorrecta
+            lastMessageId: messageId,
+            lastMessageType: messageData.type || "text",
           });
-          console.log(`📝 Chat sincronizado: lastMessage="${messagePreview.substring(0, 30)}...", lastMessageId=${messageId}`);
+          console.log(updated
+            ? `📝 Chat sincronizado: lastMessage="${messagePreview.substring(0, 30)}...", lastMessageId=${messageId}`
+            : `⏭️ Chat NO actualizado (mensaje más nuevo ya existe), lastMessageId=${messageId}`);
         } catch (updateError) {
           console.error("Error actualizando chat:", updateError);
         }
@@ -911,15 +941,17 @@ exports.moderateMessage = onDocumentCreated(
 
         // ✅ SINCRONIZACIÓN: Actualizar lastMessage para indicar mensaje bloqueado
         try {
-          await db.collection("chats").doc(chatId).update({
+          // ✅ FIX RACE: condicional por timestamp.
+          const updated = await updateChatLastMessageIfNewer(db, chatId, messageData.timestamp, {
             lastMessage: "🚫 Mensaje bloqueado",
-            lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: senderId,
-            lastMessageId: messageId, // ✅ FIX: Incluir ID para que ChatDocsListener trackee correctamente
-            lastMessageType: "text", // ✅ FIX: Evitar cursiva incorrecta
+            lastMessageId: messageId,
+            lastMessageType: "text",
           });
 
-          console.log(`📝 Chat sincronizado: lastMessage="🚫 Mensaje bloqueado", lastMessageId=${messageId}`);
+          console.log(updated
+            ? `📝 Chat sincronizado: lastMessage="🚫 Mensaje bloqueado", lastMessageId=${messageId}`
+            : `⏭️ Chat NO actualizado tras bloqueo (mensaje más nuevo ya existe), lastMessageId=${messageId}`);
         } catch (e) {
           console.error(`⚠️ Error sincronizando chat después de bloqueo: ${e}`);
         }
@@ -944,13 +976,16 @@ exports.moderateMessage = onDocumentCreated(
         if (chatId && senderId) {
           const messagePreview = getMessagePreview(messageData || {});
 
-          await db.collection("chats").doc(chatId).update({
+          // ✅ FIX RACE: condicional por timestamp.
+          const updated = await updateChatLastMessageIfNewer(db, chatId, messageData?.timestamp, {
             lastMessage: messagePreview,
-            lastMessageTime: FieldValue.serverTimestamp(),
             lastMessageSender: senderId,
-            lastMessageType: messageData?.type || "text", // ✅ FIX: Evitar cursiva incorrecta
+            lastMessageId: messageId,
+            lastMessageType: messageData?.type || "text",
           });
-          console.log(`📝 Chat ${chatId} actualizado con lastMessage (después de error en moderación)`);
+          console.log(updated
+            ? `📝 Chat ${chatId} actualizado con lastMessage (después de error en moderación)`
+            : `⏭️ Chat ${chatId} NO actualizado tras error (mensaje más nuevo ya existe)`);
         }
       } catch (updateError) {
         console.error(`❌ Error actualizando mensaje después de fallo:`, updateError);
@@ -1247,9 +1282,11 @@ const openai = new OpenAI({
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 
-// Modelo de Gemini para moderación - usar flash (no lite) para mejor OCR
-// gemini-2.0-flash tiene mejor detección de texto en imágenes que flash-lite
-const GEMINI_MODEL = "gemini-2.0-flash";
+// Modelo de Gemini para moderación.
+// NOTA: gemini-2.0-flash se apaga el 2026-06-01. Migrado a 2.5-flash-lite.
+// ⚠️ Históricamente 2.0-flash tenía mejor OCR que flash-lite; monitorear calidad
+// de detección de texto en imágenes y, si baja, considerar volver a "gemini-2.5-flash".
+const GEMINI_MODEL = "gemini-2.5-flash-lite";
 
 /**
  * Verifica si un usuario tiene Premium+ activo
@@ -1330,7 +1367,7 @@ async function moderateImageInternal(imageUrl, moderationLevel = "high") {
 
     console.log(`🖼️ [Gemini-Image-Moderation] Imagen descargada: ${Math.round(imageBuffer.length / 1024)}KB, ${mimeType}`);
 
-    // Usar GEMINI_MODEL para vision (gemini-2.0-flash tiene mejor OCR que flash-lite)
+    // Usar GEMINI_MODEL para vision (ver nota arriba sobre OCR + flash-lite).
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
     // Prompt unificado para detección visual + OCR + texto ofensivo

@@ -5,6 +5,7 @@ plugins {
     id("com.android.application")
     // START: FlutterFire Configuration
     id("com.google.gms.google-services")
+    id("com.google.firebase.firebase-perf")
     id("com.google.firebase.crashlytics")
     // END: FlutterFire Configuration
     id("kotlin-android")
@@ -63,9 +64,26 @@ android {
         }
     }
 
+    // Product flavors for different environments
+    flavorDimensions += "environment"
+
+    productFlavors {
+        create("staging") {
+            dimension = "environment"
+            applicationIdSuffix = ".staging"
+            versionNameSuffix = "-staging"
+            resValue("string", "app_name", "Talia Staging")
+        }
+        create("production") {
+            dimension = "environment"
+            // No suffix for production - uses base applicationId
+            resValue("string", "app_name", "Talia")
+        }
+    }
+
     // Soporte para 16 KB page size (Android 15+ requirement)
     // useLegacyPackaging = true es necesario porque bibliotecas de terceros
-    // (Agora, Firebase, DeepAR) aún no están compiladas con alineación de 16KB
+    // (Agora, Firebase) aún no están compiladas con alineación de 16KB
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -82,12 +100,13 @@ dependencies {
 
     // Firebase Messaging (para servicio nativo personalizado)
     implementation("com.google.firebase:firebase-messaging:24.1.0")
+    // Firebase Auth + Firestore (para delivery receipts desde el servicio nativo
+    // cuando la app está totalmente cerrada — el handler de Dart no siempre corre).
+    implementation("com.google.firebase:firebase-auth:23.2.0")
+    implementation("com.google.firebase:firebase-firestore:25.1.1")
 
     // ExifInterface para corregir rotación de imágenes
     implementation("androidx.exifinterface:exifinterface:1.3.7")
-
-    // DeepAR SDK from official Maven repository
-    implementation("ai.deepar.ar:DeepAR:5.6.20")  // 16KB page size support
 
     // CameraX dependencies
     val cameraxVersion = "1.3.0"

@@ -17,7 +17,6 @@ import 'message_bubble/media_gallery_service.dart';
 import 'message_bubble/message_options_dialog.dart';
 import 'missed_call_bubble.dart';
 import 'answered_call_bubble.dart';
-import '../../message_info_screen.dart';
 import '../../forward_messages_screen.dart';
 
 /// Widget que muestra un mensaje individual en el chat
@@ -79,9 +78,6 @@ class MessageBubble extends StatefulWidget {
   final bool isForwarded;
   final String? originalContactName;
 
-  // Campo para audio generado con IA
-  final bool isAiGenerated;
-
   // Nombre del contacto del chat actual (para reenvíos)
   final String? contactName;
 
@@ -133,7 +129,6 @@ class MessageBubble extends StatefulWidget {
     this.onCallBack,
     this.isForwarded = false,
     this.originalContactName,
-    this.isAiGenerated = false,
     this.contactName,
     this.onViewMessageInfo,
     this.isFavorite = false,  // ✅ NEW: Default false
@@ -295,8 +290,36 @@ class _MessageBubbleState extends State<MessageBubble>
                                                 0.75,
                                           ),
                                           decoration: BoxDecoration(
+                                            // Mensajes propios: gradient sutil
+                                            // estilo Telegram. La esquina
+                                            // inferior-derecha (donde está el
+                                            // ícono de estado) queda ~10% más
+                                            // oscura para dar contraste al
+                                            // azul "leído" sin verse forzado.
+                                            gradient: widget.isMe
+                                                ? LinearGradient(
+                                                    begin: Alignment.topLeft,
+                                                    end: Alignment.bottomRight,
+                                                    colors: [
+                                                      // Inicio: primary +8% oscuro
+                                                      Color.lerp(
+                                                            colorScheme.primary,
+                                                            Colors.black,
+                                                            0.08,
+                                                          ) ??
+                                                          colorScheme.primary,
+                                                      // Final: primary +30% oscuro
+                                                      Color.lerp(
+                                                            colorScheme.primary,
+                                                            Colors.black,
+                                                            0.30,
+                                                          ) ??
+                                                          colorScheme.primary,
+                                                    ],
+                                                  )
+                                                : null,
                                             color: widget.isMe
-                                                ? colorScheme.primary
+                                                ? null
                                                 : (isDarkMode
                                                       ? colorScheme
                                                             .surfaceContainerHighest
@@ -325,8 +348,14 @@ class _MessageBubbleState extends State<MessageBubble>
                                                 : null,
                                           ),
                                           child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
+                                            // Mensajes propios alinean su
+                                            // contenido a la derecha (timestamp
+                                            // e ícono sobre la zona más oscura
+                                            // del gradient). Mensajes ajenos
+                                            // siguen alineados a la izquierda.
+                                            crossAxisAlignment: widget.isMe
+                                                ? CrossAxisAlignment.end
+                                                : CrossAxisAlignment.start,
                                             children: [
                                               // Si el mensaje está bloqueado O tiene originalText sin text (fue bloqueado antes), mostrar UI especial
                                               // Un mensaje bloqueado debe permanecer bloqueado incluso si se desactiva la moderación
@@ -490,9 +519,10 @@ class _MessageBubbleState extends State<MessageBubble>
                                                   time: widget.time,
                                                   isMe: widget.isMe,
                                                   status: widget.status,
+                                                  moderationStatus: widget.moderationStatus,
                                                   isFavorite: widget.isFavorite,
-                                                  localTimestamp: widget.localTimestamp,  // ✅ NEW: Para timeout
-                                                  onRetry: widget.onRetry,  // ✅ NEW: Para reenviar
+                                                  localTimestamp: widget.localTimestamp,
+                                                  onRetry: widget.onRetry,
                                                 ),
                                               ],
                                             ],
@@ -613,6 +643,7 @@ class _MessageBubbleState extends State<MessageBubble>
     if (!mounted) return;
 
     MessageOptionsDialog.show(
+      // ignore: use_build_context_synchronously
       context: context,
       isMe: widget.isMe,
       timestamp: widget.timestamp,
@@ -653,6 +684,7 @@ class _MessageBubbleState extends State<MessageBubble>
           isGroupChat: widget.isGroupChat,
         );
 
+        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -668,6 +700,7 @@ class _MessageBubbleState extends State<MessageBubble>
     } catch (e) {
       ReleaseLogger.error('Error al cambiar favorito: $e', tag: 'MessageBubble');
       if (mounted) {
+        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('Error al cambiar favorito'),
@@ -677,38 +710,6 @@ class _MessageBubbleState extends State<MessageBubble>
           ),
         );
       }
-    }
-  }
-
-  /// Navegar a la pantalla de información del mensaje (solo grupos)
-  void _viewMessageInfo() {
-    ReleaseLogger.log('_viewMessageInfo llamado', tag: 'MessageBubble');
-    ReleaseLogger.log('mounted: $mounted', tag: 'MessageBubble');
-    ReleaseLogger.log('chatId: ${widget.chatId}', tag: 'MessageBubble');
-    ReleaseLogger.log('messageId: ${widget.messageId}', tag: 'MessageBubble');
-
-    if (!mounted) {
-      ReleaseLogger.error('Widget no mounted, abortando navegación', tag: 'MessageBubble');
-      return;
-    }
-
-    try {
-      ReleaseLogger.log('Navegando a MessageInfoScreen...', tag: 'MessageBubble');
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) {
-            ReleaseLogger.log('Builder de MessageInfoScreen ejecutado', tag: 'MessageBubble');
-            return MessageInfoScreen(
-              groupId: widget.chatId,
-              messageId: widget.messageId,
-            );
-          },
-        ),
-      );
-      ReleaseLogger.log('Navigator.push completado', tag: 'MessageBubble');
-    } catch (e, stackTrace) {
-      ReleaseLogger.error('Error en navegación: $e', tag: 'MessageBubble');
-      ReleaseLogger.error('StackTrace: $stackTrace', tag: 'MessageBubble');
     }
   }
 

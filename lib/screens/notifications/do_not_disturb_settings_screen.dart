@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../services/notification_preferences_service.dart';
+import '../../services/user_cache_service.dart';
 
 class DoNotDisturbSettingsScreen extends StatefulWidget {
   final Map<String, dynamic> preferences;
@@ -18,8 +19,9 @@ class _DoNotDisturbSettingsScreenState
     extends State<DoNotDisturbSettingsScreen> {
   final NotificationPreferencesService _prefsService =
       NotificationPreferencesService();
-  final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final UserCacheService _userCacheService = UserCacheService();
 
   late bool _dndEnabled;
   late String _startTime;
@@ -190,13 +192,12 @@ class _DoNotDisturbSettingsScreenState
               )
             else
               ..._exceptions.map((contactId) {
-                return FutureBuilder<DocumentSnapshot>(
-                  future: _firestore.collection('users').doc(contactId).get(),
+                return FutureBuilder<Map<String, dynamic>?>(
+                  future: _userCacheService.getUserData(contactId),
                   builder: (context, snapshot) {
                     if (!snapshot.hasData) return SizedBox();
 
-                    final userData =
-                        snapshot.data!.data() as Map<String, dynamic>?;
+                    final userData = snapshot.data;
                     final name = userData?['name'] ?? 'Usuario';
                     final photoURL = userData?['photoURL'];
 
@@ -367,7 +368,7 @@ class _DoNotDisturbSettingsScreenState
       },
     );
 
-    if (picked != null) {
+    if (picked != null && mounted) {
       final formattedTime =
           '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
 
@@ -400,6 +401,7 @@ class _DoNotDisturbSettingsScreenState
       return;
     }
 
+    if (!mounted) return;
     final colorScheme = Theme.of(context).colorScheme;
 
     showModalBottomSheet(
@@ -565,6 +567,7 @@ class _DoNotDisturbSettingsScreenState
       });
     } catch (e) {
       // Error saving settings
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Error al guardar configuración'),

@@ -477,7 +477,8 @@ class GroupInvitationService {
         });
       }
 
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - notification errors should not block the main operation
     }
   }
 

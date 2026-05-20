@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../services/contact_request_service.dart';
+import '../services/user_cache_service.dart';
 import '../utils/release_logger.dart';
 
 /// Pantalla para agregar contacto via deep link
@@ -60,12 +60,9 @@ class _AddContactDeeplinkScreenState extends State<AddContactDeeplinkScreen> {
       }
 
       // Cargar datos del usuario objetivo
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(widget.targetUserId)
-          .get();
+      final userData = await UserCacheService().getUserData(widget.targetUserId);
 
-      if (!userDoc.exists) {
+      if (userData == null) {
         setState(() {
           _error = 'Usuario no encontrado';
           _isLoading = false;
@@ -74,7 +71,7 @@ class _AddContactDeeplinkScreenState extends State<AddContactDeeplinkScreen> {
       }
 
       setState(() {
-        _targetUserData = userDoc.data();
+        _targetUserData = userData;
         _isLoading = false;
       });
     } catch (e) {
@@ -94,12 +91,7 @@ class _AddContactDeeplinkScreenState extends State<AddContactDeeplinkScreen> {
 
     try {
       // Obtener datos del usuario actual
-      final currentUserDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUser.uid)
-          .get();
-
-      final currentUserData = currentUserDoc.data() ?? {};
+      final currentUserData = await UserCacheService().getUserData(currentUser.uid) ?? {};
 
       final result = await _contactRequestService.sendContactRequest(
         contactUserId: widget.targetUserId,

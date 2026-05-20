@@ -353,10 +353,6 @@ class BlockStatusCacheService {
       timestamp: DateTime.now(),
     ));
 
-    if (kDebugMode) {
-      final action = isBlocked ? 'bloqueó' : 'desbloqueó';
-      final direction = isBlockedBy ? 'me $action' : 'bloqueé a';
-    }
   }
 
   /// Limpia recursos y cierra streams

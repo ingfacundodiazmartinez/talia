@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -89,7 +90,7 @@ class _ChildArchivedChatsScreenState extends State<ChildArchivedChatsScreen> {
                     colorScheme.primary.withValues(alpha: 0.3),
                     colorScheme.primary.withValues(alpha: 0.2),
                   ]
-                : [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
+                : [ThemeService.primaryColor, Color(0xFFB39DDB)],
           ),
         ),
         child: SafeArea(

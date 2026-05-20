@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -71,7 +72,7 @@ class _MobileScannerWidgetState extends State<MobileScannerWidget> {
     if (!Platform.isIOS && _isCheckingPermission) {
       return const Center(
         child: CircularProgressIndicator(
-          color: Color(0xFF9D7FE8),
+          color: ThemeService.primaryColor,
         ),
       );
     }
@@ -132,7 +133,7 @@ class _MobileScannerWidgetState extends State<MobileScannerWidget> {
         Container(
           decoration: ShapeDecoration(
             shape: QrScannerOverlayShape(
-              borderColor: const Color(0xFF9D7FE8),
+              borderColor: ThemeService.primaryColor,
               borderRadius: 10,
               borderLength: 30,
               borderWidth: 10,

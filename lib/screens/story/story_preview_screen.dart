@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
@@ -64,7 +65,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
     });
 
     try {
-      final storyId = await _storyService.createStory(
+      await _storyService.createStory(
         mediaPath: widget.imagePath,
         mediaType: widget.isVideo ? 'video' : 'image',
         caption: _captionController.text.trim().isEmpty
@@ -88,6 +89,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
         }
       }
 
+      if (!mounted) return;
       Navigator.pop(context); // Cerrar preview
       Navigator.pop(context); // Cerrar cámara
 
@@ -123,9 +125,6 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-
     return Scaffold(
       backgroundColor: Colors.black,
       resizeToAvoidBottomInset:
@@ -178,7 +177,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                     else if (widget.isVideo)
                       const Center(
                         child: CircularProgressIndicator(
-                          color: Color(0xFF9D7FE8),
+                          color: ThemeService.primaryColor,
                         ),
                       )
                     else
@@ -204,7 +203,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                             child: Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: Colors.black.withOpacity(0.5),
+                                color: Colors.black.withValues(alpha: 0.5),
                                 shape: BoxShape.circle,
                               ),
                               child: Icon(
@@ -229,21 +228,21 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                 // ✅ Background suave con gradiente para mejor visibilidad
                 gradient: LinearGradient(
                   colors: [
-                    Colors.black.withOpacity(0.6),
-                    Colors.black.withOpacity(0.5),
+                    Colors.black.withValues(alpha: 0.6),
+                    Colors.black.withValues(alpha: 0.5),
                   ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
                 border: Border.all(
-                  color: Colors.white.withOpacity(0.5),
+                  color: Colors.white.withValues(alpha: 0.5),
                   width: 1.5,
                 ),
                 borderRadius: BorderRadius.circular(25),
                 // Sombra sutil para resaltar el input
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
+                    color: Colors.black.withValues(alpha: 0.3),
                     blurRadius: 8,
                     offset: const Offset(0, 2),
                   ),
@@ -255,13 +254,13 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
                 style: const TextStyle(color: Colors.white, fontSize: 16),
                 decoration: InputDecoration(
                   hintText: 'Agregar una descripción...',
-                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.6)),
+                  hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.6)),
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
                   filled: false, // No usar fill del TextField
                   contentPadding: EdgeInsets.zero, // Sin padding extra
-                  counterStyle: TextStyle(color: Colors.white.withOpacity(0.6)),
+                  counterStyle: TextStyle(color: Colors.white.withValues(alpha: 0.6)),
                 ),
                 maxLines: null,
                 maxLength: 200,
@@ -275,7 +274,7 @@ class _StoryPreviewScreenState extends State<StoryPreviewScreen> {
               child: ElevatedButton(
                 onPressed: _isUploading ? null : _shareStory,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF9D7FE8),
+                  backgroundColor: ThemeService.primaryColor,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(

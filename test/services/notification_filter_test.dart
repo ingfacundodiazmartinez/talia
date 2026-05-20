@@ -162,7 +162,7 @@ void main() {
       // Assert
       expect(config.soundEnabled, true);
       expect(config.vibrationEnabled, false);
-      expect(config.inAppSoundEnabled, true);
+      // inAppSoundEnabled removed from NotificationSoundConfig
     });
 
     test('Debe usar valores por defecto si hay error', () async {
@@ -175,7 +175,7 @@ void main() {
       // Assert (fail-safe)
       expect(config.soundEnabled, true);
       expect(config.vibrationEnabled, true);
-      expect(config.inAppSoundEnabled, true);
+      // inAppSoundEnabled removed from NotificationSoundConfig
     });
   });
 

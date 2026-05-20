@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -88,67 +89,14 @@ class LocationPermissionDialog extends StatelessWidget {
 
   Future<Position?> _getPositionWithGeolocator() async {
     try {
-      // ignore: deprecated_member_use
       return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+        ),
       );
     } catch (e) {
       return null;
     }
-  }
-
-  /// Muestra información sobre por qué necesitamos "Siempre"
-  void _showAlwaysPermissionInfo(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Ubicación en segundo plano'),
-        content: const Text(
-          'Para tu máxima seguridad, Talia necesita acceso a tu ubicación incluso cuando la app está cerrada.\n\n'
-          'Esto permite que tus padres puedan encontrarte en caso de emergencia.\n\n'
-          'Por favor, ve a Configuración > Ubicación y selecciona "Siempre".',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(dialogContext).pop();
-            },
-            child: const Text('Entendido'),
-          ),
-          TextButton(
-            onPressed: () {
-              openAppSettings();
-              Navigator.of(dialogContext).pop();
-            },
-            child: const Text('Abrir Configuración'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Muestra diálogo para abrir configuración del sistema
-  void _showOpenSettingsDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Permisos necesarios'),
-        content: const Text(
-          'Para tu seguridad, Talia necesita acceso a tu ubicación en segundo plano. '
-          'Por favor, ve a Configuración y habilita los permisos de ubicación.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              openAppSettings();
-              Navigator.of(dialogContext).pop();
-            },
-            child: const Text('Abrir Configuración'),
-          ),
-        ],
-      ),
-    );
   }
 
   @override
@@ -173,13 +121,13 @@ class LocationPermissionDialog extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: const Color(0xFF9D7FE8).withValues(alpha: 0.15),
+                color: ThemeService.primaryColor.withValues(alpha: 0.15),
                 shape: BoxShape.circle,
               ),
               child: const Icon(
                 Icons.location_on,
                 size: 48,
-                color: Color(0xFF9D7FE8),
+                color: ThemeService.primaryColor,
               ),
             ),
 
@@ -200,7 +148,7 @@ class LocationPermissionDialog extends StatelessWidget {
 
             // Descripción
             Text(
-              'Para tu seguridad, Talia necesita acceder a tu ubicación incluso cuando la app está cerrada.',
+              'Para tu seguridad, Tália necesita acceder a tu ubicación incluso cuando la app está cerrada.',
               style: TextStyle(
                 fontSize: 15,
                 color: isDarkMode
@@ -271,7 +219,7 @@ class LocationPermissionDialog extends StatelessWidget {
               child: ElevatedButton(
                 onPressed: () => _requestLocationPermissions(context),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF9D7FE8),
+                  backgroundColor: ThemeService.primaryColor,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
@@ -308,7 +256,7 @@ class LocationPermissionDialog extends StatelessWidget {
         Icon(
           icon,
           size: 20,
-          color: const Color(0xFF9D7FE8),
+          color: ThemeService.primaryColor,
         ),
         const SizedBox(width: 12),
         Expanded(

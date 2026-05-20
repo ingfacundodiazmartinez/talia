@@ -3,9 +3,9 @@ import Flutter
 import Firebase
 import UserNotifications
 import GoogleMaps
-import DeepAR
 import PushKit
 import CallKit
+import AVFoundation
 import flutter_callkit_incoming
 import Intents  // ✅ Necesario para INPerson e INImage
 
@@ -26,13 +26,21 @@ import Intents  // ✅ Necesario para INPerson e INImage
   ) -> Bool {
     FirebaseApp.configure()
 
+    // ✅ Compartir auth state con extensiones (NSE) via shared keychain access group.
+    // Esto permite que el NotificationServiceExtension lea `Auth.auth().currentUser`
+    // y pueda escribir `lastReceivedAt_{uid}` al chat doc cuando llega una push,
+    // incluso si la app principal está totalmente cerrada.
+    do {
+      try Auth.auth().useUserAccessGroup("J642AAS7WP.com.talia.chat.shared")
+      NSLog("✅ [Auth] Shared keychain access group configurado")
+    } catch let error as NSError {
+      NSLog("⚠️ [Auth] No se pudo configurar shared access group: %@", error.localizedDescription)
+    }
+
     // Configure Google Maps with API key
     GMSServices.provideAPIKey("AIzaSyDmaRq41cBttgeopHCXh1HvtvGSAegwo7E")
 
     GeneratedPluginRegistrant.register(with: self)
-
-    // Registrar plugin de DeepAR
-    ArFiltersPlugin.register(with: registrar(forPlugin: "ArFiltersPlugin")!)
 
     // ✅ Setup CallKit Provider FIRST
     setupCallKitProvider()

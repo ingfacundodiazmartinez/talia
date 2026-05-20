@@ -1,13 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:app_badge_plus/app_badge_plus.dart';
 import 'local_unread_count_service.dart';
 
 class UnreadMessagesService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
 
   /// Obtener contador de mensajes sin leer para un chat específico
   Future<int> getUnreadCount(String chatId) async {
@@ -154,6 +152,7 @@ class UnreadMessagesService {
       // 3. Contar historias pendientes de los hijos
       // ACTUALIZADO: Usar story_approval_requests en lugar de stories
       // FIX: Filtrar también por expiresAt para no contar requests expirados
+      // FIX: Excluir las que el padre ya vio (viewedByParent==true)
       int pendingStoriesCount = 0;
       final storiesSnapshot = await _firestore
           .collection('story_approval_requests')
@@ -161,10 +160,11 @@ class UnreadMessagesService {
           .where('status', isEqualTo: 'pending')
           .get();
 
-      // Filtrar localmente los que no han expirado
+      // Filtrar localmente los que no han expirado ni vistos por el padre
       final now = DateTime.now();
       pendingStoriesCount = storiesSnapshot.docs.where((doc) {
         final data = doc.data();
+        if (data['viewedByParent'] == true) return false;
         final expiresAt = data['expiresAt'];
         if (expiresAt == null) return true; // Si no tiene expiresAt, contar
         if (expiresAt is Timestamp) {

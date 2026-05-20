@@ -32,9 +32,6 @@ target 'Runner' do
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
-  # DeepAR SDK for iOS
-  pod 'DeepAR', '~> 5.6.4'
-
   # reCAPTCHA Enterprise removido - usando solo APNs para Phone Auth
   # pod 'RecaptchaEnterprise', '~> 18.8.0'
 
@@ -47,10 +44,14 @@ target 'Runner' do
   end
 end
 
-# Notification Service Extension - solo descarga fotos para notificaciones
+# Notification Service Extension - descarga foto del sender + marca delivery receipts.
+# Necesita Firebase Auth (para leer el currentUser desde shared keychain) y Firestore
+# (para escribir `lastReceivedAt_{uid}` al chat doc cuando llega la push, incluso si
+# la app principal está totalmente cerrada).
 target 'NotificationServiceExtension' do
   use_frameworks!
-  # No necesita pods - solo usa UserNotifications framework nativo
+  pod 'FirebaseAuth'
+  pod 'FirebaseFirestore'
 end
 
 # Share Extension - recibe contenido compartido desde otras apps
@@ -64,6 +65,11 @@ post_install do |installer|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
+      # ✅ FIX: MLKit Vision/FaceDetection sólo tiene builds x86_64-simulator.
+      # En Apple Silicon, el simulator debe correr vía Rosetta. Forzar exclude
+      # de arm64 en simulator para que todos los pods sean consistentes.
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
+      config.build_settings['ONLY_ACTIVE_ARCH'] = 'YES'
     end
   end
 end

@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'services/phone_verification_service.dart';
@@ -150,7 +151,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
     return Theme(
       data: ThemeData.light().copyWith(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Color(0xFF9D7FE8),
+          seedColor: ThemeService.primaryColor,
           brightness: Brightness.light,
         ),
       ),
@@ -166,7 +167,7 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                   colors: [
-                    Color(0xFF9D7FE8),
+                    ThemeService.primaryColor,
                     Color(0xFFB39DDB),
                     Color(0xFFCE93D8),
                   ],

@@ -219,26 +219,20 @@ exports.generateUserCode = onCall(
 
     try {
       // 2. Verificar si ya tiene un código activo
+      // ✅ Códigos permanentes: si hay un código activo, retornarlo (sin importar expiresAt).
+      // El usuario puede regenerar manualmente si lo expone por error.
       const existingCodeDoc = await db.collection("user_codes").doc(userId).get();
 
       if (existingCodeDoc.exists && existingCodeDoc.data().isActive === true) {
         const data = existingCodeDoc.data();
         const existingCode = data.code;
-        const expiresAtTimestamp = data.expiresAt;
-
-        // Verificar si el código ha expirado
-        if (expiresAtTimestamp && expiresAtTimestamp.toMillis() < Date.now()) {
-          console.log(`⏰ [generateUserCode] Código existente expirado, generando nuevo...`);
-          // El código expiró, continuar para generar uno nuevo
-        } else {
-          console.log(`✅ [generateUserCode] Código existente válido: ${existingCode}`);
-          return {
-            success: true,
-            code: existingCode,
-            isNew: false,
-            expiresAt: expiresAtTimestamp ? expiresAtTimestamp.toMillis() : null,
-          };
-        }
+        console.log(`✅ [generateUserCode] Código existente activo: ${existingCode}`);
+        return {
+          success: true,
+          code: existingCode,
+          isNew: false,
+          expiresAt: null, // Permanente
+        };
       }
 
       // 3. Generar nuevo código único
@@ -269,28 +263,22 @@ exports.generateUserCode = onCall(
         throw new HttpsError("internal", "No se pudo generar un código único");
       }
 
-      // 4. Guardar el nuevo código con TTL de 5 minutos
-      const now = Date.now();
-      const fiveMinutesMs = 5 * 60 * 1000;
-      const expiresAt = Timestamp.fromMillis(now + fiveMinutesMs);
-      const deleteAt = Timestamp.fromMillis(now + fiveMinutesMs);
-
+      // 4. Guardar el nuevo código (permanente, sin TTL)
+      // El usuario puede regenerar manualmente desde la UI si lo expuso por error.
       await db.collection("user_codes").doc(userId).set({
         code,
         userId,
         createdAt: FieldValue.serverTimestamp(),
-        expiresAt: expiresAt,  // Para mostrar en UI
-        deleteAt: deleteAt,    // TTL para Firestore
         isActive: true,
       });
 
-      console.log(`✅ [generateUserCode] Nuevo código generado: ${code} (expira en 5 min)`);
+      console.log(`✅ [generateUserCode] Nuevo código permanente generado: ${code}`);
 
       return {
         success: true,
         code,
         isNew: true,
-        expiresAt: expiresAt.toMillis(), // Timestamp en milisegundos para UI
+        expiresAt: null, // Permanente
       };
     } catch (error) {
       console.error(`❌ [generateUserCode] Error:`, error);

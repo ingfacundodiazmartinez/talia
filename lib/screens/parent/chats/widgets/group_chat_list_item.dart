@@ -7,7 +7,7 @@ import '../../../../groups/groups.dart'; // Groups V2
 import '../../../../models/chat_message.dart';
 import '../../../../widgets/message_status_indicator.dart';
 import '../../../../controllers/chat_list_item_controller.dart';
-import '../../../../utils/release_logger.dart';
+import '../../../../services/user_cache_service.dart';
 
 class GroupChatListItem extends StatefulWidget {
   final String groupId;
@@ -58,6 +58,8 @@ class GroupChatListItem extends StatefulWidget {
 class _GroupChatListItemState extends State<GroupChatListItem> {
   // Reutilizar el mismo controller de chats 1-1 (los servicios son genéricos)
   late final ChatListItemController _controller;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
 
   @override
   void initState() {
@@ -78,24 +80,37 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
 
   Future<void> _archiveGroup() async {
     final success = await _controller.archiveChat();
-    if (mounted) {
-      if (!success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al archivar grupo'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      } else {
-        // ✅ Log para verificar que el callback se ejecuta
-        if (widget.onArchived != null) {
-          ReleaseLogger.log('✅ [GroupChatListItem] Llamando onArchived callback', tag: 'GroupChatListItem');
-          widget.onArchived!.call();
-        } else {
-          ReleaseLogger.warning('⚠️ [GroupChatListItem] onArchived callback es NULL!', tag: 'GroupChatListItem');
-        }
-      }
+    if (!mounted) return;
+
+    if (!success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error al archivar grupo'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
     }
+
+    widget.onArchived?.call();
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Grupo archivado'),
+        duration: const Duration(seconds: 4),
+        action: SnackBarAction(
+          label: 'Deshacer',
+          onPressed: () async {
+            final reverted = await _controller.unarchiveChat();
+            if (reverted && mounted) {
+              widget.onArchived?.call();
+            }
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _muteGroup() async {
@@ -294,8 +309,7 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
       return _buildPendingGroupItem(context);
     }
 
-    final firestore = FirebaseFirestore.instance;
-    final auth = FirebaseAuth.instance;
+    final userCacheService = UserCacheService();
     final colorScheme = Theme.of(context).colorScheme;
 
     // Usar StreamBuilder para estado de mute (igual que ChatListItem)
@@ -400,6 +414,7 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
                                     final success = await _controller.clearChat();
                                     if (mounted) {
                                       if (!success) {
+                                        // ignore: use_build_context_synchronously
                                         ScaffoldMessenger.of(context).showSnackBar(
                                           SnackBar(
                                             content: Text('Error al limpiar grupo'),
@@ -505,7 +520,7 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
                               ),
                               SizedBox(height: 4),
                               StreamBuilder<QuerySnapshot>(
-                                stream: firestore
+                                stream: _firestore
                                     .collection('groups_v2')
                                     .doc(widget.groupId)
                                     .collection('typing')
@@ -513,7 +528,7 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
                                 builder: (context, typingSnapshot) {
                                   // Si hay error de permisos, mostrar el último mensaje
                                   if (typingSnapshot.hasError) {
-                                    final currentUserId = auth.currentUser?.uid ?? '';
+                                    final currentUserId = _auth.currentUser?.uid ?? '';
                                     final isOwnMessage = widget.lastMessageSenderId == currentUserId;
 
                                     return Row(
@@ -563,7 +578,7 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
                                   }
 
                                   if (typingSnapshot.hasData && typingSnapshot.data!.docs.isNotEmpty) {
-                                    final currentUserId = auth.currentUser!.uid;
+                                    final currentUserId = _auth.currentUser!.uid;
                                     final now = DateTime.now();
 
                                     final typingUserIds = typingSnapshot.data!.docs.where((doc) {
@@ -584,8 +599,8 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
                                         future: Future.wait<String>(
                                           typingUserIds.map<Future<String>>((userId) async {
                                             try {
-                                              final userDoc = await firestore.collection('users').doc(userId).get();
-                                              return userDoc.data()?['name'] as String? ?? 'Alguien';
+                                              final userData = await userCacheService.getUserData(userId);
+                                              return userData?['name'] as String? ?? 'Alguien';
                                             } catch (e) {
                                               return 'Alguien';
                                             }
@@ -657,7 +672,7 @@ class _GroupChatListItemState extends State<GroupChatListItem> {
                                   }
 
                                   // Mostrar lastMessage con indicador de estado
-                                  final currentUserId = auth.currentUser?.uid ?? '';
+                                  final currentUserId = _auth.currentUser?.uid ?? '';
                                   final isOwnMessage = widget.lastMessageSenderId == currentUserId;
 
                                   return Row(

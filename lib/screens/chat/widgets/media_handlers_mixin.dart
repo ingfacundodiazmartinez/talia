@@ -22,15 +22,13 @@ mixin MediaHandlersMixin<T extends StatefulWidget> on State<T> {
   Future<void> handleSendImage(ImageSource source) async {
     Navigator.pop(context); // Cerrar bottom sheet
 
-    // Verificar bloqueo
-    if (controller.isBlocked || controller.isBlockedBy) {
+    // Verificar bloqueo (solo si yo bloqueé)
+    if (controller.isBlocked) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             content: Text(
-              controller.isBlocked
-                  ? 'No puedes enviar mensajes a este contacto porque lo has bloqueado'
-                  : 'Este contacto te ha bloqueado',
+              'No puedes enviar mensajes a este contacto porque lo has bloqueado',
             ),
             backgroundColor: Colors.red,
           ),
@@ -45,16 +43,14 @@ mixin MediaHandlersMixin<T extends StatefulWidget> on State<T> {
 
   /// Manejar envío de video con UI optimista
   Future<void> handleSendVideo() async {
-    // Verificar bloqueo
-    if (controller.isBlocked || controller.isBlockedBy) {
+    // Verificar bloqueo (solo si yo bloqueé)
+    if (controller.isBlocked) {
       Navigator.pop(context);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             content: Text(
-              controller.isBlocked
-                  ? 'No puedes enviar mensajes a este contacto porque lo has bloqueado'
-                  : 'Este contacto te ha bloqueado',
+              'No puedes enviar mensajes a este contacto porque lo has bloqueado',
             ),
             backgroundColor: Colors.red,
           ),
@@ -66,11 +62,10 @@ mixin MediaHandlersMixin<T extends StatefulWidget> on State<T> {
     // Cerrar bottom sheet
     Navigator.pop(context);
 
-    // Abrir picker de video (sin compresión en iOS para velocidad)
+    // Abrir picker de video
     final FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.video,
       allowMultiple: false,
-      allowCompression: false,
     );
 
     if (result == null || result.files.isEmpty) return;

@@ -19,6 +19,7 @@ class ChatListItemController {
 
   // ✅ Nuevos servicios atómicos
   final ArchiveChatService _archiveService;
+  final UnarchiveChatService _unarchiveService;
   final MuteChatService _muteService;
   final UnmuteChatService _unmuteService;
   final ClearChatService _clearService;
@@ -35,6 +36,7 @@ class ChatListItemController {
     required this.chatId,
     required this.userId,
     ArchiveChatService? archiveService,
+    UnarchiveChatService? unarchiveService,
     MuteChatService? muteService,
     UnmuteChatService? unmuteService,
     ClearChatService? clearService,
@@ -43,6 +45,7 @@ class ChatListItemController {
     FirebaseFirestore? firestore,
     firebase_auth.FirebaseAuth? auth,
   }) : _archiveService = archiveService ?? ArchiveChatService(),
+       _unarchiveService = unarchiveService ?? UnarchiveChatService(),
        _muteService = muteService ?? MuteChatService(),
        _unmuteService = unmuteService ?? UnmuteChatService(),
        _clearService = clearService ?? ClearChatService(),
@@ -77,6 +80,22 @@ class ChatListItemController {
       return result.success;
     } catch (e) {
       ReleaseLogger.error('Error archivando chat: $e', tag: 'ChatListItem');
+      return false;
+    }
+  }
+
+  /// Desarchivar chat (usado por undo en swipe-to-archive)
+  Future<bool> unarchiveChat() async {
+    try {
+      final result = await _unarchiveService.call(chatId: chatId);
+      if (result.success) {
+        ReleaseLogger.log('Chat $chatId desarchivado', tag: 'ChatListItem');
+      } else {
+        ReleaseLogger.error('Error desarchivando chat $chatId: ${result.message}', tag: 'ChatListItem');
+      }
+      return result.success;
+    } catch (e) {
+      ReleaseLogger.error('Error desarchivando chat: $e', tag: 'ChatListItem');
       return false;
     }
   }

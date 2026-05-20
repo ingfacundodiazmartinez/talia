@@ -29,7 +29,6 @@ import 'services/chats/managers/chat_stream_manager.dart'; // ✅ Para deduplica
 import 'services/local_unread_count_service.dart'; // ✅ Para incrementar contador de no leídos
 import 'services/unread_messages_service.dart'; // ✅ Para actualizar badge
 import 'services/nudge_service.dart'; // ✅ Para manejar nudges entrantes
-import 'models/nudge.dart'; // ✅ Modelo de nudges
 import 'utils/release_logger.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
@@ -95,7 +94,9 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       ReleaseLogger.log('🚫 [Background] Usuario viendo chat - SKIP', tag: 'NotificationService');
       return;
     }
-  } catch (_) {}
+  } catch (_) {
+    // Silently ignore - checking current chat is optional, notification will proceed
+  }
 
   // 3. LLAMADAS: Mostrar CallKit
   if (messageType == 'incoming_call' ||
@@ -185,6 +186,34 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // - Android: El servicio nativo (MyFirebaseMessagingService) muestra la notificación con MessagingStyle
   // - iOS: Flutter muestra la notificación (con deduplicación)
   if (messageType == 'chat_message' || messageType == 'group_message') {
+    // ✅ DELIVERY RECEIPT: marcar lastReceivedAt_{me} en el chat doc.
+    // Esto le da el ✓✓ gris al sender. Acá es server-confirmed que el device
+    // recibió la push (Dart background handler corre solo cuando FCM llega
+    // realmente). Si el device está apagado y FCM solo encola, este código
+    // no corre, y el sender queda en ✓ — exactamente la semántica deseada.
+    //
+    // Solo para chats 1-1 (grupos usan TTL, no read receipts globales).
+    if (messageType == 'chat_message' && chatId.isNotEmpty) {
+      try {
+        final uid = FirebaseAuth.instance.currentUser?.uid;
+        if (uid != null) {
+          await FirebaseFirestore.instance.collection('chats').doc(chatId).update({
+            'lastReceivedAt_$uid': FieldValue.serverTimestamp(),
+          });
+          ReleaseLogger.log(
+            '📬 [Background] lastReceivedAt actualizado para chat $chatId',
+            tag: 'NotificationService',
+          );
+        }
+      } catch (e) {
+        // No bloquear el handler — el push ya se mostrará.
+        ReleaseLogger.log(
+          '⚠️ [Background] Error marcando lastReceivedAt (no crítico): $e',
+          tag: 'NotificationService',
+        );
+      }
+    }
+
     if (Platform.isAndroid) {
       // ✅ Android: No hacer nada aquí - el servicio nativo maneja la notificación
       // MyFirebaseMessagingService.kt ya tiene el MessagingStyle correcto
@@ -608,6 +637,7 @@ class NotificationService {
   }
 
   /// ✅ CLEAN: Navegar cuando el navigator esté disponible (solución reactiva)
+  // ignore: unused_element
   void _navigateWhenReady(String callId) {
     ReleaseLogger.log(
       '🔄 Programando navegación para $callId',
@@ -948,7 +978,7 @@ class NotificationService {
       const androidChannel = AndroidNotificationChannel(
         'high_importance_channel',
         'Notificaciones Importantes',
-        description: 'Canal para notificaciones importantes de Talia',
+        description: 'Canal para notificaciones importantes de Tália',
         importance: Importance.high,
         enableVibration: true,
         playSound: true,
@@ -1166,7 +1196,7 @@ class NotificationService {
     String type,
   ) async {
     try {
-      final title = data['title'] as String? ?? 'Talia';
+      final title = data['title'] as String? ?? 'Tália';
       final body = data['body'] as String? ?? '';
 
       ReleaseLogger.log(
@@ -1184,7 +1214,7 @@ class NotificationService {
           android: AndroidNotificationDetails(
             'high_importance_channel',
             'Notificaciones Importantes',
-            channelDescription: 'Canal para notificaciones importantes de Talia',
+            channelDescription: 'Canal para notificaciones importantes de Tália',
             importance: Importance.high,
             priority: Priority.high,
             enableVibration: true,
@@ -1247,7 +1277,7 @@ class NotificationService {
           android: AndroidNotificationDetails(
             'high_importance_channel',
             'Notificaciones Importantes',
-            channelDescription: 'Canal para notificaciones importantes de Talia',
+            channelDescription: 'Canal para notificaciones importantes de Tália',
             importance: Importance.high,
             priority: Priority.high,
             enableVibration: true,
@@ -1632,6 +1662,23 @@ class NotificationService {
           tag: 'NotificationService',
         );
 
+        // ✅ DELIVERY RECEIPT: marcar lastReceivedAt_{me} en chat 1-1.
+        // En foreground el ChatDocsListener suele ganarle a FCM, pero por las
+        // dudas (ej. listener caído) también lo escribimos acá. Writes
+        // redundantes son idempotentes.
+        if (!isGroup && chatId.isNotEmpty) {
+          try {
+            final uid = FirebaseAuth.instance.currentUser?.uid;
+            if (uid != null) {
+              await FirebaseFirestore.instance.collection('chats').doc(chatId).update({
+                'lastReceivedAt_$uid': FieldValue.serverTimestamp(),
+              });
+            }
+          } catch (_) {
+            // Silencioso — no bloquear el handler.
+          }
+        }
+
         // ✅ DEDUPLICATION: Verificar si StreamDetector ya mostró esta notificación
         if (ChatStreamManager.wasNotificationShown(messageId)) {
           ReleaseLogger.log(
@@ -1740,7 +1787,7 @@ class NotificationService {
       // ═══════════════════════════════════════════════════════════════
       // story_approval_request, contact_request, emergency, etc.
       // Mostrar notificación local para que el usuario la vea
-      final title = message.data['title'] as String? ?? 'Talia';
+      final title = message.data['title'] as String? ?? 'Tália';
       final body = message.data['body'] as String? ?? '';
 
       if (title.isNotEmpty || body.isNotEmpty) {
@@ -1828,6 +1875,7 @@ class NotificationService {
   }
 
   // Mostrar notificación local
+  // ignore: unused_element
   Future<void> _showLocalNotification(RemoteMessage message) async {
     try {
       // Verificar usuario actual
@@ -2035,7 +2083,7 @@ class NotificationService {
 
       await _localNotifications.show(
         message.hashCode,
-        message.notification?.title ?? 'Talia',
+        message.notification?.title ?? 'Tália',
         message.notification?.body ?? '',
         details,
         payload: payload,

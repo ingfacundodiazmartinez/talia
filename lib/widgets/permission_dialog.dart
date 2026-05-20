@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -22,12 +23,12 @@ class PermissionDialog {
               Container(
                 padding: EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Color(0xFF9D7FE8).withOpacity(0.1),
+                  color: ThemeService.primaryColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
                   icon,
-                  color: Color(0xFF9D7FE8),
+                  color: ThemeService.primaryColor,
                   size: 24,
                 ),
               ),
@@ -60,7 +61,7 @@ class PermissionDialog {
               Container(
                 padding: EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.1),
+                  color: Colors.blue.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
@@ -94,7 +95,7 @@ class PermissionDialog {
                 Navigator.of(context).pop(true);
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF9D7FE8),
+                backgroundColor: ThemeService.primaryColor,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
@@ -125,7 +126,7 @@ class PermissionDialog {
               Container(
                 padding: EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.1),
+                  color: Colors.orange.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
@@ -163,7 +164,7 @@ class PermissionDialog {
               Container(
                 padding: EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.orange.withOpacity(0.1),
+                  color: Colors.orange.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Column(
@@ -180,7 +181,7 @@ class PermissionDialog {
                     SizedBox(height: 4),
                     Text(
                       '1. Ve a Configuración del dispositivo\n'
-                      '2. Busca "Talia" en Aplicaciones\n'
+                      '2. Busca "Tália" en Aplicaciones\n'
                       '3. Toca en "Permisos"\n'
                       '4. Habilita el permiso necesario',
                       style: TextStyle(

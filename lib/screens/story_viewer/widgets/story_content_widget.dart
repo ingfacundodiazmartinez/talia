@@ -6,6 +6,7 @@ import '../../../models/trivia.dart';
 import '../../../models/trivia_response.dart';
 import '../../../models/viewer_item.dart';
 import '../../../controllers/story_viewer_controller.dart';
+import '../../../services/optimistic_story_media_cache.dart';
 import 'package:video_player/video_player.dart';
 import 'trivia_preview_widget.dart';
 
@@ -228,10 +229,17 @@ class StoryContentWidget extends StatelessWidget {
 
     Widget imageWidget;
 
-    // Si tiene archivo local (mientras se sube)
-    if (story.localMediaPath != null && story.localMediaPath!.isNotEmpty) {
+    // Si tiene archivo local en el modelo, o si está cacheado (cuando el doc
+    // re-llega de Firestore sin el campo localMediaPath), usar Image.file.
+    // Esto permite ver la historia mientras se está subiendo.
+    final cachedPath = OptimisticStoryMediaCache().get(story.id);
+    final localPath = (story.localMediaPath != null && story.localMediaPath!.isNotEmpty)
+        ? story.localMediaPath!
+        : cachedPath;
+
+    if (localPath != null && localPath.isNotEmpty) {
       imageWidget = Image.file(
-        File(story.localMediaPath!),
+        File(localPath),
         fit: BoxFit.cover,
         width: double.infinity,
         height: double.infinity,
@@ -337,8 +345,10 @@ class StoryContentWidget extends StatelessWidget {
   Widget _buildMoodContent(BuildContext context, Story story, int userIndex, int storyIndex) {
     final emoji = story.mediaUrl.replaceFirst('mood://', '');
     final questionText = story.filter?['questionText'] as String? ?? '';
+    // Extract response text, removing leading emoji if present
+    final captionText = story.caption ?? '';
     final responseText = story.filter?['text'] as String? ??
-        story.caption?.replaceFirst(RegExp(r'^[\p{Emoji}]+\s*', unicode: true), '') ?? '';
+        (captionText.isNotEmpty ? captionText.replaceFirst(RegExp(r'^[^\x00-\x7F]+\s*'), '') : '');
 
     if (!isCurrentStoryLoaded &&
         userIndex == currentUserIndex &&
@@ -675,7 +685,7 @@ class StoryContentWidget extends StatelessWidget {
                     ? Image.network(
                         photoURL,
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => _buildDefaultAvatar(name),
+                        errorBuilder: (context, error, stackTrace) => _buildDefaultAvatar(name),
                       )
                     : _buildDefaultAvatar(name),
               ),

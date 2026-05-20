@@ -1,7 +1,7 @@
-/// Call Status Service
-///
-/// This service consolidates all call status operations including
-/// accepting, declining, and ending calls.
+// Call Status Service
+//
+// This service consolidates all call status operations including
+// accepting, declining, and ending calls.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';

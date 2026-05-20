@@ -2,7 +2,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:math';
 
 import '../utils/release_logger.dart';
 
@@ -84,27 +83,6 @@ class UserCodeService {
     }
   }
 
-  /// Obtener código desde cache local
-  Future<String?> _getCachedCode(String userId) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getString('$_cacheKeyPrefix$userId');
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /// Guardar código en cache local
-  Future<void> _cacheCode(String userId, String code) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('$_cacheKeyPrefix$userId', code);
-      ReleaseLogger.log('[UserCodeService] Código guardado en cache local', tag: 'UserCode');
-    } catch (e) {
-      // Ignorar errores de cache
-    }
-  }
-
   /// Limpiar cache de código (usado al regenerar)
   Future<void> _clearCachedCode(String userId) async {
     try {
@@ -180,17 +158,6 @@ class UserCodeService {
     if (userId == null) throw Exception('Usuario no autenticado');
 
     return await getUserCode(userId);
-  }
-
-  /// Generar código aleatorio (formato: TALIA-ABC123)
-  String _generateRandomCode() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    final random = Random.secure();
-
-    final letters = List.generate(3, (index) => chars[random.nextInt(26)]).join(''); // Solo letras para las primeras 3
-    final numbers = List.generate(3, (index) => chars[26 + random.nextInt(10)]).join(''); // Solo números para las últimas 3
-
-    return 'TALIA-$letters$numbers';
   }
 
   /// Validar formato de código

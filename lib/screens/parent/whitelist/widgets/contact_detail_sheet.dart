@@ -127,93 +127,6 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
     }
   }
 
-  Future<void> _toggleModeration(ChildRelation relation, bool enabled) async {
-    final state = _moderationState[relation.childId];
-    if (state == null) return;
-
-    setState(() {
-      _loadingModeration[relation.childId] = true;
-      _moderationState[relation.childId]!['enabled'] = enabled;
-    });
-
-    try {
-      final result = await _updateModerationService.call(
-        childId: relation.childId,
-        contactId: widget.contact.contactId,
-        moderationLevel: state['level'] ?? 'medium',
-        enabled: enabled,
-      );
-
-      if (!result.success) {
-        throw Exception(result.message);
-      }
-    } catch (e) {
-      // Revertir
-      setState(() {
-        _moderationState[relation.childId]!['enabled'] = !enabled;
-      });
-      ReleaseLogger.error('Error toggle moderation: $e', tag: 'ContactDetailSheet');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _loadingModeration[relation.childId] = false);
-      }
-    }
-  }
-
-  Future<void> _changeModerationLevel(ChildRelation relation, String level) async {
-    final state = _moderationState[relation.childId];
-    if (state == null) return;
-
-    final oldLevel = state['level'];
-    setState(() {
-      _loadingModeration[relation.childId] = true;
-      _moderationState[relation.childId]!['level'] = level;
-    });
-
-    try {
-      final result = await _updateModerationService.call(
-        childId: relation.childId,
-        contactId: widget.contact.contactId,
-        moderationLevel: level,
-        enabled: state['enabled'] ?? false,
-      );
-
-      if (!result.success) {
-        throw Exception(result.message);
-      }
-
-    } catch (e) {
-      // Revertir
-      setState(() {
-        _moderationState[relation.childId]!['level'] = oldLevel;
-      });
-      ReleaseLogger.error('Error change level: $e', tag: 'ContactDetailSheet');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _loadingModeration[relation.childId] = false);
-      }
-    }
-  }
-
-  String _getLevelLabel(String level) {
-    switch (level) {
-      case 'high': return 'Alto';
-      case 'medium': return 'Medio';
-      case 'low': return 'Bajo';
-      default: return 'Alto';
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -279,8 +192,8 @@ class _ContactDetailSheetState extends State<ContactDetailSheet> {
                       width: 56,
                       height: 56,
                       fit: BoxFit.cover,
-                      placeholder: (_, __) => _buildInitial(colorScheme),
-                      errorWidget: (_, __, ___) => _buildInitial(colorScheme),
+                      placeholder: (context, url) => _buildInitial(colorScheme),
+                      errorWidget: (context, url, error) => _buildInitial(colorScheme),
                     ),
                   )
                 : _buildInitial(colorScheme),

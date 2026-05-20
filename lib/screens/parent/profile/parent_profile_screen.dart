@@ -7,6 +7,7 @@ import '../../common/help_support_screen.dart';
 import '../../common/privacy_policy_screen.dart';
 import '../../common/settings_screen.dart';
 import '../../settings/subscription_screen.dart';
+import '../wallet/wallet_screen.dart';
 import '../../../controllers/profile_controller.dart';
 import '../../../models/parent.dart';
 import '../../../services/subscription_service.dart';
@@ -105,11 +106,17 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
                 onTap: () => _navigateToEditProfile(),
               ),
               _buildProfileOption(
+                icon: Icons.auto_awesome,
+                title: 'Mi billetera de créditos',
+                onTap: () => _navigateToWallet(),
+              ),
+              _buildProfileOption(
                 icon: Icons.security,
                 title: 'Privacidad y Seguridad',
                 onTap: () => _navigateToPrivacySecurity(),
               ),
               _buildAutoApprovalSetting(),
+              _buildGroupAutoApprovalSetting(),
               _buildDarkModeSetting(),
               _buildProfileOption(
                 icon: Icons.notifications,
@@ -148,7 +155,6 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
       return const SizedBox.shrink();
     }
 
-    final colorScheme = Theme.of(context).colorScheme;
     final subscriptionService = SubscriptionService();
 
     return StreamBuilder<PremiumStatus>(
@@ -163,14 +169,14 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
             gradient: LinearGradient(
               colors: isPremium
                   ? [Color(0xFF6A1B9A), Color(0xFF8E24AA)]
-                  : [Color(0xFF6A1B9A).withOpacity(0.8), Color(0xFF8E24AA).withOpacity(0.8)],
+                  : [Color(0xFF6A1B9A).withValues(alpha: 0.8), Color(0xFF8E24AA).withValues(alpha: 0.8)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
-                color: Color(0xFF6A1B9A).withOpacity(0.3),
+                color: Color(0xFF6A1B9A).withValues(alpha: 0.3),
                 blurRadius: 8,
                 offset: Offset(0, 4),
               ),
@@ -188,7 +194,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
                     Container(
                       padding: EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
+                        color: Colors.white.withValues(alpha: 0.2),
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
@@ -203,7 +209,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            isPremium ? 'Talia ${status.tier.displayName}' : 'Obtén Talia Premium',
+                            isPremium ? 'Tália ${status.tier.displayName}' : 'Obtén Tália Premium',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: 16,
@@ -216,7 +222,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
                                 ? 'Gestiona tu suscripción'
                                 : 'Más face-swaps, sin anuncios, personajes exclusivos',
                             style: TextStyle(
-                              color: Colors.white.withOpacity(0.9),
+                              color: Colors.white.withValues(alpha: 0.9),
                               fontSize: 12,
                             ),
                           ),
@@ -370,6 +376,65 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
     );
   }
 
+  Widget _buildGroupAutoApprovalSetting() {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    if (_parent == null) return const SizedBox.shrink();
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(_parent!.id)
+          .snapshots(),
+      builder: (context, snapshot) {
+        // Default ON: el padre se notifica cuando el hijo se une, sin bloquearlo.
+        bool autoApproveGroups = true;
+
+        if (snapshot.hasData && snapshot.data!.exists) {
+          final data = snapshot.data!.data() as Map<String, dynamic>?;
+          final groupSettings = data?['groupSettings'] as Map<String, dynamic>?;
+          // Solo desactivar si está explícitamente en false
+          autoApproveGroups = groupSettings?['autoApproveGroups'] != false;
+        }
+
+        return Container(
+          margin: EdgeInsets.only(bottom: 8),
+          child: ListTile(
+            leading: Icon(
+              Icons.group_add,
+              color: colorScheme.primary,
+            ),
+            title: Text(
+              'Aprobar grupos automáticamente',
+              style: TextStyle(
+                color: colorScheme.onSurface,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            subtitle: Text(
+              autoApproveGroups
+                  ? 'Tu hijo se une al grupo y te avisamos. Podés removerlo si querés.'
+                  : 'Cada solicitud de grupo requiere tu aprobación manual.',
+              style: TextStyle(
+                fontSize: 12,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            trailing: Switch(
+              value: autoApproveGroups,
+              onChanged: _toggleGroupAutoApproval,
+              activeThumbColor: colorScheme.primary,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            tileColor: colorScheme.surfaceContainerHighest,
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildDarkModeSetting() {
     final colorScheme = Theme.of(context).colorScheme;
     final themeService = context.watch<ThemeService>();
@@ -423,6 +488,12 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
     );
   }
 
+  void _navigateToWallet() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => const WalletScreen()),
+    );
+  }
+
   void _navigateToPrivacySecurity() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => PrivacySecurityScreen()),
@@ -452,6 +523,26 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
     try {
       await _controller.toggleAutoApproval(enabled);
       // UI updates automatically via StreamBuilder
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al actualizar configuración: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _toggleGroupAutoApproval(bool enabled) async {
+    try {
+      // Persistir directamente el campo anidado groupSettings.autoApproveGroups
+      final uid = _parent?.id;
+      if (uid == null) return;
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
+        'groupSettings': {'autoApproveGroups': enabled},
+      }, SetOptions(merge: true));
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -16,7 +16,7 @@ import '../utils/release_logger.dart';
 /// - Cumplir con CODING_RULES.md: ZERO Firebase calls en screens
 ///
 /// ✅ CORREGIDO: Usa EXACTAMENTE el mismo patrón que ParentChatsScreen:
-/// - Stream<QuerySnapshot> CRUDO de Firestore (sin .map())
+/// - `Stream<QuerySnapshot>` CRUDO de Firestore (sin .map())
 /// - Filtrado en el builder de la Screen
 class ParentArchivedChatsController {
   // Servicios privados
@@ -173,10 +173,12 @@ class ParentArchivedChatsController {
     }
   }
 
-  /// Stream para verificar si un usuario está bloqueado
+  /// Stream para verificar si un usuario está bloqueado por el usuario actual.
+  /// Solo retorna true si el usuario actual fue quien bloqueó — el bloqueado
+  /// no debe ver indicadores de bloqueo en su lista de chats.
   Stream<bool> isBlockedStream(String userId) {
     try {
-      return _blockService.isBlockedStream(userId);
+      return _blockService.iBlockedStream(userId);
     } catch (e) {
       ReleaseLogger.error('Error creando stream de bloqueo: $e', tag: 'ArchivedChats');
       return Stream.value(false);

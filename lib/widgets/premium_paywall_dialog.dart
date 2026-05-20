@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import '../services/subscription_service.dart';
 import '../services/app_config_service.dart';
@@ -37,13 +38,13 @@ class PremiumPaywallDialog extends StatelessWidget {
     if (feature.requiredTier == SubscriptionTier.premiumPlus) {
       return [const Color(0xFFD4AF37), const Color(0xFFFFD700)];
     }
-    return [const Color(0xFF7B5FC7), const Color(0xFF9D7FE8)];
+    return [const Color(0xFF7B5FC7), ThemeService.primaryColor];
   }
 
   Color get _primaryColor {
     return feature.requiredTier == SubscriptionTier.premiumPlus
         ? const Color(0xFFD4AF37)
-        : const Color(0xFF9D7FE8);
+        : ThemeService.primaryColor;
   }
 
   IconData get _tierIcon {
@@ -321,7 +322,7 @@ class PremiumBadge extends StatelessWidget {
       return [const Color(0xFFD4AF37), const Color(0xFFFFD700)];
     }
     // Premium: Púrpura (colores del tema)
-    return [const Color(0xFF7B5FC7), const Color(0xFF9D7FE8)];
+    return [const Color(0xFF7B5FC7), ThemeService.primaryColor];
   }
 
   IconData get _icon {

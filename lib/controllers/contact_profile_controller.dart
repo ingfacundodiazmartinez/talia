@@ -8,7 +8,6 @@ import '../services/favorite_service.dart';
 import '../services/friend_service.dart';
 import '../calls_v2/controllers/call_controller.dart' as calls_v2;
 import '../models/child.dart';
-import '../models/contact.dart';
 import '../models/contact_user.dart';
 import '../utils/release_logger.dart';
 
@@ -129,9 +128,12 @@ class ContactProfileController {
   }
 
   /// Cargar estado de bloqueo
+  ///
+  /// Usa la semántica "yo bloqueé": el flag solo se prende si el usuario actual
+  /// fue quien bloqueó al contacto. El bloqueado nunca debe ver UI de "Desbloquear".
   Future<void> _loadBlockStatus() async {
     try {
-      _isBlocked = await _blockService.isBlocked(contactId);
+      _isBlocked = await _blockService.iBlocked(contactId);
       _isLoadingBlockStatus = false;
       onBlockStatusChanged?.call(_isBlocked);
     } catch (e) {

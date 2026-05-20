@@ -1,6 +1,6 @@
-/// Barrel export para servicios de grupos
-///
-/// Exporta todos los servicios atómicos de gestión de grupos
+// Barrel export para servicios de grupos
+//
+// Exporta todos los servicios atómicos de gestión de grupos
 
 export 'create_group_service.dart';
 export 'update_group_service.dart';

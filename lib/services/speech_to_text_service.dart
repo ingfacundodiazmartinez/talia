@@ -87,9 +87,11 @@ class SpeechToTextService {
       await _speech.listen(
         onResult: _onResult,
         localeId: _localeId,
-        listenMode: ListenMode.dictation,
-        cancelOnError: false,
-        partialResults: true,
+        listenOptions: SpeechListenOptions(
+          listenMode: ListenMode.dictation,
+          cancelOnError: false,
+          partialResults: true,
+        ),
         listenFor: const Duration(minutes: 5), // Máximo 5 minutos
         pauseFor: const Duration(seconds: 10), // Pausa larga permitida
       );

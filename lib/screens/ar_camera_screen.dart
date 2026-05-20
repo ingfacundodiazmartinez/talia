@@ -1,9 +1,11 @@
+import 'package:talia/theme_service.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
 import '../services/face_filter_service.dart';
+import '../services/bottom_nav_visibility.dart';
 
 class ARCameraScreen extends StatefulWidget {
   const ARCameraScreen({super.key});
@@ -35,6 +37,7 @@ class _ARCameraScreenState extends State<ARCameraScreen>
   @override
   void initState() {
     super.initState();
+    BottomNavVisibility.instance.registerFullScreen();
     WidgetsBinding.instance.addObserver(this);
     _faceFilterService = FaceFilterService();
     _initializeCamera();
@@ -42,6 +45,7 @@ class _ARCameraScreenState extends State<ARCameraScreen>
 
   @override
   void dispose() {
+    BottomNavVisibility.instance.unregisterFullScreen();
     WidgetsBinding.instance.removeObserver(this);
     _processingTimer?.cancel();
     // Solo dispose si la cámara terminó de inicializarse
@@ -102,6 +106,7 @@ class _ARCameraScreenState extends State<ARCameraScreen>
         _startFaceDetection();
       }
     } catch (e) {
+      // Silently ignore - camera initialization may fail on some devices
     }
   }
 
@@ -164,6 +169,7 @@ class _ARCameraScreenState extends State<ARCameraScreen>
         Navigator.pop(context, image.path);
       }
     } catch (e) {
+      // Silently ignore - photo capture failure handled by not returning image
     }
   }
 
@@ -218,7 +224,7 @@ class _ARCameraScreenState extends State<ARCameraScreen>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+              CircularProgressIndicator(color: ThemeService.primaryColor),
               SizedBox(height: 16),
               Text(
                 'Inicializando cámara AR...',
@@ -296,7 +302,7 @@ class _ARCameraScreenState extends State<ARCameraScreen>
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Colors.black.withOpacity(0.8), Colors.transparent],
+          colors: [Colors.black.withValues(alpha: 0.8), Colors.transparent],
         ),
       ),
       child: Row(
@@ -319,7 +325,7 @@ class _ARCameraScreenState extends State<ARCameraScreen>
             Container(
               padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.8),
+                color: Colors.green.withValues(alpha: 0.8),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
@@ -359,8 +365,8 @@ class _ARCameraScreenState extends State<ARCameraScreen>
                     height: 50,
                     decoration: BoxDecoration(
                       color: isSelected
-                          ? Color(0xFF9D7FE8)
-                          : Colors.white.withOpacity(0.2),
+                          ? ThemeService.primaryColor
+                          : Colors.white.withValues(alpha: 0.2),
                       shape: BoxShape.circle,
                       border: isSelected
                           ? Border.all(color: Colors.white, width: 2)
@@ -405,7 +411,7 @@ class _ARCameraScreenState extends State<ARCameraScreen>
             width: 50,
             height: 50,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
+              color: Colors.white.withValues(alpha: 0.2),
               shape: BoxShape.circle,
             ),
             child: Icon(Icons.flip_camera_ios, color: Colors.white, size: 24),
@@ -423,13 +429,13 @@ class _ARCameraScreenState extends State<ARCameraScreen>
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.black.withValues(alpha: 0.3),
                   blurRadius: 10,
                   offset: Offset(0, 4),
                 ),
               ],
             ),
-            child: Icon(Icons.camera_alt, color: Color(0xFF9D7FE8), size: 32),
+            child: Icon(Icons.camera_alt, color: ThemeService.primaryColor, size: 32),
           ),
         ),
 
@@ -442,7 +448,7 @@ class _ARCameraScreenState extends State<ARCameraScreen>
             width: 50,
             height: 50,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
+              color: Colors.white.withValues(alpha: 0.2),
               shape: BoxShape.circle,
             ),
             child: Icon(Icons.photo_library, color: Colors.white, size: 24),
@@ -481,6 +487,7 @@ class _ARCameraScreenState extends State<ARCameraScreen>
         _startFaceDetection();
       }
     } catch (e) {
+      // Silently ignore - camera switch failure handled by keeping current camera
     }
   }
 }

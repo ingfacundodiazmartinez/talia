@@ -12,6 +12,7 @@ import 'profile/child_profile_screen.dart';
 import '../chat_detail_screen.dart';
 import '../trivia/trivia_results_screen.dart';
 import '../contact_profile_screen.dart';
+import '../../services/bottom_nav_visibility.dart';
 
 /// Observer para detectar cambios en la navegación anidada
 class _NavigatorObserver extends NavigatorObserver {
@@ -52,6 +53,11 @@ class _NavigatorObserver extends NavigatorObserver {
 /// - Mostrar BottomNavigationBar
 class ChildMainShell extends StatefulWidget {
   const ChildMainShell({super.key});
+
+  /// GlobalKey para preservar estado cuando el tema cambia
+  // ignore: library_private_types_in_public_api
+  static final GlobalKey<_ChildMainShellState> shellKey =
+      GlobalKey<_ChildMainShellState>(debugLabel: 'ChildMainShell');
 
   @override
   State<ChildMainShell> createState() => _ChildMainShellState();
@@ -339,7 +345,7 @@ class _ChildMainShellState extends State<ChildMainShell> {
 
     return PopScope(
       canPop: false,
-      onPopInvoked: (bool didPop) async {
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
         if (didPop) return;
 
         // Si hay navegación anidada, hacer pop en el navegador del tab actual
@@ -393,8 +399,15 @@ class _ChildMainShellState extends State<ChildMainShell> {
           ),
         ],
       ),
-      // Ocultar bottom nav bar cuando hay rutas anidadas (ej: chat abierto)
-      bottomNavigationBar: _hasNestedRoute ? null : _buildBottomNavigationBar(colorScheme, showLabels),
+      // Bottom nav siempre visible salvo cuando hay una pantalla full-screen
+      // registrada (chat detail, llamadas, story viewer, AR camera, media viewer).
+      bottomNavigationBar: ValueListenableBuilder<int>(
+        valueListenable: BottomNavVisibility.instance.fullScreenCount,
+        builder: (context, fullScreenCount, _) {
+          if (fullScreenCount > 0) return const SizedBox.shrink();
+          return _buildBottomNavigationBar(colorScheme, showLabels);
+        },
+      ),
       ),
     );
   }

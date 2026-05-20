@@ -12,18 +12,18 @@ class UsageLimitsService {
   // ===== LÍMITES DE FACE-SWAP POR TIER =====
   // Free: límite DIARIO (10/día)
   // Premium/Premium+: límite MENSUAL (50/mes y 100/mes)
-  static const int FACE_SWAP_DAILY_LIMIT_FREE = 10;
-  static const int FACE_SWAP_MONTHLY_LIMIT_PREMIUM = 50;
-  static const int FACE_SWAP_MONTHLY_LIMIT_PREMIUM_PLUS = 100;
+  static const int faceSwapDailyLimitFree = 10;
+  static const int faceSwapMonthlyLimitPremium = 50;
+  static const int faceSwapMonthlyLimitPremiumPlus = 100;
 
   // ===== LÍMITES MENSUALES DE REPORTES POR TIER =====
-  static const int REPORTS_MONTHLY_LIMIT_FREE = 0; // Con ads
-  static const int REPORTS_MONTHLY_LIMIT_PREMIUM = 30;
-  static const int REPORTS_MONTHLY_LIMIT_PREMIUM_PLUS = 100;
+  static const int reportsMonthlyLimitFree = 0; // Con ads
+  static const int reportsMonthlyLimitPremium = 30;
+  static const int reportsMonthlyLimitPremiumPlus = 100;
 
   // Legacy - mantener para compatibilidad
-  static const int CHARACTER_TRANSFORM_MONTHLY_LIMIT = -1; // -1 = ilimitado
-  static const int FACE_SWAP_MONTHLY_LIMIT = -1; // Legacy, usar límites diarios
+  static const int characterTransformMonthlyLimit = -1; // -1 = ilimitado
+  static const int faceSwapMonthlyLimit = -1; // Legacy, usar límites diarios
 
   // Cache para la configuración de features
   static bool? _faceSwapEnabledCache;
@@ -106,7 +106,7 @@ class UsageLimitsService {
       if (!featureEnabled) return false;
 
       // Si el límite es -1, es ilimitado
-      if (CHARACTER_TRANSFORM_MONTHLY_LIMIT == -1) return true;
+      if (characterTransformMonthlyLimit == -1) return true;
 
       final user = _auth.currentUser;
       if (user == null) return false;
@@ -131,7 +131,7 @@ class UsageLimitsService {
       }
 
       // Verificar si no ha superado el límite
-      return count < CHARACTER_TRANSFORM_MONTHLY_LIMIT;
+      return count < characterTransformMonthlyLimit;
     } catch (e) {
       return false;
     }
@@ -141,7 +141,7 @@ class UsageLimitsService {
   Future<Map<String, dynamic>> getCharacterTransformUsage() async {
     try {
       // Si es ilimitado, retornar valores especiales
-      if (CHARACTER_TRANSFORM_MONTHLY_LIMIT == -1) {
+      if (characterTransformMonthlyLimit == -1) {
         return {
           'count': 0,
           'limit': -1, // -1 = ilimitado
@@ -154,8 +154,8 @@ class UsageLimitsService {
       if (user == null) {
         return {
           'count': 0,
-          'limit': CHARACTER_TRANSFORM_MONTHLY_LIMIT,
-          'remaining': CHARACTER_TRANSFORM_MONTHLY_LIMIT,
+          'limit': characterTransformMonthlyLimit,
+          'remaining': characterTransformMonthlyLimit,
           'unlimited': false,
         };
       }
@@ -169,8 +169,8 @@ class UsageLimitsService {
       if (!doc.exists) {
         return {
           'count': 0,
-          'limit': CHARACTER_TRANSFORM_MONTHLY_LIMIT,
-          'remaining': CHARACTER_TRANSFORM_MONTHLY_LIMIT,
+          'limit': characterTransformMonthlyLimit,
+          'remaining': characterTransformMonthlyLimit,
           'unlimited': false,
         };
       }
@@ -183,23 +183,23 @@ class UsageLimitsService {
       if (month != currentMonth) {
         return {
           'count': 0,
-          'limit': CHARACTER_TRANSFORM_MONTHLY_LIMIT,
-          'remaining': CHARACTER_TRANSFORM_MONTHLY_LIMIT,
+          'limit': characterTransformMonthlyLimit,
+          'remaining': characterTransformMonthlyLimit,
           'unlimited': false,
         };
       }
 
       return {
         'count': count,
-        'limit': CHARACTER_TRANSFORM_MONTHLY_LIMIT,
-        'remaining': CHARACTER_TRANSFORM_MONTHLY_LIMIT - count,
+        'limit': characterTransformMonthlyLimit,
+        'remaining': characterTransformMonthlyLimit - count,
         'unlimited': false,
       };
     } catch (e) {
       return {
         'count': 0,
-        'limit': CHARACTER_TRANSFORM_MONTHLY_LIMIT,
-        'remaining': CHARACTER_TRANSFORM_MONTHLY_LIMIT,
+        'limit': characterTransformMonthlyLimit,
+        'remaining': characterTransformMonthlyLimit,
         'unlimited': false,
       };
     }
@@ -243,6 +243,7 @@ class UsageLimitsService {
       }
 
     } catch (e) {
+      // Silently ignore - usage tracking is non-critical
     }
   }
 
@@ -260,7 +261,7 @@ class UsageLimitsService {
       if (!featureEnabled) return false;
 
       // Si el límite es -1, es ilimitado
-      if (FACE_SWAP_MONTHLY_LIMIT == -1) return true;
+      if (faceSwapMonthlyLimit == -1) return true;
 
       final user = _auth.currentUser;
       if (user == null) return false;
@@ -285,7 +286,7 @@ class UsageLimitsService {
       }
 
       // Verificar si no ha superado el límite
-      return count < FACE_SWAP_MONTHLY_LIMIT;
+      return count < faceSwapMonthlyLimit;
     } catch (e) {
       return false;
     }
@@ -295,7 +296,7 @@ class UsageLimitsService {
   Future<Map<String, dynamic>> getFaceSwapUsage() async {
     try {
       // Si es ilimitado, retornar valores especiales
-      if (FACE_SWAP_MONTHLY_LIMIT == -1) {
+      if (faceSwapMonthlyLimit == -1) {
         return {
           'count': 0,
           'limit': -1, // -1 = ilimitado
@@ -308,8 +309,8 @@ class UsageLimitsService {
       if (user == null) {
         return {
           'count': 0,
-          'limit': FACE_SWAP_MONTHLY_LIMIT,
-          'remaining': FACE_SWAP_MONTHLY_LIMIT,
+          'limit': faceSwapMonthlyLimit,
+          'remaining': faceSwapMonthlyLimit,
           'unlimited': false,
         };
       }
@@ -323,8 +324,8 @@ class UsageLimitsService {
       if (!doc.exists) {
         return {
           'count': 0,
-          'limit': FACE_SWAP_MONTHLY_LIMIT,
-          'remaining': FACE_SWAP_MONTHLY_LIMIT,
+          'limit': faceSwapMonthlyLimit,
+          'remaining': faceSwapMonthlyLimit,
           'unlimited': false,
         };
       }
@@ -337,23 +338,23 @@ class UsageLimitsService {
       if (month != currentMonth) {
         return {
           'count': 0,
-          'limit': FACE_SWAP_MONTHLY_LIMIT,
-          'remaining': FACE_SWAP_MONTHLY_LIMIT,
+          'limit': faceSwapMonthlyLimit,
+          'remaining': faceSwapMonthlyLimit,
           'unlimited': false,
         };
       }
 
       return {
         'count': count,
-        'limit': FACE_SWAP_MONTHLY_LIMIT,
-        'remaining': FACE_SWAP_MONTHLY_LIMIT - count,
+        'limit': faceSwapMonthlyLimit,
+        'remaining': faceSwapMonthlyLimit - count,
         'unlimited': false,
       };
     } catch (e) {
       return {
         'count': 0,
-        'limit': FACE_SWAP_MONTHLY_LIMIT,
-        'remaining': FACE_SWAP_MONTHLY_LIMIT,
+        'limit': faceSwapMonthlyLimit,
+        'remaining': faceSwapMonthlyLimit,
         'unlimited': false,
       };
     }
@@ -397,6 +398,7 @@ class UsageLimitsService {
       }
 
     } catch (e) {
+      // Silently ignore - usage tracking is non-critical
     }
   }
 
@@ -414,11 +416,11 @@ class UsageLimitsService {
   int getFaceSwapLimit(SubscriptionTier tier) {
     switch (tier) {
       case SubscriptionTier.free:
-        return FACE_SWAP_DAILY_LIMIT_FREE; // 10/día
+        return faceSwapDailyLimitFree; // 10/día
       case SubscriptionTier.premium:
-        return FACE_SWAP_MONTHLY_LIMIT_PREMIUM; // 50/mes
+        return faceSwapMonthlyLimitPremium; // 50/mes
       case SubscriptionTier.premiumPlus:
-        return FACE_SWAP_MONTHLY_LIMIT_PREMIUM_PLUS; // 100/mes
+        return faceSwapMonthlyLimitPremiumPlus; // 100/mes
     }
   }
 
@@ -431,11 +433,11 @@ class UsageLimitsService {
   int getReportsMonthlyLimit(SubscriptionTier tier) {
     switch (tier) {
       case SubscriptionTier.free:
-        return REPORTS_MONTHLY_LIMIT_FREE;
+        return reportsMonthlyLimitFree;
       case SubscriptionTier.premium:
-        return REPORTS_MONTHLY_LIMIT_PREMIUM;
+        return reportsMonthlyLimitPremium;
       case SubscriptionTier.premiumPlus:
-        return REPORTS_MONTHLY_LIMIT_PREMIUM_PLUS;
+        return reportsMonthlyLimitPremiumPlus;
     }
   }
 
@@ -519,8 +521,8 @@ class UsageLimitsService {
       if (user == null) {
         return {
           'count': 0,
-          'limit': FACE_SWAP_DAILY_LIMIT_FREE,
-          'remaining': FACE_SWAP_DAILY_LIMIT_FREE,
+          'limit': faceSwapDailyLimitFree,
+          'remaining': faceSwapDailyLimitFree,
           'tier': 'free',
           'isDaily': true,
           'periodLabel': 'hoy',
@@ -580,8 +582,8 @@ class UsageLimitsService {
     } catch (e) {
       return {
         'count': 0,
-        'limit': FACE_SWAP_DAILY_LIMIT_FREE,
-        'remaining': FACE_SWAP_DAILY_LIMIT_FREE,
+        'limit': faceSwapDailyLimitFree,
+        'remaining': faceSwapDailyLimitFree,
         'tier': 'free',
         'isDaily': true,
         'periodLabel': 'hoy',
@@ -731,8 +733,8 @@ class UsageLimitsService {
       if (user == null) {
         return {
           'count': 0,
-          'limit': REPORTS_MONTHLY_LIMIT_FREE,
-          'remaining': REPORTS_MONTHLY_LIMIT_FREE,
+          'limit': reportsMonthlyLimitFree,
+          'remaining': reportsMonthlyLimitFree,
           'tier': 'free',
           'showAds': true,
         };
@@ -780,8 +782,8 @@ class UsageLimitsService {
     } catch (e) {
       return {
         'count': 0,
-        'limit': REPORTS_MONTHLY_LIMIT_FREE,
-        'remaining': REPORTS_MONTHLY_LIMIT_FREE,
+        'limit': reportsMonthlyLimitFree,
+        'remaining': reportsMonthlyLimitFree,
         'tier': 'free',
         'showAds': true,
       };

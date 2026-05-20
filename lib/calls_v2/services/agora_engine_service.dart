@@ -1,7 +1,7 @@
-/// Agora RTC Engine Service
-///
-/// This service manages the Agora RTC Engine singleton and provides
-/// methods for joining/leaving channels and controlling media streams.
+// Agora RTC Engine Service
+//
+// This service manages the Agora RTC Engine singleton and provides
+// methods for joining/leaving channels and controlling media streams.
 
 import 'dart:async';
 import 'dart:io';
@@ -21,7 +21,6 @@ class AgoraEngineService {
   bool _isInitialized = false;
   bool _isInChannel = false;
   String? _currentChannel;
-  int? _currentUid;
 
   // Media state
   bool _isAudioEnabled = true;
@@ -177,7 +176,6 @@ class AgoraEngineService {
 
       _isInChannel = true;
       _currentChannel = channelName;
-      _currentUid = uid;
       _isVideoEnabled = isVideo;
 
       // ✅ Iniciar watchdog para detectar llamadas huérfanas
@@ -216,7 +214,6 @@ class AgoraEngineService {
 
       _isInChannel = false;
       _currentChannel = null;
-      _currentUid = null;
 
       ReleaseLogger.log('AgoraEngineService: Left channel successfully');
       return ServiceResponse.success(null);
@@ -414,7 +411,6 @@ class AgoraEngineService {
       // Resetear estado local
       _isInChannel = false;
       _currentChannel = null;
-      _currentUid = null;
       _isAudioEnabled = true;
       _isVideoEnabled = true;
 

@@ -18,8 +18,7 @@
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		61EA74FBB7DCD5B50ACDC519 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 82F14609FB722AB14AD38923 /* Pods_Runner.framework */; };
-		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; platformFilter = ios; settings = {COMPILER_FLAGS = deepar; }; };
-		7485AF001ED2DC5600515810 /* ArFiltersPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7485AF011ED2DC5600515810 /* ArFiltersPlugin.swift */; };
+		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; platformFilter = ios; };
 		7CF0797FC5C8B20378C77D08 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 74BA43E1A6546579B9324102 /* Pods_RunnerTests.framework */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
@@ -27,27 +26,7 @@
 		B8FF55965FBDB001E786162A /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 9CE1F99E8F5FEDCCE345689F /* GoogleService-Info.plist */; };
 		ZUMMSOUND001CD7B5D8C3A502 /* zumm.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = ZUMMSOUND002CE8F7C9D4B601 /* zumm.mp3 */; };
 		ZUMMSOUNDCAF01CD7B5D8C3A5 /* zumm.caf in Resources */ = {isa = PBXBuildFile; fileRef = ZUMMSOUNDCAF02CE8F7C9D4B6 /* zumm.caf */; };
-		BASEBEAUTY001CD7B5D8C3A502 /* baseBeauty.deepar in Resources */ = {isa = PBXBuildFile; fileRef = BASEBEAUTY002CE8F7C9D4B601 /* baseBeauty.deepar */; };
-		BURNINGEFFECT001CD7B5D8C3A502 /* burning_effect.deepar in Resources */ = {isa = PBXBuildFile; fileRef = BURNINGEFFECT002CE8F7C9D4B601 /* burning_effect.deepar */; };
 		D43AAD1C23C0304BBB58B7C3 /* Pods_TaliaShareExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D861DB4AA869DE0DE6A8D7A9 /* Pods_TaliaShareExtension.framework */; };
-		EIGHTBITHEARTS001CD7B5D8C3A502 /* 8bitHearts.deepar in Resources */ = {isa = PBXBuildFile; fileRef = EIGHTBITHEARTS002CE8F7C9D4B601 /* 8bitHearts.deepar */; };
-		ELEPHANTTRUNK001CD7B5D8C3A502 /* Elephant_Trunk.deepar in Resources */ = {isa = PBXBuildFile; fileRef = ELEPHANTTRUNK002CE8F7C9D4B601 /* Elephant_Trunk.deepar */; };
-		EMOTIONMETER001CD7B5D8C3A502 /* Emotion_Meter.deepar in Resources */ = {isa = PBXBuildFile; fileRef = EMOTIONMETER002CE8F7C9D4B601 /* Emotion_Meter.deepar */; };
-		EMOTIONSEXAGGERATOR001CD7B5D8C3A502 /* Emotions_Exaggerator.deepar in Resources */ = {isa = PBXBuildFile; fileRef = EMOTIONSEXAGGERATOR002CE8F7C9D4B601 /* Emotions_Exaggerator.deepar */; };
-		FIREEFFECT001CD7B5D8C3A502 /* Fire_Effect.deepar in Resources */ = {isa = PBXBuildFile; fileRef = FIREEFFECT002CE8F7C9D4B601 /* Fire_Effect.deepar */; };
-		FLOWERFACE001CD7B5D8C3A502 /* flower_face.deepar in Resources */ = {isa = PBXBuildFile; fileRef = FLOWERFACE002CE8F7C9D4B601 /* flower_face.deepar */; };
-		GALAXYBACKGROUND001CD7B5D8C3A502 /* galaxy_background.deepar in Resources */ = {isa = PBXBuildFile; fileRef = GALAXYBACKGROUND002CE8F7C9D4B601 /* galaxy_background.deepar */; };
-		HOPE001CD7B5D8C3A502 /* Hope.deepar in Resources */ = {isa = PBXBuildFile; fileRef = HOPE002CE8F7C9D4B601 /* Hope.deepar */; };
-		HUMANOID001CD7B5D8C3A502 /* Humanoid.deepar in Resources */ = {isa = PBXBuildFile; fileRef = HUMANOID002CE8F7C9D4B601 /* Humanoid.deepar */; };
-		MAKEUPLOOK001CD7B5D8C3A502 /* MakeupLook.deepar in Resources */ = {isa = PBXBuildFile; fileRef = MAKEUPLOOK002CE8F7C9D4B601 /* MakeupLook.deepar */; };
-		NEONDEVILHORNS001CD7B5D8C3A502 /* Neon_Devil_Horns.deepar in Resources */ = {isa = PBXBuildFile; fileRef = NEONDEVILHORNS002CE8F7C9D4B601 /* Neon_Devil_Horns.deepar */; };
-		PINGPONG001CD7B5D8C3A502 /* Ping_Pong.deepar in Resources */ = {isa = PBXBuildFile; fileRef = PINGPONG002CE8F7C9D4B601 /* Ping_Pong.deepar */; };
-		SNAIL001CD7B5D8C3A502 /* Snail.deepar in Resources */ = {isa = PBXBuildFile; fileRef = SNAIL002CE8F7C9D4B601 /* Snail.deepar */; };
-		SPLITVIEWLOOK001CD7B5D8C3A502 /* Split_View_Look.deepar in Resources */ = {isa = PBXBuildFile; fileRef = SPLITVIEWLOOK002CE8F7C9D4B601 /* Split_View_Look.deepar */; };
-		STALLONE001CD7B5D8C3A502 /* Stallone.deepar in Resources */ = {isa = PBXBuildFile; fileRef = STALLONE002CE8F7C9D4B601 /* Stallone.deepar */; };
-		VENDETTA001CD7B5D8C3A502 /* Vendetta.deepar in Resources */ = {isa = PBXBuildFile; fileRef = VENDETTA002CE8F7C9D4B601 /* Vendetta.deepar */; };
-		VENDETTAMASK001CD7B5D8C3A502 /* Vendetta_Mask.deepar in Resources */ = {isa = PBXBuildFile; fileRef = VENDETTAMASK002CE8F7C9D4B601 /* Vendetta_Mask.deepar */; };
-		VIKINGHELMET001CD7B5D8C3A502 /* viking_helmet.deepar in Resources */ = {isa = PBXBuildFile; fileRef = VIKINGHELMET002CE8F7C9D4B601 /* viking_helmet.deepar */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -122,7 +101,6 @@
 		73C868E042CC9A7820FD0BA4 /* Pods-TaliaShareExtension.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TaliaShareExtension.release.xcconfig"; path = "Target Support Files/Pods-TaliaShareExtension/Pods-TaliaShareExtension.release.xcconfig"; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		7485AF011ED2DC5600515810 /* ArFiltersPlugin.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ArFiltersPlugin.swift; sourceTree = "<group>"; };
 		74BA43E1A6546579B9324102 /* Pods_RunnerTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RunnerTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		82F14609FB722AB14AD38923 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -139,28 +117,8 @@
 		9ECB2106292399F67B04C0CD /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
 		A33D4EA27A1771CD843B6C1F /* Pods-RunnerTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.debug.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.debug.xcconfig"; sourceTree = "<group>"; };
 		A73B00BDBCA576C5F5247C36 /* Pods_NotificationServiceExtension.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_NotificationServiceExtension.framework; sourceTree = BUILT_PRODUCTS_DIR; };
-		BASEBEAUTY002CE8F7C9D4B601 /* baseBeauty.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = baseBeauty.deepar; sourceTree = "<group>"; };
-		BURNINGEFFECT002CE8F7C9D4B601 /* burning_effect.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = burning_effect.deepar; sourceTree = "<group>"; };
 		CEB24ADB57066FD9F64A0273 /* Pods-NotificationServiceExtension.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-NotificationServiceExtension.profile.xcconfig"; path = "Target Support Files/Pods-NotificationServiceExtension/Pods-NotificationServiceExtension.profile.xcconfig"; sourceTree = "<group>"; };
 		D861DB4AA869DE0DE6A8D7A9 /* Pods_TaliaShareExtension.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TaliaShareExtension.framework; sourceTree = BUILT_PRODUCTS_DIR; };
-		EIGHTBITHEARTS002CE8F7C9D4B601 /* 8bitHearts.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = 8bitHearts.deepar; sourceTree = "<group>"; };
-		ELEPHANTTRUNK002CE8F7C9D4B601 /* Elephant_Trunk.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Elephant_Trunk.deepar; sourceTree = "<group>"; };
-		EMOTIONMETER002CE8F7C9D4B601 /* Emotion_Meter.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Emotion_Meter.deepar; sourceTree = "<group>"; };
-		EMOTIONSEXAGGERATOR002CE8F7C9D4B601 /* Emotions_Exaggerator.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Emotions_Exaggerator.deepar; sourceTree = "<group>"; };
-		FIREEFFECT002CE8F7C9D4B601 /* Fire_Effect.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Fire_Effect.deepar; sourceTree = "<group>"; };
-		FLOWERFACE002CE8F7C9D4B601 /* flower_face.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = flower_face.deepar; sourceTree = "<group>"; };
-		GALAXYBACKGROUND002CE8F7C9D4B601 /* galaxy_background.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = galaxy_background.deepar; sourceTree = "<group>"; };
-		HOPE002CE8F7C9D4B601 /* Hope.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Hope.deepar; sourceTree = "<group>"; };
-		HUMANOID002CE8F7C9D4B601 /* Humanoid.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Humanoid.deepar; sourceTree = "<group>"; };
-		MAKEUPLOOK002CE8F7C9D4B601 /* MakeupLook.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = MakeupLook.deepar; sourceTree = "<group>"; };
-		NEONDEVILHORNS002CE8F7C9D4B601 /* Neon_Devil_Horns.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Neon_Devil_Horns.deepar; sourceTree = "<group>"; };
-		PINGPONG002CE8F7C9D4B601 /* Ping_Pong.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Ping_Pong.deepar; sourceTree = "<group>"; };
-		SNAIL002CE8F7C9D4B601 /* Snail.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Snail.deepar; sourceTree = "<group>"; };
-		SPLITVIEWLOOK002CE8F7C9D4B601 /* Split_View_Look.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Split_View_Look.deepar; sourceTree = "<group>"; };
-		STALLONE002CE8F7C9D4B601 /* Stallone.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Stallone.deepar; sourceTree = "<group>"; };
-		VENDETTA002CE8F7C9D4B601 /* Vendetta.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Vendetta.deepar; sourceTree = "<group>"; };
-		VENDETTAMASK002CE8F7C9D4B601 /* Vendetta_Mask.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = Vendetta_Mask.deepar; sourceTree = "<group>"; };
-		VIKINGHELMET002CE8F7C9D4B601 /* viking_helmet.deepar */ = {isa = PBXFileReference; lastKnownFileType = file; path = viking_helmet.deepar; sourceTree = "<group>"; };
 		ZUMMSOUND002CE8F7C9D4B601 /* zumm.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = zumm.mp3; sourceTree = "<group>"; };
 		ZUMMSOUNDCAF02CE8F7C9D4B6 /* zumm.caf */ = {isa = PBXFileReference; lastKnownFileType = file; path = zumm.caf; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -304,28 +262,7 @@
 				1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */,
 				1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */,
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
-				7485AF011ED2DC5600515810 /* ArFiltersPlugin.swift */,
-				VENDETTA002CE8F7C9D4B601 /* Vendetta.deepar */,
-				BASEBEAUTY002CE8F7C9D4B601 /* baseBeauty.deepar */,
-				EIGHTBITHEARTS002CE8F7C9D4B601 /* 8bitHearts.deepar */,
 				0C1A66B82ED526B3006DE364 /* TaliaPhotoCache.swift */,
-				ELEPHANTTRUNK002CE8F7C9D4B601 /* Elephant_Trunk.deepar */,
-				EMOTIONMETER002CE8F7C9D4B601 /* Emotion_Meter.deepar */,
-				EMOTIONSEXAGGERATOR002CE8F7C9D4B601 /* Emotions_Exaggerator.deepar */,
-				FIREEFFECT002CE8F7C9D4B601 /* Fire_Effect.deepar */,
-				HOPE002CE8F7C9D4B601 /* Hope.deepar */,
-				HUMANOID002CE8F7C9D4B601 /* Humanoid.deepar */,
-				MAKEUPLOOK002CE8F7C9D4B601 /* MakeupLook.deepar */,
-				NEONDEVILHORNS002CE8F7C9D4B601 /* Neon_Devil_Horns.deepar */,
-				PINGPONG002CE8F7C9D4B601 /* Ping_Pong.deepar */,
-				SNAIL002CE8F7C9D4B601 /* Snail.deepar */,
-				SPLITVIEWLOOK002CE8F7C9D4B601 /* Split_View_Look.deepar */,
-				STALLONE002CE8F7C9D4B601 /* Stallone.deepar */,
-				VENDETTAMASK002CE8F7C9D4B601 /* Vendetta_Mask.deepar */,
-				BURNINGEFFECT002CE8F7C9D4B601 /* burning_effect.deepar */,
-				FLOWERFACE002CE8F7C9D4B601 /* flower_face.deepar */,
-				GALAXYBACKGROUND002CE8F7C9D4B601 /* galaxy_background.deepar */,
-				VIKINGHELMET002CE8F7C9D4B601 /* viking_helmet.deepar */,
 				ZUMMSOUND002CE8F7C9D4B601 /* zumm.mp3 */,
 				ZUMMSOUNDCAF02CE8F7C9D4B6 /* zumm.caf */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
@@ -520,26 +457,6 @@
 				97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */,
 				97C146FC1CF9000F007C117D /* Main.storyboard in Resources */,
 				B8FF55965FBDB001E786162A /* GoogleService-Info.plist in Resources */,
-				VENDETTA001CD7B5D8C3A502 /* Vendetta.deepar in Resources */,
-				BASEBEAUTY001CD7B5D8C3A502 /* baseBeauty.deepar in Resources */,
-				EIGHTBITHEARTS001CD7B5D8C3A502 /* 8bitHearts.deepar in Resources */,
-				ELEPHANTTRUNK001CD7B5D8C3A502 /* Elephant_Trunk.deepar in Resources */,
-				EMOTIONMETER001CD7B5D8C3A502 /* Emotion_Meter.deepar in Resources */,
-				EMOTIONSEXAGGERATOR001CD7B5D8C3A502 /* Emotions_Exaggerator.deepar in Resources */,
-				FIREEFFECT001CD7B5D8C3A502 /* Fire_Effect.deepar in Resources */,
-				HOPE001CD7B5D8C3A502 /* Hope.deepar in Resources */,
-				HUMANOID001CD7B5D8C3A502 /* Humanoid.deepar in Resources */,
-				MAKEUPLOOK001CD7B5D8C3A502 /* MakeupLook.deepar in Resources */,
-				NEONDEVILHORNS001CD7B5D8C3A502 /* Neon_Devil_Horns.deepar in Resources */,
-				PINGPONG001CD7B5D8C3A502 /* Ping_Pong.deepar in Resources */,
-				SNAIL001CD7B5D8C3A502 /* Snail.deepar in Resources */,
-				SPLITVIEWLOOK001CD7B5D8C3A502 /* Split_View_Look.deepar in Resources */,
-				STALLONE001CD7B5D8C3A502 /* Stallone.deepar in Resources */,
-				VENDETTAMASK001CD7B5D8C3A502 /* Vendetta_Mask.deepar in Resources */,
-				BURNINGEFFECT001CD7B5D8C3A502 /* burning_effect.deepar in Resources */,
-				FLOWERFACE001CD7B5D8C3A502 /* flower_face.deepar in Resources */,
-				GALAXYBACKGROUND001CD7B5D8C3A502 /* galaxy_background.deepar in Resources */,
-				VIKINGHELMET001CD7B5D8C3A502 /* viking_helmet.deepar in Resources */,
 				ZUMMSOUND001CD7B5D8C3A502 /* zumm.mp3 in Resources */,
 				ZUMMSOUNDCAF01CD7B5D8C3A5 /* zumm.caf in Resources */,
 			);
@@ -754,7 +671,6 @@
 			files = (
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				0C1A66B92ED526B3006DE364 /* TaliaPhotoCache.swift in Sources */,
-				7485AF001ED2DC5600515810 /* ArFiltersPlugin.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1104,7 +1020,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 15.5;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
-				SUPPORTED_PLATFORMS = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
 			};
@@ -1294,7 +1210,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 15.5;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
-				SUPPORTED_PLATFORMS = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				TARGETED_DEVICE_FAMILY = "1,2";

@@ -1,5 +1,5 @@
-/// Create Call Service - Single responsibility: Create a new call in Firestore
-/// Atomic service that ONLY creates call documents
+// Create Call Service - Single responsibility: Create a new call in Firestore
+// Atomic service that ONLY creates call documents
 
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/group_member.dart';
 import '../repositories/chat_repository.dart';
@@ -21,7 +20,6 @@ class ChatApprovalWorkflowService {
   final ChatNotificationService _notificationService;
   final GroupManagementService _groupService;
   final ChatCacheManager _cacheManager;
-  final FirebaseAuth _auth;
 
   // Timeouts para aprobaciones
   static const Duration _defaultApprovalTimeout = Duration(hours: 24);
@@ -42,12 +40,10 @@ class ChatApprovalWorkflowService {
     required ChatNotificationService notificationService,
     required GroupManagementService groupService,
     required ChatCacheManager cacheManager,
-    FirebaseAuth? auth,
   }) : _chatRepository = chatRepository,
        _notificationService = notificationService,
        _groupService = groupService,
-       _cacheManager = cacheManager,
-       _auth = auth ?? FirebaseAuth.instance;
+       _cacheManager = cacheManager;
 
   // ═══════════════════════════════════════════════════════════════
   // MAIN WORKFLOW ENTRY POINTS

@@ -2,14 +2,6 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        // DeepAR SDK repository
-        maven {
-            url = uri("https://sdk.developer.deepar.ai/maven-android-repository/releases/")
-            content {
-                // Solo buscar el grupo de DeepAR en este repositorio
-                includeGroup("ai.deepar.ar")
-            }
-        }
     }
 }
 

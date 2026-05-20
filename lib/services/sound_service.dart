@@ -24,6 +24,7 @@ class SoundService {
       await _player.setVolume(0.3); // Volumen sutil
       _initialized = true;
     } catch (e) {
+      // Silently ignore - sound initialization is optional
     }
   }
 
@@ -55,6 +56,7 @@ class SoundService {
       );
 
     } catch (e) {
+      // Silently ignore - sound playback failure is non-critical
     }
   }
 

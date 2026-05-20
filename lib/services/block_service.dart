@@ -155,6 +155,8 @@ class BlockService {
 
   /// Stream unificado para verificar si un chat está bloqueado
   /// Verifica el campo isBlocked del documento chats/{chatId}
+  /// IMPORTANTE: retorna true para AMBOS participantes si el chat está bloqueado.
+  /// Para distinguir quién bloqueó usar [iBlockedStream] o [isBlockedByStream].
   Stream<bool> isBlockedStream(String contactId) {
     final user = _auth.currentUser;
     if (user == null) return Stream.value(false);
@@ -169,6 +171,57 @@ class BlockService {
           if (!snapshot.exists) return false;
           return snapshot.data()?['isBlocked'] == true;
         });
+  }
+
+  /// Stream que retorna true SOLO si el usuario actual fue quien bloqueó al contacto.
+  /// Esto es lo que se debe usar para UI de "bloqueo" (mostrar barra, desactivar envío,
+  /// mostrar opción 'Desbloquear'). El bloqueado NUNCA debe enterarse de que fue bloqueado.
+  Stream<bool> iBlockedStream(String contactId) {
+    final user = _auth.currentUser;
+    if (user == null) return Stream.value(false);
+
+    final chatId = _getChatId(user.uid, contactId);
+
+    return _firestore
+        .collection('chats')
+        .doc(chatId)
+        .snapshots()
+        .map((snapshot) {
+          if (!snapshot.exists) return false;
+          final data = snapshot.data();
+          return data?['isBlocked'] == true && data?['blockedBy'] == user.uid;
+        });
+  }
+
+  /// Indica si el usuario actual debe ocultar la foto de [contactId].
+  ///
+  /// Esto sucede cuando el contacto bloqueó al usuario actual: por privacidad
+  /// del bloqueador, el bloqueado deja de ver su foto. Pero el bloqueado no debe
+  /// saber el motivo, así que UI debe mostrar el avatar por defecto sin texto
+  /// explicativo.
+  Stream<bool> shouldHidePhotoOfStream(String contactId) {
+    return isBlockedByStream(contactId);
+  }
+
+  /// Versión Future de [shouldHidePhotoOfStream]
+  Future<bool> shouldHidePhotoOf(String contactId) {
+    return isBlockedBy(contactId);
+  }
+
+  /// Versión Future de [iBlockedStream]
+  Future<bool> iBlocked(String contactId) async {
+    final user = _auth.currentUser;
+    if (user == null) return false;
+
+    try {
+      final chatId = _getChatId(user.uid, contactId);
+      final chatDoc = await _firestore.collection('chats').doc(chatId).get();
+      if (!chatDoc.exists) return false;
+      final data = chatDoc.data();
+      return data?['isBlocked'] == true && data?['blockedBy'] == user.uid;
+    } catch (e) {
+      return false;
+    }
   }
 
   // Verificar si el usuario actual fue bloqueado por otro usuario

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'utils/release_logger.dart';
 
 class ParentApprovalRequestsScreen extends StatefulWidget {
   const ParentApprovalRequestsScreen({super.key});
@@ -40,7 +41,7 @@ class _ParentApprovalRequestsScreenState
           _firestore.collection('parent_approval_requests').doc(requestId);
 
       if (approved) {
-        print('✅ Aprobando solicitud de vinculación...');
+        ReleaseLogger.log('✅ Aprobando solicitud de vinculación...');
 
         // 🔒 SEGURIDAD: Usar Cloud Function para crear vínculo validado
         try {
@@ -55,20 +56,22 @@ class _ParentApprovalRequestsScreenState
             throw Exception(result.data['message'] ?? 'Error creating parent-child link');
           }
 
-          print('✅ Vínculo aprobado y creado: ${result.data['linkId']}');
+          ReleaseLogger.log('✅ Vínculo aprobado y creado: ${result.data['linkId']}');
         } catch (e) {
-          print('❌ Error al crear vínculo aprobado: $e');
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('❌ Error al aprobar vinculación: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          ReleaseLogger.log('❌ Error al crear vínculo aprobado: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('❌ Error al aprobar vinculación: $e'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
           return;
         }
 
         // Verificar contactos existentes del niño
-        print('🔄 Verificando contactos existentes del niño...');
+        ReleaseLogger.log('🔄 Verificando contactos existentes del niño...');
         final existingContacts = await _firestore
             .collection('contacts')
             .where('users', arrayContains: childId)
@@ -92,7 +95,7 @@ class _ParentApprovalRequestsScreenState
               'contactCount': contactCount,
             },
           });
-          print('✅ Notificación enviada al nuevo padre sobre $contactCount contactos existentes');
+          ReleaseLogger.log('✅ Notificación enviada al nuevo padre sobre $contactCount contactos existentes');
         }
 
         // Actualizar usuario hijo para agregar el segundo padre
@@ -119,7 +122,7 @@ class _ParentApprovalRequestsScreenState
         });
 
       } else {
-        print('❌ Rechazando solicitud de vinculación...');
+        ReleaseLogger.log('❌ Rechazando solicitud de vinculación...');
 
         // Actualizar estado de la solicitud
         await requestDoc.update({
@@ -138,21 +141,25 @@ class _ParentApprovalRequestsScreenState
           'createdAt': FieldValue.serverTimestamp(),
         });
 
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('❌ Solicitud rechazada'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      ReleaseLogger.log('❌ Error procesando solicitud: $e');
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('❌ Solicitud rechazada'),
+            content: Text('Error: $e'),
             backgroundColor: Colors.red,
           ),
         );
       }
-    } catch (e) {
-      print('❌ Error procesando solicitud: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
     } finally {
       // Siempre limpiar el estado de carga
       if (mounted) {
@@ -194,7 +201,7 @@ class _ParentApprovalRequestsScreenState
           }
 
           if (snapshot.hasError) {
-            print('⚠️ Error leyendo solicitudes de aprobación: ${snapshot.error}');
+            ReleaseLogger.log('⚠️ Error leyendo solicitudes de aprobación: ${snapshot.error}');
             return Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -277,7 +284,7 @@ class _ParentApprovalRequestsScreenState
                           Container(
                             padding: EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: Colors.orange.withOpacity(0.1),
+                              color: Colors.orange.withValues(alpha: 0.1),
                               shape: BoxShape.circle,
                             ),
                             child: Icon(

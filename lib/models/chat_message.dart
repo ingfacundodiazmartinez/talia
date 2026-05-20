@@ -50,7 +50,6 @@ class ChatMessage {
 
   // Campos para audio
   final List<double>? waveformData;          // Datos de forma de onda para audio
-  final bool isAiGenerated;                  // Indica si el audio fue generado con IA (TTS)
   final String? transcription;               // Transcripción de audio (de moderación con Whisper)
 
   // Campos para mensajes reenviados
@@ -64,6 +63,15 @@ class ChatMessage {
 
   // ✅ Campo para eliminación
   final bool isDeletedForEveryone;           // Mensaje eliminado para todos
+
+  // ✅ Visibilidad por destinatario.
+  // Si es null, el mensaje es visible para todos los participantes (backwards compat
+  // con mensajes pre-migración).
+  // Si tiene valor, solo los UIDs listados pueden ver el mensaje. Casos típicos:
+  // - [senderId]: mensaje silenciado por bloqueo del destinatario, o pendiente de
+  //   moderación (la CF expande la lista al aprobar).
+  // - [senderId, receiverId]: mensaje normal, visible para ambos.
+  final List<String>? visibleTo;
 
   ChatMessage({
     required this.id,
@@ -90,7 +98,6 @@ class ChatMessage {
     this.moderationSeverity,
     this.originalText,
     this.waveformData,
-    this.isAiGenerated = false,
     this.transcription,
     this.isForwarded = false,
     this.originalSenderId,
@@ -98,6 +105,7 @@ class ChatMessage {
     this.originalContactName,
     this.localId, // ✅ Agregar localId
     this.isDeletedForEveryone = false, // ✅ Agregar isDeletedForEveryone
+    this.visibleTo,
   });
 
   /// Factory constructor desde Firestore DocumentSnapshot
@@ -155,8 +163,9 @@ class ChatMessage {
       timestamp: data['timestamp'] as Timestamp?,
       isRead: data['isRead'] ?? false,
       readBy: data['readBy'] != null ? List<String>.from(data['readBy']) : null, // ✅ Parsear readBy
-      replyTo: data['replyTo'] as Map<String, dynamic>?,
-      reactions: data['reactions'] as Map<String, dynamic>?,
+      // ✅ Defensive parsing: handle corrupted data where replyTo/reactions might be List instead of Map
+      replyTo: data['replyTo'] is Map ? data['replyTo'] as Map<String, dynamic>? : null,
+      reactions: data['reactions'] is Map ? data['reactions'] as Map<String, dynamic>? : null,
       type: data['type'],
       callType: data['callType'],
       callId: data['callId'],
@@ -169,7 +178,6 @@ class ChatMessage {
       waveformData: data['waveformData'] != null
           ? (data['waveformData'] as List).map((e) => (e as num).toDouble()).toList()
           : null,
-      isAiGenerated: data['isAiGenerated'] ?? false,
       transcription: data['transcription'] as String?,
       isForwarded: data['isForwarded'] ?? false,
       originalSenderId: data['originalSenderId'] as String?,
@@ -177,6 +185,9 @@ class ChatMessage {
       originalContactName: data['originalContactName'] as String?,
       localId: data['localId'] as String?, // ✅ Parse localId desde Firestore
       isDeletedForEveryone: data['isDeletedForEveryone'] ?? data['isDeleted'] ?? false, // ✅ Parse deletion flag
+      visibleTo: data['visibleTo'] != null
+          ? List<String>.from(data['visibleTo'] as List)
+          : null,
     );
   }
 
@@ -233,7 +244,6 @@ class ChatMessage {
       'senderId': senderId,
       'isRead': isRead,
       'isForwarded': isForwarded,
-      'isAiGenerated': isAiGenerated,
     };
 
     if (text != null) map['text'] = text;
@@ -260,6 +270,9 @@ class ChatMessage {
 
     // Transcripción de audio (de moderación con Whisper)
     if (transcription != null) map['transcription'] = transcription;
+
+    // ✅ Visibilidad por destinatario
+    if (visibleTo != null) map['visibleTo'] = visibleTo;
 
     return map;
   }
@@ -315,7 +328,7 @@ class ChatMessage {
     if (!hasReactions) return 0;
     return reactions!.values.fold<int>(
       0,
-      (sum, users) => sum + (users as List).length,
+      (total, users) => total + (users as List).length,
     );
   }
 
@@ -367,10 +380,10 @@ class ChatMessage {
     String? moderationSeverity,
     String? originalText,
     List<double>? waveformData,
-    bool? isAiGenerated,
     String? transcription,
     String? localId, // ✅ FIX: Agregar localId como parámetro
     bool? isDeletedForEveryone, // ✅ Agregar isDeletedForEveryone
+    List<String>? visibleTo,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -395,7 +408,6 @@ class ChatMessage {
       moderationSeverity: moderationSeverity ?? this.moderationSeverity,
       originalText: originalText ?? this.originalText,
       waveformData: waveformData ?? this.waveformData,
-      isAiGenerated: isAiGenerated ?? this.isAiGenerated,
       transcription: transcription ?? this.transcription,
       // Preservar campos de reenvío
       isForwarded: isForwarded,
@@ -404,8 +416,14 @@ class ChatMessage {
       originalContactName: originalContactName,
       localId: localId ?? this.localId, // ✅ FIX: Usar valor pasado o preservar actual
       isDeletedForEveryone: isDeletedForEveryone ?? this.isDeletedForEveryone,
+      visibleTo: visibleTo ?? this.visibleTo,
     );
   }
+
+  /// Indica si este mensaje es visible para el usuario dado.
+  /// Si `visibleTo` es null se considera visible para todos (backwards compat).
+  bool isVisibleTo(String userId) =>
+      visibleTo == null || visibleTo!.contains(userId);
 
   /// Getter para obtener el timestamp efectivo (servidor o local)
   /// ✅ Devuelve en timezone local del usuario

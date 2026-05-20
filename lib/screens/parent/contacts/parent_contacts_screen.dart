@@ -269,21 +269,6 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
           ),
           Row(
             children: [
-              IconButton(
-                icon: _isSyncing
-                    ? SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : Icon(Icons.sync, color: Colors.white, size: 26),
-                onPressed: _isSyncing ? null : _syncContacts,
-                padding: EdgeInsets.all(8),
-                tooltip: 'Sincronizar contactos',
-              ),
               ApprovalRequestsBadge(
                 parentId: currentUserId ?? '',
                 iconColor: Colors.white,

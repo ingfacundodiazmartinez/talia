@@ -104,23 +104,6 @@ class RemoteLoggerService {
     }
   }
 
-  /// Sobrescribir debugPrint global
-  void _overrideDebugPrint() {
-    // Guardar la función original
-    final originalDebugPrint = debugPrint;
-
-    // Sobrescribir con nuestra versión
-    debugPrint = (String? message, {int? wrapWidth}) {
-      // Llamar a la original para mantener el comportamiento normal
-      originalDebugPrint.call(message, wrapWidth: wrapWidth);
-
-      // Enviar al backend si debug está habilitado
-      if (message != null) {
-        log(message, level: 'DEBUG');
-      }
-    };
-  }
-
   /// Método principal para loggear
   void log(
     String message, {

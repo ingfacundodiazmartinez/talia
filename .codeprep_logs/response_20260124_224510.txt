@@ -1,0 +1,222 @@
+═══════════════════════════════════════════════════════════════
+CODEPREP - Registro de Query
+═══════════════════════════════════════════════════════════════
+
+Fecha: 2026-01-24 22:45:10
+Proyecto: /Users/olagg/Personal/talia
+
+─── MÉTRICAS REALES ───
+Input tokens:       528
+Output tokens:      1,527
+Cache creado:       0
+Cache leído:        0
+TOTAL:              2,055 tokens
+Costo:              $0.0005 USD
+Tiempo:             0.0s
+
+─── QUERY ───
+Este proyecto se genero con claude puro, sin codeprep. Necesito que identifiques donde hay queries a firestore que no sean nada performantes. Por ejemplo, loops de x usuarios donde por cada iteracion se haga una query (contexto adicional 1)
+
+─── CONTEXTO ENVIADO ───
+Aquí está el contexto adicional que pediste:
+
+## Contexto Adicional Solicitado
+*Búsqueda: "archivos relacionados con contactos, whitelist y búsqueda de usuarios"*
+
+Se encontraron 7 archivos relevantes:
+
+### `/Users/olagg/Personal/talia/functions/helpers.js` (relevancia: 0.90)
+```javascript
+const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
+
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
+
+const { onSchedule } = require("firebase-functions/v2/scheduler");
+```
+
+### `/Users/olagg/Personal/talia/functions/moderation.js` (relevancia: 0.90)
+```javascript
+const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
+
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
+
+const { onSchedule } = require("firebase-functions/v2/scheduler");
+```
+
+### `/Users/olagg/Personal/talia/functions/migrations/migrate-contacts-to-friends.js` (relevancia: 0.61)
+```javascript
+File: /Users/olagg/Personal/talia/functions/migrations/migrate-contacts-to-friends.js
+```
+
+### `/Users/olagg/Personal/talia/functions/talia-assistant.js` (relevancia: 0.56)
+```javascript
+function generateResponse(userMessage, chatId, userId)
+```
+
+### `/Users/olagg/Personal/talia/functions/story-approval.js` (relevancia: 0.56)
+```javascript
+function checkFomoRateLimits(userIds, senderId, twentyFourHoursAgo)
+```
+
+### `/Users/olagg/Personal/talia/functions/calls_v2/onCallEnded.js` (relevancia: 0.56)
+```javascript
+function notifyCallCancelled(callData, callId, endedBy)
+```
+
+### `/Users/olagg/Personal/talia/functions/calls_v2/onCallEnded.js` (relevancia: 0.56)
+```javascript
+function createCallMessageInChat(callData, callId, wasAnswered)
+```
+
+---
+Continúa tu análisis con este contexto adicional.
+
+Continúa tu análisis anterior con esta nueva información.
+
+─── RESPUESTA DE CLAUDE ───
+Con el contexto adicional, puedo profundizar en el análisis de la arquitectura de contactos y whitelist en Talia. Aquí está el análisis continuado:
+
+## Análisis de Contactos, Whitelist y Búsqueda de Usuarios
+
+### **1. Arquitectura de Contactos y Amigos**
+**Hallazgo clave**: Existe un proceso de migración de contactos a amigos (`migrate-contacts-to-friends.js`), lo que sugiere:
+- **Evolución del modelo**: Transición de un sistema simple de contactos a una relación bidireccional de amistad
+- **Relaciones asimétricas vs simétricas**: Los contactos podrían haber sido unidireccionales, mientras que las amistades requieren aceptación mutua
+- **Estructura de datos probable**:
+  ```javascript
+  // Contactos (antiguo)
+  users/{userId}/contacts/{contactId}
+  
+  // Amigos (nuevo)
+  users/{userId}/friends/{friendId}
+  friendships/{friendshipId} // Documento bidireccional
+  ```
+
+### **2. Sistema de Whitelist y Moderación**
+**Evidencia en `moderation.js`**:
+- **Funciones de Firestore**: Uso de `onDocumentCreated` y `onDocumentDeleted` sugiere monitoreo en tiempo real
+- **Posibles casos de uso**:
+  - Whitelist de usuarios verificados
+  - Lista negra para moderación
+  - Aprobación automática de contactos de usuarios confiables
+
+**Patrón probable**:
+```javascript
+// Estructura de whitelist
+whitelist/{userId}: {
+  addedAt: timestamp,
+  addedBy: adminId,
+  reason: "verified_user" | "trusted_contact" | "manual_approval"
+}
+
+// Triggers de moderación
+onDocumentCreated("whitelist/{userId}", ...)
+onDocumentDeleted("whitelist/{userId}", ...)
+```
+
+### **3. Búsqueda de Usuarios**
+**Integración con Talia Assistant** (`talia-assistant.js`):
+- La función `generateResponse` podría incluir búsqueda de contactos
+- **Características probables**:
+  - Búsqueda por nombre, username o atributos
+  - Filtrado por estado de conexión (amigos vs contactos)
+  - Integración con contexto de conversación
+
+**Flujo de búsqueda estimado**:
+```
+User query → Talia Assistant → Search users collection → 
+Filter by privacy/whitelist → Return relevant results
+```
+
+### **4. Sistema de Límites y Seguridad**
+**De `story-approval.js`**:
+- Función `checkFomoRateLimits` sugiere:
+  - Límites de interacción entre usuarios
+  - Prevención de spam en solicitudes de contacto
+  - Control de frecuencia de mensajes/búsquedas
+
+**Parámetros de rate limiting**:
+```javascript
+{
+  maxRequestsPerDay: 50,
+  maxNewContacts: 20,
+  coolDownPeriod: 3600000 // 1 hora
+}
+```
+
+### **5. Integración con Llamadas**
+**De `calls_v2/onCallEnded.js`**:
+- Las funciones `notifyCallCancelled` y `createCallMessageInChat` indican:
+  - **Contactos como base para llamadas**: Solo usuarios conectados pueden llamarse
+  - **Historial de interacciones**: Las llamadas generan mensajes automáticos en chats
+  - **Estados de relación**: Las llamadas exitosas/fallidas podrían afectar el "score" de conexión
+
+### **6. Arquitectura Propuesta del Sistema de Contactos**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Sistema de Contactos                     │
+├─────────────────────────────────────────────────────────────┤
+│  Capa 1: Almacenamiento                                     │
+│  • users/{uid}/contacts/{contactId} (legacy)                │
+│  • users/{uid}/friends/{friendId} (nuevo)                   │
+│  • friendships/{id} (relaciones bidireccionales)            │
+│  • whitelist/{userId} (usuarios verificados)                │
+│                                                             │
+│  Capa 2: Gestión                                            │
+│  • migrate-contacts-to-friends.js (migración)               │
+│  • moderation.js (whitelist/blacklist)                      │
+│  • rate limiting (story-approval.js)                        │
+│                                                             │
+│  Capa 3: Interacción                                        │
+│  • talia-assistant.js (búsqueda inteligente)                │
+│  • calls_v2/ (integración con llamadas)                     │
+│  • chat system (mensajes automáticos)                       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### **7. Recomendaciones de Mejora**
+
+1. **Unificar modelos de relación**:
+   ```javascript
+   // Propuesta: Modelo unificado
+   userConnections/{userId}/connections/{connectionId}: {
+     type: "friend" | "contact" | "blocked",
+     status: "pending" | "accepted" | "rejected",
+     createdAt: timestamp,
+     updatedAt: timestamp
+   }
+   ```
+
+2. **Mejorar búsqueda con índices compuestos**:
+   ```javascript
+   // Firestore composite indexes
+   users: [name, isVerified, lastActive]
+   connections: [userId, type, status]
+   ```
+
+3. **Sistema de reputación integrado**:
+   - Score basado en interacciones exitosas (llamadas, mensajes)
+   - Whitelist automática para usuarios con alta reputación
+   - Límites dinámicos según reputación
+
+4. **Búsqueda contextual en Talia Assistant**:
+   ```javascript
+   // Mejora propuesta
+   function searchUsers(context, query, filters = {}) {
+     // 1. Búsqueda en conexiones existentes
+     // 2. Búsqueda global con filtros de privacidad
+     // 3. Ordenar por relevancia (amigos en común, intereses)
+     // 4. Aplicar límites de rate limiting
+   }
+   ```
+
+### **8. Consideraciones de Seguridad**
+- **Validación bidireccional**: Ambas partes deben confirmar conexiones
+- **Privacidad granular**: Control sobre quién puede buscar/contactar
+- **Auditoría de cambios**: Log de modificaciones en whitelist/contactos
+- **Rate limiting por capas**: Límites diferentes para búsqueda, solicitudes, mensajes
+
+Este análisis revela un sistema en evolución desde contactos simples hacia relaciones sociales complejas con moderación, límites e integración con otras funcionalidades como llamadas y el asistente de IA.
+
+═══════════════════════════════════════════════════════════════

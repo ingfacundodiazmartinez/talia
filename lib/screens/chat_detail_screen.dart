@@ -9,6 +9,7 @@ import '../utils/release_logger.dart';
 import '../notification_service.dart';
 import '../services/local_unread_count_service.dart';
 import '../services/notification_tracking_service.dart';
+import '../services/bottom_nav_visibility.dart';
 import '../services/user_cache_service.dart';
 import '../services/speech_to_text_service.dart';
 import '../calls_v2/screens/agora_call_screen.dart';
@@ -90,6 +91,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    BottomNavVisibility.instance.registerFullScreen();
 
     // Inicializar nombre del contacto (reactivo a cambios de alias)
     _displayName = _userCacheService.getDisplayName(
@@ -194,6 +196,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   @override
   void dispose() {
+    BottomNavVisibility.instance.unregisterFullScreen();
     NotificationService().clearCurrentChat();
     LocalUnreadCountService().exitChat();
     WidgetsBinding.instance.removeObserver(this);
@@ -310,7 +313,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   Future<void> _handleSendMessage() async {
-    if (_controller.isBlocked == true || _controller.isBlockedBy == true) {
+    if (_controller.isBlocked == true) {
       _showBlockedSnackbar();
       return;
     }
@@ -350,11 +353,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   void _showBlockedSnackbar() {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
+      const SnackBar(
         content: Text(
-          _controller.isBlocked == true
-              ? 'No puedes enviar mensajes a este contacto porque lo has bloqueado'
-              : 'Este contacto te ha bloqueado',
+          'No puedes enviar mensajes a este contacto porque lo has bloqueado',
         ),
         backgroundColor: Colors.red,
       ),
@@ -664,11 +665,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
               Expanded(
                 child: SafeArea(child: _buildMessagesList()),
               ),
-              if (_controller.isBlocked == true || _controller.isBlockedBy == true)
-                BlockedMessageBar(
-                  isBlocked: _controller.isBlocked,
-                  isBlockedBy: _controller.isBlockedBy,
-                ),
+              if (_controller.isBlocked == true)
+                const BlockedMessageBar(),
               if (_replyingTo != null) _buildReplyBar(),
               if (_editingBlockedMessage != null) _buildEditingBar(),
               _buildInputBar(),
@@ -744,7 +742,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
   }
 
   Widget _buildInputBar() {
-    if (_controller.isBlocked == true || _controller.isBlockedBy == true) {
+    if (_controller.isBlocked == true) {
       return const SizedBox.shrink();
     }
 

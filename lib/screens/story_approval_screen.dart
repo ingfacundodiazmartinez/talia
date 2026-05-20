@@ -1,10 +1,12 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../services/story_service_refactored.dart';
 import '../services/story_upload_progress_service.dart';
 import '../services/unread_messages_service.dart';
 import '../services/notification_tracking_service.dart';
-import '../services/ad_service.dart';
 
 class StoryApprovalScreen extends StatefulWidget {
   final String? childId;
@@ -21,7 +23,6 @@ class StoryApprovalScreen extends StatefulWidget {
 class _StoryApprovalScreenState extends State<StoryApprovalScreen>
     with SingleTickerProviderStateMixin {
   final StoryService _storyService = StoryService();
-  final AdService _adService = AdService();
   late TabController _tabController;
 
   // Track loading and success states
@@ -30,20 +31,206 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
   final Set<String> _successApprovalIds = {};
   final Set<String> _successRejectIds = {};
 
+  // Selection mode (solo aplica en tab "Pendientes")
+  final Set<String> _selectedIds = {};
+  bool get _isSelecting => _selectedIds.isNotEmpty;
+  bool _isBulkProcessing = false;
+
+  void _toggleSelection(String storyId) {
+    setState(() {
+      if (_selectedIds.contains(storyId)) {
+        _selectedIds.remove(storyId);
+      } else {
+        _selectedIds.add(storyId);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() => _selectedIds.clear());
+  }
+
+  PreferredSizeWidget _buildSelectionAppBar() {
+    return AppBar(
+      backgroundColor: ThemeService.primaryColor,
+      foregroundColor: Colors.white,
+      elevation: 0,
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: _isBulkProcessing ? null : _clearSelection,
+        tooltip: 'Cancelar selección',
+      ),
+      title: Text('${_selectedIds.length} seleccionada${_selectedIds.length == 1 ? '' : 's'}'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.close_rounded),
+          onPressed: _isBulkProcessing ? null : _bulkRejectSelected,
+          tooltip: 'Rechazar todas',
+        ),
+        IconButton(
+          icon: const Icon(Icons.check_rounded),
+          onPressed: _isBulkProcessing ? null : _bulkApproveSelected,
+          tooltip: 'Aprobar todas',
+        ),
+      ],
+    );
+  }
+
+  Future<void> _bulkApproveSelected() async {
+    if (_selectedIds.isEmpty || _isBulkProcessing) return;
+
+    final ids = _selectedIds.toList();
+    setState(() {
+      _isBulkProcessing = true;
+      for (final id in ids) {
+        _loadingApprovalIds.add(id);
+      }
+    });
+
+    int success = 0;
+    int failed = 0;
+    await Future.wait(ids.map((id) async {
+      try {
+        await _storyService.approveStory(id);
+        success++;
+      } catch (_) {
+        failed++;
+      }
+    }));
+
+    await UnreadMessagesService().updateBadgeCount();
+
+    if (!mounted) return;
+    setState(() {
+      _selectedIds.clear();
+      _loadingApprovalIds.clear();
+      _isBulkProcessing = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failed > 0
+            ? '$success aprobadas, $failed con error'
+            : '$success historia${success == 1 ? '' : 's'} aprobada${success == 1 ? '' : 's'}'),
+        backgroundColor: failed > 0 ? Colors.orange : Colors.green,
+      ),
+    );
+  }
+
+  Future<void> _bulkRejectSelected() async {
+    if (_selectedIds.isEmpty || _isBulkProcessing) return;
+
+    // Confirmación antes de rechazar
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rechazar historias'),
+        content: Text('¿Rechazar ${_selectedIds.length} historia${_selectedIds.length == 1 ? '' : 's'}? Tu hijo no podrá publicarlas.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Rechazar todas'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final ids = _selectedIds.toList();
+    setState(() {
+      _isBulkProcessing = true;
+      for (final id in ids) {
+        _loadingRejectIds.add(id);
+      }
+    });
+
+    int success = 0;
+    int failed = 0;
+    await Future.wait(ids.map((id) async {
+      try {
+        await _storyService.rejectStory(id);
+        success++;
+      } catch (_) {
+        failed++;
+      }
+    }));
+
+    await UnreadMessagesService().updateBadgeCount();
+
+    if (!mounted) return;
+    setState(() {
+      _selectedIds.clear();
+      _loadingRejectIds.clear();
+      _isBulkProcessing = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failed > 0
+            ? '$success rechazadas, $failed con error'
+            : '$success historia${success == 1 ? '' : 's'} rechazada${success == 1 ? '' : 's'}'),
+        backgroundColor: failed > 0 ? Colors.orange : Colors.green,
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
 
-    // ✅ Auto-dismiss: Limpiar notificaciones de aprobación de historias
+    // ✅ Auto-dismiss: Limpiar notificaciones del OS (push)
     final contextId = widget.childId ?? 'all';
     NotificationTrackingService().dismissNotificationsForContext(
       type: NotificationContext.storyApproval,
       contextId: contextId,
     );
 
-    // ✅ Pre-cargar rewarded ad para aprobar historias
-    _adService.loadRewardedAd();
+    // ✅ Limpiar badges al entrar: marcar approval_requests como vistos y
+    // notificaciones de tipo story_approval_request como leídas.
+    _markPendingAsViewedByParent();
+  }
+
+  Future<void> _markPendingAsViewedByParent() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    final firestore = FirebaseFirestore.instance;
+    try {
+      // 1) Marcar story_approval_requests pending no vistas
+      final requestsSnap = await firestore
+          .collection('story_approval_requests')
+          .where('parentId', isEqualTo: user.uid)
+          .where('status', isEqualTo: 'pending')
+          .get();
+      final batch = firestore.batch();
+      for (final doc in requestsSnap.docs) {
+        if (doc.data()['viewedByParent'] != true) {
+          batch.update(doc.reference, {'viewedByParent': true});
+        }
+      }
+      // 2) Marcar notifications de tipo story_approval_request como leídas
+      final notifsSnap = await firestore
+          .collection('notifications')
+          .where('userId', isEqualTo: user.uid)
+          .where('type', isEqualTo: 'story_approval_request')
+          .where('read', isEqualTo: false)
+          .get();
+      for (final doc in notifsSnap.docs) {
+        batch.update(doc.reference, {
+          'read': true,
+          'readAt': FieldValue.serverTimestamp(),
+        });
+      }
+      await batch.commit();
+      await UnreadMessagesService().updateBadgeCount();
+    } catch (_) {
+      // Silencio: no es crítico
+    }
   }
 
   @override
@@ -60,9 +247,9 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
 
     return Scaffold(
       backgroundColor: colorScheme.surface,
-      appBar: AppBar(
+      appBar: _isSelecting ? _buildSelectionAppBar() : AppBar(
         title: Text(title),
-        backgroundColor: const Color(0xFF9D7FE8),
+        backgroundColor: ThemeService.primaryColor,
         foregroundColor: Colors.white,
         elevation: 0,
         bottom: TabBar(
@@ -214,7 +401,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
 
   Widget _buildLoadingState() {
     return const Center(
-      child: CircularProgressIndicator(color: Color(0xFF9D7FE8)),
+      child: CircularProgressIndicator(color: ThemeService.primaryColor),
     );
   }
 
@@ -264,7 +451,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.1),
+                color: iconColor.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
               child: Icon(icon, size: 48, color: iconColor),
@@ -306,19 +493,31 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
     final isLoading = _loadingApprovalIds.contains(story.id) ||
         _loadingRejectIds.contains(story.id);
     final isApproving = _loadingApprovalIds.contains(story.id);
-    final isRejecting = _loadingRejectIds.contains(story.id);
     final showApprovalSuccess = _successApprovalIds.contains(story.id);
     final showRejectSuccess = _successRejectIds.contains(story.id);
 
-    return AnimatedContainer(
+    // Selection mode solo aplica en stories pending
+    final canSelect = status == 'pending';
+    final isSelected = canSelect && _selectedIds.contains(story.id);
+
+    return GestureDetector(
+      onLongPress: canSelect && !_isBulkProcessing
+          ? () => _toggleSelection(story.id)
+          : null,
+      onTap: canSelect && _isSelecting
+          ? () => _toggleSelection(story.id)
+          : null,
+      child: AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: colorScheme.outlineVariant.withOpacity(0.5),
-          width: 1,
+          color: isSelected
+              ? colorScheme.primary
+              : colorScheme.outlineVariant.withValues(alpha: 0.5),
+          width: isSelected ? 2 : 1,
         ),
       ),
       child: ClipRRect(
@@ -358,7 +557,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
               Positioned.fill(
                 child: Container(
                   decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.6),
+                    color: Colors.black.withValues(alpha: 0.6),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Center(
@@ -394,8 +593,8 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
                 child: Container(
                   decoration: BoxDecoration(
                     color: showApprovalSuccess
-                        ? Colors.green.withOpacity(0.9)
-                        : Colors.red.withOpacity(0.9),
+                        ? Colors.green.withValues(alpha: 0.9)
+                        : Colors.red.withValues(alpha: 0.9),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Center(
@@ -421,8 +620,26 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
                   ),
                 ),
               ),
+
+            // Selection checkmark
+            if (isSelected)
+              Positioned(
+                top: 12,
+                right: 12,
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: colorScheme.primary,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  child: const Icon(Icons.check, color: Colors.white, size: 18),
+                ),
+              ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -437,13 +654,13 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                color: const Color(0xFF9D7FE8).withOpacity(0.3),
+                color: ThemeService.primaryColor.withValues(alpha: 0.3),
                 width: 2,
               ),
             ),
             child: CircleAvatar(
               radius: 22,
-              backgroundColor: const Color(0xFF9D7FE8).withOpacity(0.1),
+              backgroundColor: ThemeService.primaryColor.withValues(alpha: 0.1),
               child: story.userPhotoURL != null
                   ? ClipOval(
                       child: CachedNetworkImage(
@@ -451,8 +668,8 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
                         width: 44,
                         height: 44,
                         fit: BoxFit.cover,
-                        placeholder: (context, url) => Icon(Icons.person, size: 22, color: Color(0xFF9D7FE8)),
-                        errorWidget: (context, url, error) => Icon(Icons.person, size: 22, color: Color(0xFF9D7FE8)),
+                        placeholder: (context, url) => Icon(Icons.person, size: 22, color: ThemeService.primaryColor),
+                        errorWidget: (context, url, error) => Icon(Icons.person, size: 22, color: ThemeService.primaryColor),
                       ),
                     )
                   : Text(
@@ -460,7 +677,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF9D7FE8),
+                        color: ThemeService.primaryColor,
                       ),
                     ),
             ),
@@ -520,25 +737,25 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
 
     switch (status) {
       case 'pending':
-        bgColor = Colors.orange.withOpacity(0.15);
+        bgColor = Colors.orange.withValues(alpha: 0.15);
         textColor = Colors.orange[700]!;
         text = 'Pendiente';
         icon = Icons.schedule;
         break;
       case 'approved':
-        bgColor = Colors.green.withOpacity(0.15);
+        bgColor = Colors.green.withValues(alpha: 0.15);
         textColor = Colors.green[700]!;
         text = 'Aprobada';
         icon = Icons.check_circle_outline;
         break;
       case 'rejected':
-        bgColor = Colors.red.withOpacity(0.15);
+        bgColor = Colors.red.withValues(alpha: 0.15);
         textColor = Colors.red[700]!;
         text = 'Rechazada';
         icon = Icons.cancel_outlined;
         break;
       default:
-        bgColor = Colors.grey.withOpacity(0.15);
+        bgColor = Colors.grey.withValues(alpha: 0.15);
         textColor = Colors.grey[700]!;
         text = '';
         icon = Icons.circle;
@@ -596,7 +813,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
                 height: double.infinity,
                 placeholder: (context, url) => Center(
                   child: CircularProgressIndicator(
-                    color: const Color(0xFF9D7FE8),
+                    color: ThemeService.primaryColor,
                   ),
                 ),
                 errorWidget: (context, url, error) => Center(
@@ -629,7 +846,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.6),
+                  color: Colors.black.withValues(alpha: 0.6),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Row(
@@ -664,7 +881,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
-          color: Colors.black.withOpacity(0.7),
+          color: Colors.black.withValues(alpha: 0.7),
         ),
         child: Center(
           child: Column(
@@ -676,7 +893,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
                 child: CircularProgressIndicator(
                   value: progress,
                   strokeWidth: 4,
-                  backgroundColor: Colors.white.withOpacity(0.3),
+                  backgroundColor: Colors.white.withValues(alpha: 0.3),
                   valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
                 ),
               ),
@@ -701,7 +918,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
       child: Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
-          color: Colors.black.withOpacity(0.7),
+          color: Colors.black.withValues(alpha: 0.7),
         ),
         child: const Center(
           child: Column(
@@ -877,61 +1094,6 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
   }
 
   Future<void> _approveStory(Story story) async {
-    // ✅ Mostrar rewarded ad antes de aprobar (monetización)
-    final canShowAds = await _adService.canShowAds();
-    if (canShowAds) {
-      // Mostrar diálogo explicativo
-      final shouldContinue = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: Row(
-            children: [
-              Icon(Icons.play_circle_filled, color: Color(0xFF9D7FE8), size: 28),
-              SizedBox(width: 12),
-              Text('Ver video para aprobar'),
-            ],
-          ),
-          content: Text(
-            'Mira un breve video para aprobar la historia de ${story.userName}.',
-            style: TextStyle(fontSize: 15),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: Text('Cancelar', style: TextStyle(color: Colors.grey)),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context, true),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF9D7FE8),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              child: Text('Ver video'),
-            ),
-          ],
-        ),
-      );
-
-      if (shouldContinue != true) return;
-
-      // Mostrar rewarded ad
-      final rewarded = await _adService.showRewardedAd();
-      if (!rewarded) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Debes ver el video completo para aprobar la historia'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-        return;
-      }
-    }
-
     setState(() {
       _loadingApprovalIds.add(story.id);
     });
@@ -984,7 +1146,7 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.1),
+                color: Colors.orange.withValues(alpha: 0.1),
                 shape: BoxShape.circle,
               ),
               child: const Icon(Icons.warning_amber, color: Colors.orange, size: 24),
@@ -1064,6 +1226,9 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
   }
 
   Future<void> _rejectStory(Story story, String reason) async {
+    // Capturar status original para decidir cómo deshacer
+    final originalStatus = story.status;
+
     setState(() {
       _loadingRejectIds.add(story.id);
     });
@@ -1081,6 +1246,40 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
           _loadingRejectIds.remove(story.id);
           _successRejectIds.add(story.id);
         });
+
+        // Snackbar con "Deshacer" (vuelve al status original: pending o approved)
+        debugPrint('🔬 [DBG-reject] About to show snackbar story=${story.id}');
+        final messenger = ScaffoldMessenger.of(context);
+        debugPrint('🔬 [DBG-reject] messenger=${messenger.hashCode}');
+        messenger.hideCurrentSnackBar();
+        messenger.showSnackBar(
+          SnackBar(
+            content: const Text('Historia rechazada'),
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'Deshacer',
+              onPressed: () async {
+                try {
+                  if (originalStatus == StoryStatus.pending) {
+                    await _storyService.restoreStoryToPending(story.id);
+                  } else {
+                    await _storyService.approveStory(story.id);
+                  }
+                  await UnreadMessagesService().updateBadgeCount();
+                } catch (_) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('No se pudo deshacer'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              },
+            ),
+          ),
+        );
 
         await Future.delayed(const Duration(milliseconds: 800));
         if (mounted) {
@@ -1153,7 +1352,7 @@ class StoryPreviewForApproval extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Colors.black.withOpacity(0.6),
+                    Colors.black.withValues(alpha: 0.6),
                     Colors.transparent,
                   ],
                 ),
@@ -1221,7 +1420,7 @@ class StoryPreviewForApproval extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.6),
+                  color: Colors.black.withValues(alpha: 0.6),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(

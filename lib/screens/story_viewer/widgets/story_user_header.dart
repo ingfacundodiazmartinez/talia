@@ -110,7 +110,7 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.black.withValues(alpha: 0.3),
                   blurRadius: 4,
                   offset: const Offset(0, 2),
                 ),
@@ -118,7 +118,7 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
             ),
             child: CircleAvatar(
               radius: 20,
-              backgroundColor: Colors.white.withOpacity(0.3),
+              backgroundColor: Colors.white.withValues(alpha: 0.3),
               child: _currentPhotoUrl != null
                   ? ClipOval(
                       child: CachedNetworkImage(
@@ -157,7 +157,7 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
                 Text(
                   widget.timeAgo,
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.9),
+                    color: Colors.white.withValues(alpha: 0.9),
                     fontSize: 12,
                     shadows: _textShadows,
                   ),

@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 /// - Botones de acción (archivados, crear grupo, etc.)
 class ChatHeaderWidget extends StatelessWidget {
   final String title;
-  final String subtitle;
   final VoidCallback? onArchivedTap;
   final VoidCallback? onCreateGroupTap;
   final Widget? additionalAction;
@@ -16,7 +15,6 @@ class ChatHeaderWidget extends StatelessWidget {
   const ChatHeaderWidget({
     super.key,
     required this.title,
-    required this.subtitle,
     this.onArchivedTap,
     this.onCreateGroupTap,
     this.additionalAction,
@@ -35,26 +33,13 @@ class ChatHeaderWidget extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: textColor,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: textColor.withValues(alpha: 0.9),
-                  ),
-                ),
-              ],
+            child: Text(
+              title,
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: textColor,
+              ),
             ),
           ),
           Row(

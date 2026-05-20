@@ -15,10 +15,12 @@ import '../models/viewer_item.dart';
 import '../controllers/story_viewer_controller.dart';
 import '../services/ad_service.dart';
 import '../services/mood_polls/mood_poll_service.dart';
+import '../services/optimistic_story_media_cache.dart';
 import '../services/story_service_refactored.dart';
 import '../services/trivia/trivia_creation_service.dart';
 import '../services/video_cache_service.dart';
 import '../services/deep_link_service.dart';
+import '../services/bottom_nav_visibility.dart';
 import '../utils/release_logger.dart';
 import '../widgets/story_native_ad_widget.dart';
 import '../widgets/mood_poll_story_widget.dart';
@@ -84,6 +86,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   // VideoPlayerController map para manejar múltiples videos
   final Map<String, VideoPlayerController> _videoControllers = {};
+  // Para distinguir tap (navegación) vs hold (pausa) sin esperar 500ms del long-press.
+  DateTime? _pointerDownAt;
+  Offset? _pointerDownPos;
   // Set para trackear videos que están siendo cargados desde cache
   final Set<String> _loadingVideos = {};
 
@@ -107,9 +112,6 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   // Flag para deshabilitar gestos cuando un bottom sheet está abierto
   bool _isBottomSheetOpen = false;
-
-  // Para trackear posición inicial del gesto
-  Offset? _gestureStartPosition;
 
   // Flag para saber si la navegación es programática (tap) o por swipe
   // Si es programática, onUserChanged no debe mostrar ad (ya lo maneja _nextUser)
@@ -413,6 +415,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   @override
   void initState() {
     super.initState();
+    BottomNavVisibility.instance.registerFullScreen();
 
     // Inicializar copia local mutable de las historias
     _allUserStories = List.from(widget.allUserStories);
@@ -454,10 +457,24 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // Validate and clamp initial user index
       initialUserIdx = widget.initialUserIndex.clamp(0, _allUserStories.length - 1);
 
-      // Calcular el índice de la primera historia NO vista del grupo actual
       final currentUserStories = _allUserStories[initialUserIdx];
       final stories = _getStoriesForUser(currentUserStories);
-      initialItemIdx = stories.isNotEmpty ? _getInitialStoryIndex(stories) : 0;
+
+      // Para historias propias: abrir directamente en la más reciente. Si hay
+      // una historia en estado uploading, va a ser esa (es la más nueva).
+      // El concepto "primera no vista" no aplica cuando uno ve sus propias
+      // historias porque nunca uno se marca como viewer de sus posts.
+      //
+      // Para historias ajenas: comportamiento normal (primera no vista).
+      final isOwnStories =
+          currentUserStories.userId == _controller.currentUserId;
+      if (stories.isEmpty) {
+        initialItemIdx = 0;
+      } else if (isOwnStories) {
+        initialItemIdx = stories.length - 1;
+      } else {
+        initialItemIdx = _getInitialStoryIndex(stories);
+      }
     }
 
     _currentUserIndex = initialUserIdx;
@@ -690,6 +707,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   void _pauseStoryTimer() {
     _storyTimer?.cancel();
     _progressController.stop();
+    final currentStory = _getCurrentStory();
+    if (currentStory != null && currentStory.mediaType == 'video') {
+      _videoControllers[currentStory.id]?.pause();
+    }
   }
 
   /// Llamado cuando se abre un bottom sheet (likes, respuestas)
@@ -709,15 +730,22 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   }
 
   void _resumeStoryTimer() {
+    // Si el progress controller no está corriendo (estaba pausado o nunca arrancó),
+    // resume desde donde estaba.
+    if (_progressController.isAnimating) return;
     _progressController.forward();
-    final remainingTime = Duration(
-      milliseconds:
-          ((_storyDuration.inMilliseconds) * (1 - _progressController.value))
-              .round(),
-    );
-    _storyTimer = Timer(remainingTime, () {
+    // Usar la duración REAL del progress controller (no _storyDuration constante).
+    final totalMs = _progressController.duration?.inMilliseconds ??
+        _storyDuration.inMilliseconds;
+    final remainingMs = (totalMs * (1 - _progressController.value)).round();
+    _storyTimer?.cancel();
+    _storyTimer = Timer(Duration(milliseconds: remainingMs), () {
       _nextStory();
     });
+    final currentStory = _getCurrentStory();
+    if (currentStory != null && currentStory.mediaType == 'video') {
+      _videoControllers[currentStory.id]?.play();
+    }
   }
 
   void _nextStory() {
@@ -1191,9 +1219,9 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
       // Guardar en galería usando gal
       if (isVideo) {
-        await Gal.putVideo(tempFile.path, album: 'Talia');
+        await Gal.putVideo(tempFile.path, album: 'Tália');
       } else {
-        await Gal.putImage(tempFile.path, album: 'Talia');
+        await Gal.putImage(tempFile.path, album: 'Tália');
       }
 
       // Eliminar archivo temporal
@@ -1259,13 +1287,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       // Texto a compartir: caption (si existe) + link
       final shareText = hasCaption
           ? '$caption\n\n$storyUrl'
-          : '¡Mira mi historia en Talia!\n$storyUrl';
+          : '¡Mira mi historia en Tália!\n$storyUrl';
 
       // Compartir el link
       await SharePlus.instance.share(
         ShareParams(
           text: shareText,
-          subject: 'Historia de Talia',
+          subject: 'Historia de Tália',
         ),
       );
     } catch (e) {
@@ -1290,13 +1318,13 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       final triviaUrl = DeepLinkService().generateTriviaUrl(trivia.id);
 
       // Texto a compartir
-      final shareText = '¡Responde mi trivia "${trivia.title}" en Talia!\n$triviaUrl';
+      final shareText = '¡Responde mi trivia "${trivia.title}" en Tália!\n$triviaUrl';
 
       // Compartir el link
       await SharePlus.instance.share(
         ShareParams(
           text: shareText,
-          subject: 'Trivia de Talia',
+          subject: 'Trivia de Tália',
         ),
       );
     } finally {
@@ -1461,11 +1489,16 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     if (!_videoControllers.containsKey(story.id) && !_loadingVideos.contains(story.id)) {
       _controller.logVideoControllerCreated(story.id);
 
-      // Usar archivo local si existe (mientras se sube)
-      if (story.localMediaPath != null && story.localMediaPath!.isNotEmpty) {
-        final newController = VideoPlayerController.file(
-          File(story.localMediaPath!),
-        );
+      // Usar archivo local si existe (mientras se sube). Si el modelo no
+      // trae localMediaPath (puede haberse perdido al re-emitir desde
+      // Firestore), consultar el cache singleton que persiste durante el
+      // upload.
+      final cachedPath = OptimisticStoryMediaCache().get(story.id);
+      final localPath = (story.localMediaPath != null && story.localMediaPath!.isNotEmpty)
+          ? story.localMediaPath!
+          : cachedPath;
+      if (localPath != null && localPath.isNotEmpty) {
+        final newController = VideoPlayerController.file(File(localPath));
         _videoControllers[story.id] = newController;
         _initializeVideoController(newController, story.id);
       } else {
@@ -1544,6 +1577,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   @override
   void dispose() {
+    BottomNavVisibility.instance.unregisterFullScreen();
     _storyTimer?.cancel();
     _progressController.dispose();
     _userPageController.dispose();
@@ -1665,37 +1699,64 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: GestureDetector(
-        // Taps para cambiar historia y mantener presionado para pausar
-        onTapDown: _isBottomSheetOpen ? null : (details) {
-          _gestureStartPosition = details.localPosition;
+      body: Listener(
+        // Pausa inmediata mientras el dedo esté apoyado, independiente de
+        // cómo el GestureDetector clasifique el gesto. Distinguimos tap vs hold
+        // midiendo el tiempo nosotros (sin esperar 500ms del long-press).
+        onPointerDown: _isBottomSheetOpen ? null : (event) {
+          _pointerDownAt = DateTime.now();
+          _pointerDownPos = event.position;
           _pauseStoryTimer();
         },
-        onTapUp: _isBottomSheetOpen ? null : (details) {
-          final gestureStart = _gestureStartPosition;
-          _gestureStartPosition = null;
-
-          // Si el teclado está abierto, cerrarlo
-          if (_replyFocusNode.hasFocus) {
-            _replyFocusNode.unfocus();
+        onPointerUp: _isBottomSheetOpen ? null : (event) {
+          final downAt = _pointerDownAt;
+          final downPos = _pointerDownPos;
+          _pointerDownAt = null;
+          _pointerDownPos = null;
+          if (downAt == null) {
+            _resumeStoryTimer();
             return;
           }
-
-          final screenWidth = MediaQuery.of(context).size.width;
-          final tapX = gestureStart?.dx ?? details.localPosition.dx;
-
-          if (tapX < screenWidth / 3) {
-            _previousStory();
-          } else if (tapX > screenWidth * 2 / 3) {
-            _nextStory();
+          final heldMs = DateTime.now().difference(downAt).inMilliseconds;
+          final moved = downPos != null
+              ? (event.position - downPos).distance
+              : 0.0;
+          // Excluir zonas con controles propios (header arriba, reply abajo)
+          // para no robarles el tap de navegación.
+          final screenHeight = MediaQuery.of(context).size.height;
+          final tapY = event.localPosition.dy;
+          final headerZone = MediaQuery.of(context).padding.top + 80;
+          final replyZone = screenHeight - 120;
+          final inControlsZone = tapY < headerZone || tapY > replyZone;
+          // Si fue un tap rápido y casi sin movimiento → navegar (excepto en controles).
+          if (heldMs < 250 && moved < 12 && !inControlsZone) {
+            if (_replyFocusNode.hasFocus) {
+              _replyFocusNode.unfocus();
+              _resumeStoryTimer();
+              return;
+            }
+            final screenWidth = MediaQuery.of(context).size.width;
+            final tapX = event.localPosition.dx;
+            if (tapX < screenWidth / 3) {
+              _previousStory();
+            } else if (tapX > screenWidth * 2 / 3) {
+              _nextStory();
+            } else {
+              _resumeStoryTimer();
+            }
           } else {
+            // Hold o tap en zona de controles → solo reanudar (los controles
+            // manejan su propio onTap; el menú de 3 puntos manejará el pause).
             _resumeStoryTimer();
           }
         },
-        onTapCancel: _isBottomSheetOpen ? null : () {
-          _gestureStartPosition = null;
+        onPointerCancel: _isBottomSheetOpen ? null : (_) {
+          _pointerDownAt = null;
+          _pointerDownPos = null;
           _resumeStoryTimer();
         },
+        child: GestureDetector(
+        // Solo manejamos vertical drag aquí (tap lo hace el Listener).
         // Solo swipe vertical para cerrar (el horizontal lo maneja el PageView)
         onVerticalDragStart: _isBottomSheetOpen ? null : (_) {
           _pauseStoryTimer();
@@ -1854,6 +1915,7 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         ),
           ),
         ),
+      ),
       ),
     );
   }

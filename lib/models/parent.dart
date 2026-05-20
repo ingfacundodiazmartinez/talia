@@ -173,6 +173,7 @@ class Parent extends User {
     FirebaseFunctions.instance
         .httpsCallable('syncParentDataToChildren')
         .call()
+        .then((_) {})
         .catchError((e) {
       ReleaseLogger.log('⚠️ Error sincronizando foto a hijos: $e', tag: 'Parent');
     });

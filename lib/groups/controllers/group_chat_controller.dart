@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 import '../models/models.dart';
 import '../services/services.dart';
 import '../services/group_message_cache_service.dart';
 import '../../services/reaction_service.dart';  // ✅ NEW: For reactions
+import '../../services/media_compression_service.dart';
 // ✅ Nuevos servicios atómicos
 import '../../services/chats/chat_services.dart';
 import '../../utils/release_logger.dart';
@@ -320,6 +324,18 @@ class GroupChatController {
 
   /// Merge Firestore messages with cached messages
   void _mergeAndCacheMessages(List<GroupMessage> firestoreMessages) {
+    // ✅ Filtro unificado por visibleTo (mismo criterio que chats 1-1):
+    // - Mensajes propios: siempre visibles para el sender.
+    // - Mensajes ajenos: solo si visibleTo es null o me incluye.
+    // Esto cubre tanto bloqueos (sender en grupos con miembros que lo bloquearon)
+    // como moderación pendiente (visibleTo=[senderId] hasta que CF apruebe).
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUid != null) {
+      firestoreMessages = firestoreMessages
+          .where((m) => m.senderId == currentUid || m.isVisibleTo(currentUid))
+          .toList();
+    }
+
     // Guardar mensajes nuevos en cache
     _cacheService.saveMessages(groupId, firestoreMessages);
 
@@ -515,14 +531,142 @@ class GroupChatController {
         clearReply();
         return true;
       } else {
-        _setError('Error enviando mensaje');
+        _setError('Error enviando mensaje (messageId null)');
         return false;
       }
-    } catch (e) {
-      _setError('Error enviando mensaje: $e');
+    } catch (e, stack) {
+      // ✅ DEBUG: incluir tipo y mensaje específico para diagnóstico via snackbar
+      _setError('Error: ${e.runtimeType} → $e');
+      ReleaseLogger.error(
+        'sendMediaMessage threw: $e',
+        error: e,
+        stackTrace: stack,
+        tag: 'GroupChatController',
+      );
       return false;
     } finally {
       _setSending(false);
+    }
+  }
+
+  /// Pick image from source, upload to Storage, and send. Handles optimistic UI.
+  /// Returns true on success, false on failure (optimistic message removed automatically).
+  Future<bool> sendImageFromPicker(ImageSource source) async {
+    final picker = ImagePicker();
+    final XFile? image = await picker.pickImage(
+      source: source,
+      maxWidth: 1080,
+      maxHeight: 1080,
+      imageQuality: 85,
+    );
+    if (image == null) return false;
+
+    return _uploadAndSendMedia(
+      localPath: image.path,
+      isVideo: false,
+    );
+  }
+
+  /// Pick video from gallery, upload to Storage, and send. Handles optimistic UI.
+  Future<bool> sendVideoFromPicker() async {
+    final picker = ImagePicker();
+    final XFile? video = await picker.pickVideo(
+      source: ImageSource.gallery,
+      maxDuration: const Duration(minutes: 2),
+    );
+    if (video == null) return false;
+
+    return _uploadAndSendMedia(
+      localPath: video.path,
+      isVideo: true,
+    );
+  }
+
+  /// Common path: optimistic → upload → send. Used by both image and video.
+  Future<bool> _uploadAndSendMedia({
+    required String localPath,
+    required bool isVideo,
+  }) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return false;
+
+    // Get sender info (cached or from Firestore)
+    final userDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUser.uid)
+        .get();
+    final userData = userDoc.data();
+    final senderName = userData?['name'] ?? currentUser.displayName ?? 'Usuario';
+    final senderPhotoURL = userData?['photoURL'] ?? currentUser.photoURL;
+
+    // Optimistic message
+    final tempId = 'temp_${isVideo ? 'video' : 'image'}_${DateTime.now().millisecondsSinceEpoch}';
+    final optimisticMessage = GroupMessage(
+      id: tempId,
+      senderId: currentUser.uid,
+      senderName: senderName,
+      senderPhotoURL: senderPhotoURL,
+      localImagePath: localPath,
+      isOptimistic: true,
+      timestamp: DateTime.now(),
+      isDeleted: false,
+      reactions: {},
+      readBy: [],
+    );
+    addOptimisticMessage(optimisticMessage);
+
+    try {
+      // Compress image if applicable (videos pass through)
+      File fileToUpload = File(localPath);
+      if (!isVideo) {
+        final compressed = await MediaCompressionService().compressImage(fileToUpload);
+        fileToUpload = compressed ?? fileToUpload;
+      }
+
+      // Upload to Firebase Storage
+      final folder = isVideo ? 'videos' : 'images';
+      final ext = isVideo ? 'mp4' : 'jpg';
+      final contentType = isVideo ? 'video/mp4' : 'image/jpeg';
+      final fileName = '${isVideo ? 'vid' : 'img'}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('groups_v2/$groupId/${currentUser.uid}/$folder/$fileName');
+
+      final uploadTask = await storageRef.putFile(
+        fileToUpload,
+        SettableMetadata(contentType: contentType),
+      );
+      final mediaUrl = await uploadTask.ref.getDownloadURL();
+
+      // Send via existing sendMediaMessage (handles moderation + optimistic reconciliation by localId)
+      final ok = await sendMediaMessage(
+        imageUrl: isVideo ? null : mediaUrl,
+        videoUrl: isVideo ? mediaUrl : null,
+        senderName: senderName,
+        senderPhotoURL: senderPhotoURL,
+        localId: tempId,
+      );
+
+      if (!ok) {
+        _removeOptimisticMessage(tempId);
+      } else {
+        ReleaseLogger.log(
+          '${isVideo ? 'Video' : 'Image'} sent to group $groupId',
+          tag: 'GroupChatController',
+        );
+      }
+      return ok;
+    } catch (e, stack) {
+      _removeOptimisticMessage(tempId);
+      _setError('Error: ${e.runtimeType} → $e');
+      ReleaseLogger.error(
+        '_uploadAndSendMedia threw: $e',
+        error: e,
+        stackTrace: stack,
+        tag: 'GroupChatController',
+      );
+      return false;
     }
   }
 

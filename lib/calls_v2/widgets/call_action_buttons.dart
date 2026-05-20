@@ -1,7 +1,7 @@
-/// Call Action Buttons Widget
-///
-/// Displays accept and decline buttons for incoming calls.
-/// ✅ PHASE 1C: Provides clear, accessible call controls.
+// Call Action Buttons Widget
+//
+// Displays accept and decline buttons for incoming calls.
+// ✅ PHASE 1C: Provides clear, accessible call controls.
 
 import 'package:flutter/material.dart';
 
@@ -12,12 +12,12 @@ class CallActionButtons extends StatelessWidget {
   final bool isLoading;
 
   const CallActionButtons({
-    Key? key,
+    super.key,
     required this.onAccept,
     required this.onDecline,
     this.isVideo = true,
     this.isLoading = false,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -53,13 +53,12 @@ class _CallActionButton extends StatelessWidget {
   final bool isLoading;
 
   const _CallActionButton({
-    Key? key,
     required this.onPressed,
     required this.backgroundColor,
     required this.icon,
     required this.label,
     this.isLoading = false,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -68,10 +67,10 @@ class _CallActionButton extends StatelessWidget {
       children: [
         // Large circular button
         Material(
-          color: backgroundColor.withOpacity(onPressed == null ? 0.5 : 1.0),
+          color: backgroundColor.withValues(alpha: onPressed == null ? 0.5 : 1.0),
           shape: const CircleBorder(),
           elevation: onPressed == null ? 0 : 8,
-          shadowColor: backgroundColor.withOpacity(0.4),
+          shadowColor: backgroundColor.withValues(alpha: 0.4),
           child: InkWell(
             onTap: onPressed,
             customBorder: const CircleBorder(),

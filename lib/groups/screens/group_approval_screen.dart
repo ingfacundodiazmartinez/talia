@@ -18,6 +18,11 @@ class GroupApprovalScreen extends StatefulWidget {
 class _GroupApprovalScreenState extends State<GroupApprovalScreen> {
   late GroupApprovalController _controller;
 
+  // Selection mode (bulk approve/reject)
+  final Set<String> _selectedIds = {};
+  bool _isBulkProcessing = false;
+  bool get _isSelecting => _selectedIds.isNotEmpty;
+
   @override
   void initState() {
     super.initState();
@@ -124,16 +129,153 @@ class _GroupApprovalScreenState extends State<GroupApprovalScreen> {
     }
   }
 
+  // ──────── Selection mode (bulk approve/reject) ────────
+
+  void _toggleSelection(String requestId) {
+    setState(() {
+      if (_selectedIds.contains(requestId)) {
+        _selectedIds.remove(requestId);
+      } else {
+        _selectedIds.add(requestId);
+      }
+    });
+  }
+
+  void _clearSelection() {
+    setState(() => _selectedIds.clear());
+  }
+
+  Future<void> _bulkApproveSelected() async {
+    if (_selectedIds.isEmpty || _isBulkProcessing) return;
+    final ids = _selectedIds.toList();
+
+    setState(() => _isBulkProcessing = true);
+
+    int success = 0;
+    int failed = 0;
+    for (final id in ids) {
+      try {
+        final ok = await _controller.approveRequest(id);
+        if (ok) {
+          success++;
+        } else {
+          failed++;
+        }
+      } catch (_) {
+        failed++;
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _selectedIds.clear();
+      _isBulkProcessing = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failed > 0
+            ? '$success aprobadas, $failed con error'
+            : '$success solicitud${success == 1 ? '' : 'es'} aprobada${success == 1 ? '' : 's'}'),
+        backgroundColor: failed > 0 ? Colors.orange : Colors.green,
+      ),
+    );
+  }
+
+  Future<void> _bulkRejectSelected() async {
+    if (_selectedIds.isEmpty || _isBulkProcessing) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rechazar solicitudes'),
+        content: Text('¿Rechazar ${_selectedIds.length} solicitud${_selectedIds.length == 1 ? '' : 'es'}? Tu hijo no podrá unirse a estos grupos.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Rechazar todas'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final ids = _selectedIds.toList();
+    setState(() => _isBulkProcessing = true);
+
+    int success = 0;
+    int failed = 0;
+    for (final id in ids) {
+      try {
+        final ok = await _controller.rejectRequest(id);
+        if (ok) {
+          success++;
+        } else {
+          failed++;
+        }
+      } catch (_) {
+        failed++;
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _selectedIds.clear();
+      _isBulkProcessing = false;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(failed > 0
+            ? '$success rechazadas, $failed con error'
+            : '$success rechazada${success == 1 ? '' : 's'}'),
+        backgroundColor: failed > 0 ? Colors.orange : Colors.green,
+      ),
+    );
+  }
+
+  PreferredSizeWidget _buildSelectionAppBar(ColorScheme colorScheme) {
+    return AppBar(
+      backgroundColor: colorScheme.primary,
+      foregroundColor: Colors.white,
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: _isBulkProcessing ? null : _clearSelection,
+        tooltip: 'Cancelar selección',
+      ),
+      title: Text('${_selectedIds.length} seleccionada${_selectedIds.length == 1 ? '' : 's'}'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.close_rounded),
+          onPressed: _isBulkProcessing ? null : _bulkRejectSelected,
+          tooltip: 'Rechazar todas',
+        ),
+        IconButton(
+          icon: const Icon(Icons.check_rounded),
+          onPressed: _isBulkProcessing ? null : _bulkApproveSelected,
+          tooltip: 'Aprobar todas',
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: colorScheme.primary,
-        foregroundColor: Colors.white,
-        title: const Text('Aprobaciones de Grupos'),
-      ),
+      appBar: _isSelecting
+          ? _buildSelectionAppBar(colorScheme)
+          : AppBar(
+              backgroundColor: colorScheme.primary,
+              foregroundColor: Colors.white,
+              title: const Text('Aprobaciones de Grupos'),
+            ),
       body: _buildBody(colorScheme),
     );
   }
@@ -198,12 +340,17 @@ class _GroupApprovalScreenState extends State<GroupApprovalScreen> {
 
   Widget _buildRequestCard(ColorScheme colorScheme, GroupApprovalRequest request) {
     final daysRemaining = request.expiresAt.difference(DateTime.now()).inDays;
+    final isSelected = _selectedIds.contains(request.id);
 
-    return Card(
+    final card = Card(
       margin: const EdgeInsets.only(bottom: 16),
       elevation: 2,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isSelected ? colorScheme.primary : Colors.transparent,
+          width: 2,
+        ),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -416,6 +563,31 @@ class _GroupApprovalScreenState extends State<GroupApprovalScreen> {
             ),
           ],
         ),
+      ),
+    );
+
+    return GestureDetector(
+      onLongPress: _isBulkProcessing ? null : () => _toggleSelection(request.id),
+      onTap: _isSelecting ? () => _toggleSelection(request.id) : null,
+      child: Stack(
+        children: [
+          card,
+          if (isSelected)
+            Positioned(
+              top: 12,
+              right: 12,
+              child: Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  color: colorScheme.primary,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                ),
+                child: const Icon(Icons.check, color: Colors.white, size: 16),
+              ),
+            ),
+        ],
       ),
     );
   }

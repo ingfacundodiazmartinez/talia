@@ -26,10 +26,6 @@ class PhoneVerificationService {
   // Configuración
   static const int _verificationTimeoutSeconds = 60;
 
-  // Control de sistema de pruebas - false para SMS reales
-  static const bool _useTestNumbers =
-      false; // <-- Cambiado para recibir SMS reales
-
   // Estados de verificación
   bool get isVerificationInProgress => _verificationId != null;
 

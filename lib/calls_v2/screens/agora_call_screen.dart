@@ -1,7 +1,7 @@
-/// Agora Call Screen - Custom UI for video/audio calls
-///
-/// This screen provides a custom UI for Agora RTC Engine calls
-/// with video rendering, call controls, and participant management.
+// Agora Call Screen - Custom UI for video/audio calls
+//
+// This screen provides a custom UI for Agora RTC Engine calls
+// with video rendering, call controls, and participant management.
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -21,6 +21,7 @@ import '../services/add_participant_service.dart';
 import '../../services/voip_service.dart';
 import '../../services/ringtone_service.dart';
 import '../../services/app_config_service.dart';
+import '../../services/bottom_nav_visibility.dart';
 import '../../utils/release_logger.dart';
 
 class AgoraCallScreen extends StatefulWidget {
@@ -34,7 +35,7 @@ class AgoraCallScreen extends StatefulWidget {
   final bool? isGroup;
 
   const AgoraCallScreen({
-    Key? key,
+    super.key,
     this.callId,
     required this.isIncoming,
     this.initialCall,
@@ -42,8 +43,7 @@ class AgoraCallScreen extends StatefulWidget {
     this.isVideo,
     this.isGroup,
   }) : assert(callId != null || (participantIds != null && isVideo != null),
-            'Either callId or (participantIds + isVideo) must be provided'),
-       super(key: key);
+            'Either callId or (participantIds + isVideo) must be provided');
 
   /// Constructor for existing call
   const AgoraCallScreen.existing({
@@ -123,6 +123,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
   @override
   void initState() {
     super.initState();
+    BottomNavVisibility.instance.registerFullScreen();
     _enableWakeLock();
     _initializeCall();
     _listenToCallKitEnded();
@@ -424,7 +425,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
         final result = await _callController.acceptCall(widget.callId!);
         if (!result.success) {
           _showError(result.error ?? 'Error al unirse a la llamada');
-          Navigator.of(context, rootNavigator: true).pop();
+          if (mounted) Navigator.of(context, rootNavigator: true).pop();
           return;
         }
 
@@ -473,7 +474,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
                 tag: _tag,
               );
               _showError(joinResult.error ?? 'Error al unirse a la llamada');
-              Navigator.of(context, rootNavigator: true).pop();
+              if (mounted) Navigator.of(context, rootNavigator: true).pop();
               return;
             }
             ReleaseLogger.log('✅ [VoIP Flow] Successfully joined Agora channel', tag: _tag);
@@ -535,7 +536,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
     } catch (e) {
       ReleaseLogger.error('Failed to initialize call', error: e, tag: _tag);
       _showError('Error al iniciar la llamada');
-      Navigator.of(context, rootNavigator: true).pop();
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
     }
   }
 
@@ -677,7 +678,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
     } catch (e) {
       ReleaseLogger.error('Failed to create call', error: e, tag: _tag);
       _showError('Error al crear la llamada');
-      Navigator.of(context, rootNavigator: true).pop();
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
     }
   }
 
@@ -1192,7 +1193,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
             end: Alignment.bottomCenter,
             colors: [
               Colors.transparent,
-              Colors.black.withOpacity(0.7),
+              Colors.black.withValues(alpha: 0.7),
             ],
           ),
         ),
@@ -1350,7 +1351,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
               ),
             // Semi-transparent overlay
             Container(
-              color: Colors.black.withOpacity(0.7),
+              color: Colors.black.withValues(alpha: 0.7),
             ),
             // Error message and retry button
             Center(
@@ -1435,7 +1436,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
               ),
             // Semi-transparent overlay
             Container(
-              color: Colors.black.withOpacity(0.7),
+              color: Colors.black.withValues(alpha: 0.7),
             ),
             // Busy message
             Center(
@@ -1448,7 +1449,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
                     Container(
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
-                        color: Colors.orange.withOpacity(0.2),
+                        color: Colors.orange.withValues(alpha: 0.2),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(
@@ -1645,6 +1646,7 @@ class _AgoraCallScreenState extends State<AgoraCallScreen> {
 
   @override
   void dispose() {
+    BottomNavVisibility.instance.unregisterFullScreen();
     ReleaseLogger.log('🗑️ [AgoraCallScreen] Disposing screen...', tag: _tag);
 
     // ✅ FIX: Cancel busy auto-end timer

@@ -136,10 +136,6 @@ class GroupChatAppBarController {
         );
       }
 
-      // Obtener nombre del usuario actual
-      final currentUserDoc = await _firestore.collection('users').doc(currentUserId).get();
-      final currentUserName = currentUserDoc.data()?['name'] ?? 'Usuario';
-
       // Construir mapa de nombres de participantes
       final participantNames = <String, String>{};
       for (String participantId in participantIds) {

@@ -1,0 +1,713 @@
+═══════════════════════════════════════════════════════════════
+CODEPREP - Registro de Query
+═══════════════════════════════════════════════════════════════
+
+Fecha: 2026-01-24 23:28:01
+Proyecto: /Users/olagg/Personal/talia
+
+─── MÉTRICAS REALES ───
+Input tokens:       10,402
+Output tokens:      3,870
+Cache creado:       0
+Cache leído:        0
+TOTAL:              14,272 tokens
+Costo:              $0.0025 USD
+Tiempo:             121.3s
+
+─── QUERY ───
+Este proyecto se genero con claude puro, sin codeprep. Necesito que identifiques donde hay queries a firestore que no sean nada performantes. Por ejemplo, loops de x usuarios donde por cada iteracion se haga una query
+
+─── CONTEXTO ENVIADO ───
+# Contexto Pre-procesado por Cliente Local
+
+*Este contexto fue compilado por un modelo local (7B) para optimizar tu razonamiento.*
+
+## 📋 Reglas del Proyecto (CLAUDE.md)
+*Estas reglas son OBLIGATORIAS. Violaciones = código rechazado.*
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Reglas por Capa:**
+- **Screen** - PROHIBIDO: `FirebaseFirestore.instance.collection(...)`, `FirebaseFunctions.instance.httpsCallable(...)`, Direct calls to Services
+
+**Prohibiciones Globales:**
+- ❌ print() - usar ReleaseLogger
+- ❌ debugPrint() - usar ReleaseLogger
+- ❌ Firestore directo en Screen - usar Controller
+- ❌ Functions directo en Screen - usar Controller
+- ❌ Llamadas directas a Services desde Screen
+
+**Servicios Documentados:**
+- `notificationService`: NotificationService(),
+- `videoCallService`: VideoCallService(),
+- `autoApprovalService`: AutoApprovalService(),
+
+## 📊 Inventario del Proyecto
+
+**Archivos:** 596 | **Líneas:** 205,966
+**Lenguajes:** .dart: 504, .js: 84, .py: 7, .rb: 1
+
+### Services (203)
+- `GeminiAIService` → lib/gemini_ai_service.dart
+- `NotificationService` → lib/notification_service.dart
+- `ThemeService` → lib/theme_service.dart
+- `MessageReportService` → lib/services/message_report_service.dart
+- `GroupService` → lib/services/group_service.dart
+- `BlockService` → lib/services/block_service.dart
+- `DeepARService` → lib/services/deepar_service.dart
+- `CallKitService` → lib/services/callkit_service.dart
+- `StoryService` → lib/services/story_service_refactored.dart
+- `PermissionService` → lib/services/permission_service.dart
+- ... y 193 más
+
+### Controllers (44)
+- `GroupChatController` → lib/controllers/group_chat_controller.dart
+- `ChatsController` → lib/controllers/chats_controller.dart
+- `ChildContactsController` → lib/controllers/child_contacts_controller.dart
+- `ChildMainShellController` → lib/controllers/child_main_shell_controller.dart
+- `BaseChatsController` → lib/controllers/base_chats_controller.dart
+- `MessageInfoController` → lib/controllers/message_info_controller.dart
+- `ShareTargetController` → lib/controllers/share_target_controller.dart
+- `ChatAppBarController` → lib/controllers/chat_app_bar_controller.dart
+- `ChildHomeController` → lib/controllers/child_home_controller.dart
+- `StoryCameraController` → lib/controllers/story_camera_controller.dart
+- ... y 34 más
+
+### 🔄 Clases con Nombres Similares
+- ***CacheService** (13): UICacheService, UserCacheService, UserProfileCacheService, ShareExtensionCacheService, WaveformCacheService
+- ***ChatService** (9): GroupChatService, CreateChatService, ClearChatService, UnmuteChatService, ArchiveChatService
+- ***ContactService** (7): ContactService, RejectWhitelistContactService, ApproveWhitelistContactService, ReapproveWhitelistContactService, RevokeWhitelistContactService
+- ***GroupService** (6): GroupService, DeleteGroupService, LeaveGroupService, CreateGroupService, UpdateGroupService
+- ***ChatsController** (6): ChatsController, BaseChatsController, ParentChatsController, ParentArchivedChatsController, ChildChatsController
+
+## Proyecto
+Proyecto Flutter/Dart en /Users/olagg/Personal/talia
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Convenciones:**
+- Controllers usan ChangeNotifier
+- Modelos en lib/models/
+
+## Análisis Previo (modelo local)
+*Confianza del análisis: 50%*
+
+### Pensamiento inicial
+Tarea de modificación: Este proyecto se genero con claude puro, sin codeprep. Necesito que identifiques donde hay queries a firestore que no sean nada performantes. Por ejemplo, loops de x usuarios donde por cada iteracion se haga una query
+
+### Módulos relevantes
+- `/Users/olagg/Personal/talia/lib/utils/release_logger.dart`
+- `/Users/olagg/Personal/talia/lib/main.dart`
+- `/Users/olagg/Personal/talia/functions/sticker-sync-service.js`
+
+### Patrones observados en el proyecto
+- Screen → Controller → Service → Model
+
+### Borrador de approach
+Implementar modificación siguiendo la arquitectura del proyecto.
+
+### Puntos que requieren tu análisis
+- ¿Qué archivos específicos debo modificar?
+- ¿Hay widgets o servicios existentes que deba reutilizar?
+
+## ⚠️ Anti-Frankenstein: NO DUPLIQUES
+*El modelo local analizó TODO el proyecto y encontró código reutilizable.*
+
+### Código que DEBES reutilizar (no crear de nuevo)
+- **`initAppConfig`** en `/Users/olagg/Personal/talia/functions/scripts/init-app-config.js`
+  - Propósito: function en init-app-config.js
+  - Firma: `async function initAppConfig()`
+  - Relevancia: 69%
+- **`deleteVoIPToken`** en `/Users/olagg/Personal/talia/scripts/delete_voip_token.js`
+  - Propósito: function en delete_voip_token.js
+  - Firma: `async function deleteVoIPToken()`
+  - Relevancia: 68%
+- **`migrateSticker`** en `/Users/olagg/Personal/talia/scripts/migrate_stickers_to_storage.js`
+  - Propósito: extension en migrate_stickers_to_storage.js
+  - Firma: `function migrateSticker(stickerId, stickerData)`
+  - Relevancia: 67%
+- **`activateExtraChildForUser`** en `/Users/olagg/Personal/talia/functions/iap-verification.js`
+  - Propósito: function en iap-verification.js
+  - Firma: `function activateExtraChildForUser(userId, expiryTimeMillis, platform, productId)`
+  - Relevancia: 66%
+- **`deleteAdultAccount`** en `/Users/olagg/Personal/talia/functions/account-deletion.js`
+  - Propósito: function en account-deletion.js
+  - Firma: `function deleteAdultAccount(db, storage, userId, userData)`
+  - Relevancia: 66%
+
+### Patrones del Proyecto (DEBES seguir)
+- **Singletons:** Mixto o no detectado
+- **Clases base:** CustomPainter
+- **State management:** No detectado
+- **Naming:** Sufijos comunes: {'Widget': 3, 'Service': 2}
+
+### ⚠️ Advertencias
+- Clases base comunes: CustomPainter
+- State management: No detectado
+
+### 🧟 Código Duplicado EXISTENTE (Frankenstein actual)
+*El proyecto YA tiene este código duplicado. NO agregues otra copia.*
+
+**Manejo de errores de Firebase** (10 copias)
+  - `test/test_helpers.dart:41`
+  - `lib/main.dart:142`
+  - `lib/notification_service.dart:79`
+  - 💡 **Refactor sugerido:** Crear FirebaseErrorHandler centralizado
+
+**Validación de null con early return/throw** (386 copias)
+  - `lib/link_parent_child.dart:88`
+  - `lib/link_parent_child.dart:116`
+  - `lib/link_parent_child.dart:158`
+  - 💡 **Refactor sugerido:** Usar extensión o helper de validación
+
+**Validación de strings vacíos/null** (52 copias)
+  - `lib/link_parent_child.dart:73`
+  - `lib/gemini_ai_service.dart:57`
+  - `lib/models/child.dart:17`
+  - 💡 **Refactor sugerido:** Crear StringUtils.isNullOrEmpty()
+
+**Formateo de tiempo relativo (hace X minutos/horas/días)** (33 copias)
+  - `lib/reports_screen.dart:503`
+  - `lib/reports_screen.dart:505`
+  - `lib/reports_screen.dart:507`
+  - 💡 **Refactor sugerido:** Crear DateTimeUtils.formatRelative(DateTime) -> String
+
+**Formateo de fechas con DateFormat** (8 copias)
+  - `lib/screens/reported_messages_screen.dart:173`
+  - `lib/screens/message_info_screen.dart:315`
+  - `lib/screens/message_info_screen.dart:318`
+  - 💡 **Refactor sugerido:** Crear DateTimeUtils con formatos constantes
+
+**Manejo de estado de loading** (47 copias)
+  - `lib/screens/add_contact_screen.dart:284`
+  - `lib/screens/add_contact_screen.dart:343`
+  - `lib/screens/splash_wrapper.dart:40`
+  - 💡 **Refactor sugerido:** Usar mixin o helper de loading state
+
+## Código Relevante
+*10 archivos por relevancia semántica + 2 por grafo de dependencias*
+
+### `/Users/olagg/Personal/talia/lib/utils/release_logger.dart` 🔗 (relevancia: 0.90)
+```dart
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+class ReleaseLogger {
+  static ReleaseLogger? _instance;
+  static ReleaseLogger get instance {
+    _instance ??= ReleaseLogger._();
+    return _instance!;
+  }
+
+  File? _logFile;
+
+  ReleaseLogger._() {
+    _initializeLogger();
+  }
+
+  Future<void> _initializeLogger() async {
+    try {
+      debugPrint('📝 [ReleaseLogger] Logs escribiendo a: ${_logFile!.path}');
+    } catch (e) {
+      debugPrint('❌ [ReleaseLogger] Error inicializando logger: $e');
+    }
+  }
+
+  static void log(String messa...
+
+─── RESPUESTA DE CLAUDE ───
+Analizando el proyecto para identificar queries a Firestore no performantes. Voy a buscar patrones comunes de problemas de rendimiento en consultas a Firestore.
+
+## Análisis de Queries No Performantes
+
+Basándome en el código proporcionado y la arquitectura del proyecto, puedo identificar varios patrones problemáticos:
+
+### 1. **N+1 Query Problem en `clean_demo_data.js`**
+En `/Users/olagg/Personal/talia/scripts/clean_demo_data.js`:
+
+```javascript
+// PROBLEMA: N+1 queries en el loop
+for (const participantId of participants) {
+  const userDoc = await db.collection('users').doc(participantId).get(); // QUERY por cada participante
+  if (userDoc.exists && userDoc.data().isDemo === true) {
+    isDemoChat = true;
+    break;
+  }
+}
+```
+
+### 2. **Queries Individuales en Loops en `sticker-sync-service.js`**
+En `/Users/olagg/Personal/talia/functions/sticker-sync-service.js`:
+
+```javascript
+// PROBLEMA: Query individual por cada sticker
+const exists = await this.stickerExists(tenorId); // QUERY por cada sticker
+
+// Dentro de stickerExists:
+async stickerExists(tenorId) {
+  try {
+    const snapshot = await this.db
+      .collection('stickers')
+      .where('tenorId', '==', tenorId)
+      .limit(1)
+      .get(); // QUERY individual
+    return !snapshot.empty;
+  } catch (error) {
+    return false;
+  }
+}
+```
+
+### 3. **Patrón de Queries en Batch No Optimizadas**
+Analizando la estructura del proyecto, puedo identificar otros patrones problemáticos comunes:
+
+```
+[NEED_CONTEXT: archivos que contengan patrones de consulta a Firestore en loops, especialmente en servicios de chat, contactos y grupos]
+```
+
+## Propuesta de Refactorización
+
+### 1. **Crear Batch Query Service**
+
+```
+## EDIT: lib/services/firestore_batch_service.dart
+```dart
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:talia/utils/release_logger.dart';
+
+/// Servicio para optimizar queries a Firestore evitando N+1
+class FirestoreBatchService {
+  static final FirestoreBatchService _instance = FirestoreBatchService._internal();
+  factory FirestoreBatchService() => _instance;
+  FirestoreBatchService._internal();
+
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  /// Obtener múltiples documentos por IDs en una sola query
+  Future<Map<String, DocumentSnapshot>> getDocumentsByIds(
+    String collection,
+    List<String> ids, {
+    int batchSize = 30, // Firestore limita a 30 documentos por query "in"
+  }) async {
+    try {
+      final Map<String, DocumentSnapshot> result = {};
+      
+      // Procesar en batches debido a la limitación de Firestore (30 documentos por query "in")
+      for (int i = 0; i < ids.length; i += batchSize) {
+        final batchIds = ids.sublist(i, i + batchSize > ids.length ? ids.length : i + batchSize);
+        
+        if (batchIds.isEmpty) continue;
+        
+        final querySnapshot = await _firestore
+            .collection(collection)
+            .where(FieldPath.documentId, whereIn: batchIds)
+            .get();
+        
+        for (final doc in querySnapshot.docs) {
+          result[doc.id] = doc;
+        }
+        
+        // Pequeño delay entre batches para evitar rate limiting
+        if (i + batchSize < ids.length) {
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+      }
+      
+      ReleaseLogger.info('Batch query completada: ${result.length}/${ids.length} documentos obtenidos', 
+          tag: 'FirestoreBatchService');
+      return result;
+    } catch (e) {
+      ReleaseLogger.error('Error en batch query: $e', tag: 'FirestoreBatchService');
+      return {};
+    }
+  }
+
+  /// Verificar existencia de múltiples documentos
+  Future<Map<String, bool>> checkDocumentsExist(
+    String collection,
+    List<String> ids, {
+    String field = 'id',
+  }) async {
+    try {
+      final Map<String, bool> result = {};
+      
+      // Agrupar por valores únicos para usar whereIn
+      final uniqueValues = ids.toSet().toList();
+      
+      for (int i = 0; i < uniqueValues.length; i += 30) {
+        final batchValues = uniqueValues.sublist(
+          i, 
+          i + 30 > uniqueValues.length ? uniqueValues.length : i + 30
+        );
+        
+        final querySnapshot = await _firestore
+            .collection(collection)
+            .where(field, whereIn: batchValues)
+            .get();
+        
+        // Crear set de valores existentes
+        final existingValues = querySnapshot.docs
+            .map((doc) => doc.data()[field]?.toString())
+            .where((value) => value != null)
+            .toSet();
+        
+        for (final value in batchValues) {
+          result[value] = existingValues.contains(value);
+        }
+      }
+      
+      return result;
+    } catch (e) {
+      ReleaseLogger.error('Error verificando existencia: $e', tag: 'FirestoreBatchService');
+      return {};
+    }
+  }
+
+  /// Obtener documentos por campo específico en batch
+  Future<List<QueryDocumentSnapshot>> getDocumentsByFieldValues(
+    String collection,
+    String field,
+    List<dynamic> values, {
+    int limit = 100,
+  }) async {
+    try {
+      final List<QueryDocumentSnapshot> results = [];
+      
+      for (int i = 0; i < values.length; i += 30) {
+        final batchValues = values.sublist(
+          i, 
+          i + 30 > values.length ? values.length : i + 30
+        );
+        
+        final querySnapshot = await _firestore
+            .collection(collection)
+            .where(field, whereIn: batchValues)
+            .limit(limit)
+            .get();
+        
+        results.addAll(querySnapshot.docs);
+      }
+      
+      return results;
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo documentos por campo: $e', tag: 'FirestoreBatchService');
+      return [];
+    }
+  }
+}
+```
+
+### 2. **Refactorizar `clean_demo_data.js`**
+
+```
+## EDIT: scripts/clean_demo_data.js
+```javascript
+/**
+ * Limpiar subcollections optimizado
+ */
+async function cleanChatMessages() {
+  console.log('\n🔍 Limpiando mensajes de chats demo...');
+
+  const chatsSnapshot = await db.collection('chats').get();
+  let deletedChats = 0;
+
+  // Obtener todos los IDs de participantes únicos
+  const allParticipantIds = new Set();
+  const chatParticipantsMap = new Map(); // chatId -> [participantIds]
+
+  chatsSnapshot.docs.forEach(chatDoc => {
+    const participants = chatDoc.data().participants || [];
+    chatParticipantsMap.set(chatDoc.id, participants);
+    participants.forEach(id => allParticipantIds.add(id));
+  });
+
+  // BATCH QUERY: Obtener todos los usuarios demo en una sola consulta
+  const participantIdsArray = Array.from(allParticipantIds);
+  const userDocsMap = new Map();
+
+  // Procesar en batches de 30 (límite de Firestore para whereIn)
+  for (let i = 0; i < participantIdsArray.length; i += 30) {
+    const batchIds = participantIdsArray.slice(i, i + 30);
+    
+    const usersSnapshot = await db.collection('users')
+      .where(FieldPath.documentId, 'in', batchIds)
+      .get();
+
+    usersSnapshot.docs.forEach(userDoc => {
+      userDocsMap.set(userDoc.id, userDoc);
+    });
+  }
+
+  // Identificar chats demo
+  const demoChatIds = [];
+  for (const [chatId, participants] of chatParticipantsMap) {
+    let isDemoChat = false;
+    
+    // Verificar sin queries adicionales
+    for (const participantId of participants) {
+      const userDoc = userDocsMap.get(participantId);
+      if (userDoc && userDoc.data().isDemo === true) {
+        isDemoChat = true;
+        break;
+      }
+    }
+
+    if (isDemoChat) {
+      demoChatIds.push(chatId);
+    }
+  }
+
+  // Eliminar mensajes y chats en batch
+  console.log(`🗑️  Eliminando ${demoChatIds.length} chats demo...`);
+  
+  for (const chatId of demoChatIds) {
+    const chatRef = db.collection('chats').doc(chatId);
+    
+    // Eliminar mensajes en subcolección
+    const messagesSnapshot = await chatRef.collection('messages').get();
+    const messageBatch = db.batch();
+    messagesSnapshot.docs.forEach(msg => messageBatch.delete(msg.ref));
+    await messageBatch.commit();
+
+    // Eliminar chat
+    await chatRef.delete();
+    deletedChats++;
+  }
+
+  console.log(`✓ Eliminados ${deletedChats} chats demo`);
+}
+```
+
+### 3. **Refactorizar `sticker-sync-service.js`**
+
+```
+## EDIT: functions/sticker-sync-service.js
+```javascript
+  /**
+   * Verificar existencia de múltiples stickers en batch
+   */
+  async function checkMultipleStickersExist(tenorIds) {
+    try {
+      if (!tenorIds.length) return new Map();
+      
+      const existingStickers = new Map();
+      
+      // Procesar en batches de 30 (límite de Firestore)
+      for (let i = 0; i < tenorIds.length; i += 30) {
+        const batchIds = tenorIds.slice(i, i + 30);
+        
+        const snapshot = await this.db
+          .collection('stickers')
+          .where('tenorId', 'in', batchIds)
+          .get();
+        
+        snapshot.docs.forEach(doc => {
+          const tenorId = doc.data().tenorId;
+          existingStickers.set(tenorId, true);
+        });
+        
+        // Marcar los no encontrados como false
+        batchIds.forEach(id => {
+          if (!existingStickers.has(id)) {
+            existingStickers.set(id, false);
+          }
+        });
+        
+        // Delay para evitar rate limiting
+        if (i + 30 < tenorIds.length) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      }
+      
+      return existingStickers;
+    } catch (error) {
+      console.error('❌ Error verificando stickers en batch:', error.message);
+      return new Map();
+    }
+  }
+
+  /**
+   * Procesar stickers en batch optimizado
+   */
+  async processStickersBatch(results, categoryKey, query) {
+    try {
+      const tenorIds = results.map(result => result.id);
+      
+      // BATCH QUERY: Verificar existencia de todos los stickers
+      const existingStickers = await this.checkMultipleStickersExist(tenorIds);
+      
+      const stickersToProcess = results.filter(result => 
+        !existingStickers.get(result.id)
+      );
+      
+      console.log(`⏭️  ${results.length - stickersToProcess.length} stickers ya existen, procesando ${stickersToProcess.length} nuevos`);
+      
+      const processedStickers = [];
+      
+      // Procesar stickers nuevos en paralelo (con límite)
+      const concurrencyLimit = 3;
+      for (let i = 0; i < stickersToProcess.length; i += concurrencyLimit) {
+        const batch = stickersToProcess.slice(i, i + concurrencyLimit);
+        
+        const batchPromises = batch.map(result => 
+          this.processSticker(result, categoryKey, query)
+        );
+        
+        const batchResults = await Promise.allSettled(batchPromises);
+        
+        batchResults.forEach((result, index) => {
+          if (result.status === 'fulfilled' && result.value) {
+            processedStickers.push(result.value);
+          }
+        });
+        
+        // Delay entre batches
+        if (i + concurrencyLimit < stickersToProcess.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+      
+      return {
+        processed: processedStickers,
+        skipped: results.length - stickersToProcess.length,
+        failed: stickersToProcess.length - processedStickers.length
+      };
+    } catch (error) {
+      console.error('❌ Error procesando stickers en batch:', error.message);
+      return { processed: [], skipped: 0, failed: results.length };
+    }
+  }
+
+  /**
+   * Sincronizar categoría optimizada
+   */
+  async syncCategoryOptimized(categoryKey, limit = 10) {
+    const category = STICKER_CATEGORIES[categoryKey];
+    if (!category) {
+      console.error(`❌ Categoría no encontrada: ${categoryKey}`);
+      return { success: 0, failed: 0, skipped: 0 };
+    }
+
+    console.log(`\n📦 Sincronizando categoría: ${category.name}`);
+    console.log(`   Queries: ${category.queries.join(', ')}`);
+
+    let totalSuccess = 0;
+    let totalFailed = 0;
+    let totalSkipped = 0;
+
+    for (const query of category.queries) {
+      console.log(`\n🔍 Procesando query: "${query}"`);
+
+      // Buscar stickers
+      const results = await this.searchStickers(query, limit);
+      
+      if (results.length === 0) continue;
+
+      // Procesar en batch
+      const batchResult = await this.processStickersBatch(results, categoryKey, query);
+      
+      totalSuccess += batchResult.processed.length;
+      totalSkipped += batchResult.skipped;
+      totalFailed += batchResult.failed;
+    }
+
+    console.log(`\n✅ Categoría ${category.name} completada:`);
+    console.log(`   ✓ Exitosos: ${totalSuccess}`);
+    console.log(`   ⏭️  Saltados: ${totalSkipped}`);
+    console.log(`   ✗ Fallidos: ${totalFailed}`);
+
+    return {
+      success: totalSuccess,
+      failed: totalFailed,
+      skipped: totalSkipped,
+    };
+  }
+```
+
+## Archivos Adicionales a Revisar
+
+Basándome en la estructura del proyecto, estos archivos probablemente contengan problemas similares:
+
+```
+[NEED_CONTEXT: lib/services/contact_service.dart para verificar queries en loops de contactos]
+[NEED_CONTEXT: lib/services/group_service.dart para verificar queries en manejo de grupos]
+[NEED_CONTEXT: lib/services/chats/services/chat_retrieval_service.dart para verificar queries de mensajes]
+[NEED_CONTEXT: lib/services/notification_service.dart para verificar queries de notificaciones]
+```
+
+## Recomendaciones Adicionales
+
+### 1. **Implementar Cache de Nivel de Servicio**
+```dart
+// En cada servicio que haga queries frecuentes
+class OptimizedContactService {
+  final _userCache = <String, UserData>{};
+  final _cacheDuration = Duration(minutes: 5);
+  final _lastFetchTime = <String, DateTime>{};
+  
+  Future<UserData> getUserData(String userId) async {
+    // Verificar cache primero
+    if (_userCache.containsKey(userId)) {
+      final lastFetch = _lastFetchTime[userId];
+      if (lastFetch != null && 
+          DateTime.now().difference(lastFetch) < _cacheDuration) {
+        return _userCache[userId]!;
+      }
+    }
+    
+    // Si no está en cache o expiró, hacer query
+    final userData = await _fetchUserData(userId);
+    _userCache[userId] = userData;
+    _lastFetchTime[userId] = DateTime.now();
+    return userData;
+  }
+}
+```
+
+### 2. **Usar Streams para Datos en Tiempo Real**
+```dart
+// En lugar de polls periódicos
+Stream<List<ChatMessage>> listenToChatMessages(String chatId) {
+  return _firestore
+      .collection('chats')
+      .doc(chatId)
+      .collection('messages')
+      .orderBy('timestamp', descending: true)
+      .limit(50)
+      .snapshots()
+      .map((snapshot) => snapshot.docs.map(_convertToMessage).toList());
+}
+```
+
+### 3. **Implementar Paginación Eficiente**
+```dart
+Future<List<ChatMessage>> loadMessages({
+  required String chatId,
+  required ChatMessage lastMessage,
+  int limit = 20,
+}) async {
+  return await _firestore
+      .collection('chats')
+      .doc(chatId)
+      .collection('messages')
+      .orderBy('timestamp', descending: true)
+      .startAfter([lastMessage.timestamp])
+      .limit(limit)
+      .get()
+      .then((snapshot) => snapshot.docs.map(_convertToMessage).toList());
+}
+```
+
+## Métricas de Mejora Esperada
+
+| Patrón Problemático | Queries Antes | Queries Después | Reducción |
+|-------------------|---------------|-----------------|-----------|
+| N+1 en loops | N queries | 1-3 queries | 70-95% |
+| Verificación individual | 1 por item | 1 por batch (30 items) | 96.7% |
+| Cache misses frecuentes | 100% queries | 20-30% queries | 70-80% |
+
+¿Quieres que implemente primero el `FirestoreBatchService` y luego refactorice los archivos específicos que identifiquemos con más contexto?
+
+═══════════════════════════════════════════════════════════════

@@ -60,7 +60,6 @@ class BackgroundLocationService {
     try {
       await wm.Workmanager().initialize(
         callbackDispatcher,
-        isInDebugMode: false, // Cambiar a true para debug
       );
     } catch (e) {
       ReleaseLogger.error('Error inicializando WorkManager: $e', tag: 'BackgroundLocation');
@@ -168,8 +167,10 @@ class BackgroundLocationService {
 
       // Obtener ubicación actual con configuración optimizada
       Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: Duration(seconds: 30), // Timeout para evitar bloqueos
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 30), // Timeout para evitar bloqueos
+        ),
       );
 
       // Filtrar ubicaciones para evitar actualizaciones innecesarias

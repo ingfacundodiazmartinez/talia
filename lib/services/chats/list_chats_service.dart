@@ -33,7 +33,7 @@ class ListChatsService {
   /// [includeArchived] - Incluir chats archivados (default: false)
   /// [includeDeleted] - Incluir chats eliminados (default: false)
   ///
-  /// Retorna Stream<List<Chat>> ordenado por lastActivity descendente
+  /// Retorna `Stream<List<Chat>>` ordenado por lastActivity descendente
   Stream<List<Chat>> call({
     int limit = 50,
     DocumentSnapshot? startAfter,
@@ -166,7 +166,7 @@ class ListChatsService {
   /// Contar chats no leídos
   int countUnreadChats() {
     final counts = _preferencesCache.getAllUnreadCounts();
-    return counts.values.where((count) => count > 0).length;
+    return counts.values.where((cnt) => cnt > 0).length;
   }
 
   /// Total de mensajes no leídos

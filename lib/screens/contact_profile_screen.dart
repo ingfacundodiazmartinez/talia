@@ -1,6 +1,8 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import '../controllers/contact_profile_controller.dart';
 import '../models/contact_user.dart';
+import '../services/block_service.dart';
 import '../widgets/profile_photo_viewer.dart';
 import 'child/profile/widgets/media_gallery_widget.dart';
 import '../calls_v2/screens/agora_call_screen.dart';
@@ -38,7 +40,6 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   bool _isLoadingStoryNotifications = true;
 
   // Friend status
-  bool _isFriendWith = false;
   String _friendStatus = 'none';
   bool _isLoadingFriendStatus = true;
 
@@ -110,10 +111,9 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     };
 
     // Friend status callback
-    _controller.onFriendStatusChanged = (isFriend, status) {
+    _controller.onFriendStatusChanged = (_, status) {
       if (mounted) {
         setState(() {
-          _isFriendWith = isFriend;
           _friendStatus = status;
           _isLoadingFriendStatus = false;
         });
@@ -160,12 +160,12 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             Container(
               padding: EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Color(0xFF9D7FE8).withValues(alpha: 0.1),
+                color: ThemeService.primaryColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Icon(
                 Icons.access_time_rounded,
-                color: Color(0xFF9D7FE8),
+                color: ThemeService.primaryColor,
                 size: 24,
               ),
             ),
@@ -209,7 +209,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                         style: TextStyle(
                           fontSize: 24,
                           fontWeight: FontWeight.bold,
-                          color: Color(0xFF9D7FE8),
+                          color: ThemeService.primaryColor,
                         ),
                       ),
                       Text(
@@ -277,7 +277,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             child: Text(
               'Entendido',
               style: TextStyle(
-                color: Color(0xFF9D7FE8),
+                color: ThemeService.primaryColor,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -349,7 +349,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             ElevatedButton(
               onPressed: () => Navigator.pop(context, true),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Color(0xFF9D7FE8),
+                backgroundColor: ThemeService.primaryColor,
               ),
               child: Text('Desbloquear'),
             ),
@@ -531,7 +531,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, nameController.text.trim()),
-            style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF9D7FE8)),
+            style: ElevatedButton.styleFrom(backgroundColor: ThemeService.primaryColor),
             child: Text('Guardar'),
           ),
         ],
@@ -628,6 +628,11 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
   Widget _buildContactProfile() {
     final photoURL = _contactUser!.photoURL;
     final role = _contactUser!.role ?? 'adult';
+    // Si el contacto bloqueó al usuario actual, no mostramos su estado online.
+    // El streaming de bloqueo se hace en línea (no notifier) porque esta
+    // pantalla rebuildea con setState al cargar el contacto.
+    // NOTA: el indicador online ya estaba ahí, lo envolvemos con FutureBuilder
+    // para no romper el flujo síncrono.
     final isOnline = _contactUser!.isOnline;
 
     // Usar ContactUser.age getter (ya calculado en el modelo)
@@ -651,35 +656,52 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                         colorScheme.primary.withValues(alpha: 0.3),
                         colorScheme.primary.withValues(alpha: 0.2),
                       ]
-                    : [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
+                    : [ThemeService.primaryColor, Color(0xFFB39DDB)],
               ),
             ),
             padding: EdgeInsets.symmetric(vertical: 32),
             child: Column(
               children: [
-                // Avatar (clickeable para ampliar)
+                // Avatar (clickeable para ampliar).
+                // Si el contacto bloqueó al usuario actual, se oculta su foto.
                 Stack(
                   children: [
-                    ClickableAvatar(
-                      photoUrl: photoURL,
-                      name: widget.contactName,
-                      radius: 60,
-                      backgroundColor: Colors.white.withValues(alpha: 0.3),
+                    StreamBuilder<bool>(
+                      stream: BlockService().shouldHidePhotoOfStream(widget.contactId),
+                      initialData: false,
+                      builder: (context, hideSnap) {
+                        final hide = hideSnap.data ?? false;
+                        return ClickableAvatar(
+                          photoUrl: hide ? null : photoURL,
+                          name: widget.contactName,
+                          radius: 60,
+                          backgroundColor: Colors.white.withValues(alpha: 0.3),
+                        );
+                      },
                     ),
-                    // Indicador de en línea
+                    // Indicador de en línea. Si el contacto bloqueó al usuario
+                    // actual, ocultamos también su estado online.
                     if (isOnline)
-                      Positioned(
-                        bottom: 0,
-                        right: 0,
-                        child: Container(
-                          width: 24,
-                          height: 24,
-                          decoration: BoxDecoration(
-                            color: Colors.green,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 3),
-                          ),
-                        ),
+                      StreamBuilder<bool>(
+                        stream: BlockService()
+                            .shouldHidePhotoOfStream(widget.contactId),
+                        initialData: false,
+                        builder: (context, hideSnap) {
+                          if (hideSnap.data == true) return const SizedBox.shrink();
+                          return Positioned(
+                            bottom: 0,
+                            right: 0,
+                            child: Container(
+                              width: 24,
+                              height: 24,
+                              decoration: BoxDecoration(
+                                color: Colors.green,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 3),
+                              ),
+                            ),
+                          );
+                        },
                       ),
                   ],
                 ),
@@ -733,10 +755,18 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
 
                 SizedBox(height: 4),
 
-                // Estado
-                Text(
-                  isOnline ? 'En línea' : 'Desconectado',
-                  style: TextStyle(fontSize: 16, color: Colors.white70),
+                // Estado (oculto si el contacto bloqueó al usuario actual)
+                StreamBuilder<bool>(
+                  stream: BlockService()
+                      .shouldHidePhotoOfStream(widget.contactId),
+                  initialData: false,
+                  builder: (context, hideSnap) {
+                    if (hideSnap.data == true) return const SizedBox.shrink();
+                    return Text(
+                      isOnline ? 'En línea' : 'Desconectado',
+                      style: const TextStyle(fontSize: 16, color: Colors.white70),
+                    );
+                  },
                 ),
               ],
             ),
@@ -1351,7 +1381,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                   onChanged: (value) async {
                     await _controller.toggleStoryNotifications();
                   },
-                  activeColor: colorScheme.primary,
+                  activeTrackColor: colorScheme.primary,
                 ),
         ],
       ),

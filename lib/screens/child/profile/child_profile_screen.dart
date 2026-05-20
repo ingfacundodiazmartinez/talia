@@ -93,11 +93,7 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
               // Estado premium (solo para children)
               if (role == 'child')
                 StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance
-                      .collection('parent_children')
-                      .where('childId', isEqualTo: user.uid)
-                      .where('status', isEqualTo: 'approved')
-                      .snapshots(),
+                  stream: _service.getParentChildLinksStream(user.uid),
                   builder: (context, linksSnapshot) {
                     final hasLinkedParent = linksSnapshot.hasData &&
                         linksSnapshot.data!.docs.isNotEmpty;
@@ -299,6 +295,7 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
       ReleaseLogger.log('Iniciando selección y subida de imagen...', tag: 'ChildProfile');
 
       // Seleccionar imagen (pickAndUploadProfileImage maneja el loading dialog internamente)
+      // ignore: use_build_context_synchronously
       final String? imageUrl = await _controller.pickAndUploadImage(source, context);
 
       ReleaseLogger.log('Resultado: ${imageUrl != null ? 'URL obtenida' : 'null'}', tag: 'ChildProfile');
@@ -435,10 +432,7 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
 
         // Verificar si tiene padres vinculados
         return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('parent_children')
-              .where('childId', isEqualTo: userId)
-              .snapshots(),
+          stream: _service.getAllParentChildLinksStream(userId),
           builder: (context, linksSnapshot) {
             if (!linksSnapshot.hasData || linksSnapshot.data!.docs.isEmpty) {
               return const SizedBox.shrink();
@@ -543,7 +537,6 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
       final resultData = result.data as Map<String, dynamic>;
       final success = resultData['success'] ?? false;
       final message = resultData['message'] ?? '';
-      final parentCount = resultData['parentCount'] ?? 0;
 
       if (!mounted) return;
 

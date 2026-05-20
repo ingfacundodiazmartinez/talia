@@ -251,14 +251,15 @@ exports.findUserByCode = onCall({
       }
     }
 
-    // 8. Invalidar el código después de usarlo (one-time use)
+    // 8. Registrar uso (sin invalidar — los códigos son permanentes ahora)
+    // El dueño puede regenerar manualmente desde "Mi Código" si lo expuso por error.
     const codeDocRef = codeSnapshot.docs[0].ref;
     await codeDocRef.update({
-      isActive: false,
-      usedAt: FieldValue.serverTimestamp(),
-      usedBy: callerId,
+      lastUsedAt: FieldValue.serverTimestamp(),
+      lastUsedBy: callerId,
+      usageCount: FieldValue.increment(1),
     });
-    console.log(`🔒 [findUserByCode] Código ${codeUpper} invalidado después de uso por ${callerId}`);
+    console.log(`🔒 [findUserByCode] Código ${codeUpper} usado por ${callerId} (sigue activo)`);
 
     // 9. Retornar info básica (sin datos sensibles)
     // 🔒 SEGURIDAD: No incluir photoURL para prevenir exposición de fotos

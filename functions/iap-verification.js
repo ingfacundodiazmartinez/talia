@@ -17,6 +17,7 @@ const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestor
 const { google } = require("googleapis");
 const jwt = require("jsonwebtoken");
 const axios = require("axios");
+const wallet = require("./wallet");
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIGURACIÓN
@@ -531,10 +532,12 @@ async function handleSubscriptionActive(userId, subscriptionId, subscriptionData
   const newExpiresAt = new Date();
   newExpiresAt.setDate(newExpiresAt.getDate() + 30);
 
+  const tier = subscriptionData.tier || "premium";
+
   await Promise.all([
     userRef.update({
       isPremium: true,
-      subscriptionTier: subscriptionData.tier || "premium",
+      subscriptionTier: tier,
       premiumExpiresAt: Timestamp.fromDate(newExpiresAt),
     }),
     subscriptionRef.update({
@@ -543,6 +546,27 @@ async function handleSubscriptionActive(userId, subscriptionId, subscriptionData
       lastRenewedAt: FieldValue.serverTimestamp(),
     }),
   ]);
+
+  // Grant créditos mensuales del wallet (idempotente por mes).
+  // Si esta función se dispara múltiples veces en el mismo mes (re-verificación,
+  // refresh de receipt, etc.), solo el primer call efectúa el grant.
+  try {
+    const result = await wallet._internal.grantPremiumMonthly(userId, tier);
+    if (result.granted) {
+      console.log(
+        `💰 [Wallet] Granteados ${result.amount} créditos a ${userId} ` +
+          `(tier=${tier}, mes=${result.month}, balance=${result.newBalance})`
+      );
+    } else if (result.alreadyGrantedThisMonth) {
+      console.log(
+        `ℹ️ [Wallet] ${userId} ya recibió grant Premium en ${result.month}, skip`
+      );
+    }
+  } catch (e) {
+    // No fallar la activación si el grant del wallet falla — el premium ya
+    // quedó activo. Logueamos para retry manual si hace falta.
+    console.error(`⚠️ [Wallet] Error en grant Premium para ${userId}: ${e.message}`);
+  }
 
   console.log(`✅ Usuario ${userId} premium activo hasta ${newExpiresAt.toISOString()}`);
 }
@@ -626,6 +650,23 @@ async function activatePremiumForUser(userId, tier, expiryTimeMillis, platform, 
     expiresAt,
     createdAt: FieldValue.serverTimestamp(),
   });
+
+  // Grant créditos mensuales del wallet (idempotente por mes).
+  try {
+    const result = await wallet._internal.grantPremiumMonthly(userId, tier);
+    if (result.granted) {
+      console.log(
+        `💰 [Wallet] Granteados ${result.amount} créditos a ${userId} ` +
+          `(tier=${tier}, mes=${result.month}, balance=${result.newBalance})`
+      );
+    } else if (result.alreadyGrantedThisMonth) {
+      console.log(
+        `ℹ️ [Wallet] ${userId} ya recibió grant Premium en ${result.month}, skip`
+      );
+    }
+  } catch (e) {
+    console.error(`⚠️ [Wallet] Error en grant Premium para ${userId}: ${e.message}`);
+  }
 
   console.log(`✅ Premium activado para ${userId}: ${tier} hasta ${expiresAt.toDate().toISOString()}`);
 }

@@ -1,12 +1,12 @@
-/// Barrel export para servicios de chat
-///
-/// Este archivo exporta todos los servicios atómicos de chat
-/// para facilitar imports limpios en controllers y screens.
-///
-/// Uso:
-/// ```dart
-/// import 'package:talia/services/chats/chat_services.dart';
-/// ```
+// Barrel export para servicios de chat
+//
+// Este archivo exporta todos los servicios atómicos de chat
+// para facilitar imports limpios en controllers y screens.
+//
+// Uso:
+// ```dart
+// import 'package:talia/services/chats/chat_services.dart';
+// ```
 
 // Cache de preferencias locales (Hive)
 export 'chat_preferences_cache.dart';

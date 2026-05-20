@@ -1,3 +1,8 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
 #include "Generated.xcconfig"
 
+// Apple Silicon simulator: MLKit no tiene builds arm64-simulator.
+// Forzar Rosetta (x86_64) para simulator. En device usa arm64 normalmente.
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64
+ONLY_ACTIVE_ARCH = YES
+

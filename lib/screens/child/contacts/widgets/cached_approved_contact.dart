@@ -1,11 +1,13 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../../services/block_service.dart';
 import '../../../../services/contact_service.dart';
-import '../../../../services/create_chat_service.dart';
+import '../../../../services/chats/chat_services.dart';
+import '../../../../services/user_cache_service.dart';
 import '../../../../widgets/synced_user_widgets.dart';
+import '../../../chat_detail_screen.dart';
 
 /// Widget cacheado para mostrar un contacto aprobado
 /// Usa StreamBuilder para aprovechar el cache de Firestore
@@ -37,7 +39,9 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
   }
 
   Future<void> _checkBlockStatus() async {
-    final blocked = await _blockService.isBlocked(widget.contactId);
+    // Solo marcamos bloqueado si el usuario actual fue quien bloqueó.
+    // El bloqueado no debe ver el indicador de "Desbloquear" en su lista.
+    final blocked = await _blockService.iBlocked(widget.contactId);
     if (mounted) {
       setState(() {
         _isBlocked = blocked;
@@ -61,7 +65,7 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
               ),
               ElevatedButton(
                 onPressed: () => Navigator.pop(context, true),
-                style: ElevatedButton.styleFrom(backgroundColor: Color(0xFF9D7FE8)),
+                style: ElevatedButton.styleFrom(backgroundColor: ThemeService.primaryColor),
                 child: Text('Desbloquear'),
               ),
             ],
@@ -138,12 +142,25 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
 
   /// Crear/obtener chat y navegar a pantalla de chat
   Future<void> _openChat(BuildContext context, String contactId, String contactName) async {
-    // ✅ SEGURIDAD: Crear chat mediante Cloud Function (valida contactos, bloqueos, restricciones)
-    await CreateChatService.createAndNavigateToChat(
-      context: context,
-      otherUserId: contactId,
-      otherUserName: contactName,
-    );
+    final createService = CreateChatService();
+    final result = await createService.call(otherUserId: contactId);
+
+    if (result.success && result.chatId != null && context.mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ChatDetailScreen(
+            chatId: result.chatId!,
+            contactId: contactId,
+            contactName: contactName,
+          ),
+        ),
+      );
+    } else if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message)),
+      );
+    }
   }
 
   Future<void> _deleteContact(String contactName) async {
@@ -190,18 +207,15 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
 
   @override
   Widget build(BuildContext context) {
-    // ⚡ CACHE: StreamBuilder con includeMetadataChanges para obtener datos del cache inmediatamente
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(widget.contactId)
-          .snapshots(includeMetadataChanges: true),
+    // ⚡ CACHE: StreamBuilder usando UserCacheService para obtener datos del cache
+    return StreamBuilder<Map<String, dynamic>?>(
+      stream: UserCacheService().watchUser(widget.contactId),
       builder: (context, snapshot) {
-        if (!snapshot.hasData || !snapshot.data!.exists) {
+        if (!snapshot.hasData) {
           return const SizedBox.shrink();
         }
 
-        final userData = snapshot.data!.data() as Map<String, dynamic>?;
+        final userData = snapshot.data;
         if (userData == null) return const SizedBox.shrink();
 
         final name = userData['name'] ?? 'Usuario';
@@ -250,13 +264,20 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
         onTap: () => _openChat(context, contactId, name),
         child: Row(
           children: [
-            CircleAvatar(
+            // Si el contacto bloqueó al usuario actual, no se muestra su foto.
+            StreamBuilder<bool>(
+              stream: _blockService.shouldHidePhotoOfStream(contactId),
+              initialData: false,
+              builder: (context, hideSnap) {
+                final hide = hideSnap.data ?? false;
+                final effectivePhoto = hide ? null : photoURL;
+                return CircleAvatar(
               radius: 28,
               backgroundColor: colorScheme.primaryContainer,
-              child: photoURL != null && photoURL.isNotEmpty
+              child: effectivePhoto != null && effectivePhoto.isNotEmpty
                   ? ClipOval(
                       child: CachedNetworkImage(
-                        imageUrl: photoURL,
+                        imageUrl: effectivePhoto,
                         width: 56,
                         height: 56,
                         fit: BoxFit.cover,
@@ -286,6 +307,8 @@ class _CachedApprovedContactState extends State<CachedApprovedContact> {
                         color: colorScheme.primary,
                       ),
                     ),
+                );
+              },
             ),
             const SizedBox(width: 16),
             Expanded(

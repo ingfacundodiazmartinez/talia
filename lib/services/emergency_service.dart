@@ -78,6 +78,7 @@ class EmergencyService {
         await _makeEmergencyVideoCall(parents, emergencyId);
 
         if (context != null) {
+          // ignore: use_build_context_synchronously
           _showEmergencyConfirmation(context);
         }
 
@@ -94,6 +95,7 @@ class EmergencyService {
       if (await isInCooldown()) {
         ReleaseLogger.log('⏰ Emergencia en cooldown', tag: 'EmergencyService');
         if (context != null) {
+          // ignore: use_build_context_synchronously
           _showCooldownMessage(context);
         }
         return null;
@@ -146,6 +148,7 @@ class EmergencyService {
       ReleaseLogger.log('✅ Emergencia activada exitosamente', tag: 'EmergencyService');
 
       if (context != null) {
+        // ignore: use_build_context_synchronously
         _showEmergencyConfirmation(context);
       }
 
@@ -159,6 +162,7 @@ class EmergencyService {
     } catch (e) {
       ReleaseLogger.error('❌ Error activando emergencia: $e', tag: 'EmergencyService');
       if (context != null) {
+        // ignore: use_build_context_synchronously
         _showErrorMessage(context, e.toString());
       }
       return null;
@@ -191,6 +195,7 @@ class EmergencyService {
         await _triggerEmergencyVibration();
 
         if (context != null) {
+          // ignore: use_build_context_synchronously
           _showEmergencyConfirmation(context);
         }
 
@@ -207,6 +212,7 @@ class EmergencyService {
       if (await isInCooldown()) {
         ReleaseLogger.log('⏰ Emergencia en cooldown', tag: 'EmergencyService');
         if (context != null) {
+          // ignore: use_build_context_synchronously
           _showCooldownMessage(context);
         }
         return null;
@@ -236,6 +242,7 @@ class EmergencyService {
       ReleaseLogger.log('✅ [OPTIMISTIC] Emergencia creada: $emergencyId', tag: 'EmergencyService');
 
       if (context != null) {
+        // ignore: use_build_context_synchronously
         _showEmergencyConfirmation(context);
       }
 
@@ -255,6 +262,7 @@ class EmergencyService {
     } catch (e) {
       ReleaseLogger.error('❌ Error activando emergencia optimística: $e', tag: 'EmergencyService');
       if (context != null) {
+        // ignore: use_build_context_synchronously
         _showErrorMessage(context, e.toString());
       }
       return null;
@@ -342,8 +350,10 @@ class EmergencyService {
 
       // Si no hay ubicación conocida, obtener una nueva con precisión media (más rápido)
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: Duration(seconds: 5),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 5),
+        ),
       );
 
       ReleaseLogger.log('✅ Ubicación de emergencia obtenida: ${position.latitude}, ${position.longitude}', tag: 'EmergencyService');
@@ -359,8 +369,10 @@ class EmergencyService {
     Future(() async {
       try {
         final position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 15),
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 15),
+          ),
         );
 
         // Actualizar la emergencia actual si existe
@@ -484,50 +496,6 @@ class EmergencyService {
     }
   }
 
-  // Notificar a todos los padres
-  Future<void> _notifyParents({
-    required List<Map<String, dynamic>> parents,
-    required String childName,
-    required String emergencyId,
-    Position? position,
-    String? customMessage,
-  }) async {
-    try {
-      final user = _auth.currentUser;
-      if (user == null) return;
-
-      for (var parent in parents) {
-        final parentId = parent['id'];
-        final parentName = parent['name'] ?? 'Padre';
-
-        // Crear notificación en Firebase
-        await _firestore.collection('notifications').add({
-          'userId': parentId,
-          'senderId': user.uid, // ⚠️ IMPORTANTE: Para validación de seguridad
-          'type': 'emergency',
-          'title': '🆘 EMERGENCIA - $childName',
-          'body': customMessage ?? '$childName ha activado el botón de emergencia',
-          'data': {
-            'emergencyId': emergencyId,
-            'childName': childName,
-            'senderId': user.uid,
-            'location': position != null ? {
-              'latitude': position.latitude,
-              'longitude': position.longitude,
-            } : null,
-          },
-          'timestamp': FieldValue.serverTimestamp(),
-          'read': false,
-          'priority': 'high',
-        });
-
-        ReleaseLogger.log('✅ Notificación de emergencia enviada a $parentName', tag: 'EmergencyService');
-      }
-    } catch (e) {
-      ReleaseLogger.error('❌ Error enviando notificaciones: $e', tag: 'EmergencyService');
-    }
-  }
-
   // Realizar llamada de emergencia grupal con Agora
   Future<void> _makeEmergencyVideoCall(List<Map<String, dynamic>> parents, String emergencyId) async {
     try {
@@ -538,9 +506,6 @@ class EmergencyService {
 
       final user = _auth.currentUser;
       if (user == null) return;
-
-      // Obtener nombre del niño
-      final childName = await _getUserName(user.uid);
 
       // Extraer IDs y nombres de los padres
       List<String> parentIds = [];
@@ -570,16 +535,6 @@ class EmergencyService {
       ReleaseLogger.log('✅ Padres notificados por Cloud Function', tag: 'EmergencyService');
     } catch (e) {
       ReleaseLogger.error('❌ Error creando llamada de emergencia grupal: $e', tag: 'EmergencyService');
-    }
-  }
-
-  // Obtener nombre de usuario
-  Future<String> _getUserName(String userId) async {
-    try {
-      final doc = await _firestore.collection('users').doc(userId).get();
-      return doc.data()?['name'] ?? 'Usuario';
-    } catch (e) {
-      return 'Usuario';
     }
   }
 

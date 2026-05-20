@@ -42,6 +42,9 @@ class Character {
   final DateTime createdAt;
   /// Nivel de acceso requerido para usar este personaje
   final CharacterAccessLevel accessLevel;
+  /// Modelo de IA usado: 'face_swap' | 'p_image_edit' | 'nano_banana' | 'auto'.
+  /// Determina el costo en créditos del wallet familiar.
+  final String aiModel;
 
   Character({
     required this.id,
@@ -54,7 +57,30 @@ class Character {
     this.modelConfig,
     required this.createdAt,
     this.accessLevel = CharacterAccessLevel.free,
+    this.aiModel = 'auto',
   });
+
+  /// Costo en créditos del wallet familiar para usar este personaje.
+  /// Debe estar sincronizado con FEATURE_PRICES en functions/wallet.js.
+  int get creditCost {
+    switch (aiModel) {
+      case 'face_swap':
+        return 1;
+      case 'p_image_edit':
+      case 'nano_banana': // key Firestore; el backend invoca gpt-image-2 low
+        return 4;
+      case 'auto':
+      default:
+        // Fallback conservador: si no se sabe, asumir caro (edit con prompt).
+        return 4;
+    }
+  }
+
+  /// Indica si el personaje usa IA generativa (edit con prompt), no solo face-swap.
+  /// Usado para mostrar el badge "✨ IA" en la card.
+  bool get usesGenerativeAi {
+    return aiModel == 'p_image_edit' || aiModel == 'nano_banana';
+  }
 
   /// Crear Character desde documento de Firestore
   factory Character.fromFirestore(DocumentSnapshot doc) {
@@ -70,6 +96,7 @@ class Character {
       modelConfig: data['modelConfig'] as Map<String, dynamic>?,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       accessLevel: CharacterAccessLevel.fromString(data['accessLevel'] as String?),
+      aiModel: data['aiModel'] as String? ?? 'auto',
     );
   }
 
@@ -85,6 +112,7 @@ class Character {
       'modelConfig': modelConfig,
       'createdAt': Timestamp.fromDate(createdAt),
       'accessLevel': accessLevel.name,
+      'aiModel': aiModel,
     };
   }
 
@@ -112,6 +140,7 @@ class Character {
     Map<String, dynamic>? modelConfig,
     DateTime? createdAt,
     CharacterAccessLevel? accessLevel,
+    String? aiModel,
   }) {
     return Character(
       id: id ?? this.id,
@@ -124,6 +153,7 @@ class Character {
       modelConfig: modelConfig ?? this.modelConfig,
       createdAt: createdAt ?? this.createdAt,
       accessLevel: accessLevel ?? this.accessLevel,
+      aiModel: aiModel ?? this.aiModel,
     );
   }
 }

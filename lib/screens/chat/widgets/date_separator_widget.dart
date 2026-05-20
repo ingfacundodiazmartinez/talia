@@ -81,7 +81,7 @@ class DateSeparatorWidget extends StatelessWidget {
           color: Theme.of(context)
               .colorScheme
               .surfaceContainerHighest
-              .withOpacity(0.7),
+              .withValues(alpha: 0.7),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Text(

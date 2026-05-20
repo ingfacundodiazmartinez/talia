@@ -235,26 +235,6 @@ class MoodPollService {
     await _repository.initializePredefinedQuestions();
   }
 
-  /// Crea una pregunta personalizada (para IA o admin)
-  Future<String> createCustomQuestion({
-    required String text,
-    required MoodPollQuestionType type,
-    required List<MoodPollOption> options,
-    String? contextHint,
-    bool isAiGenerated = true,
-  }) async {
-    final question = MoodPollQuestion(
-      id: '', // Se generará en Firestore
-      text: text,
-      type: type,
-      options: options,
-      isAiGenerated: isAiGenerated,
-      contextHint: contextHint,
-    );
-
-    return _repository.createQuestion(question);
-  }
-
   // ============ HELPER METHODS ============
 
   /// Genera un resumen textual de las respuestas para el reporte semanal

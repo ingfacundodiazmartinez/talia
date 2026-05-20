@@ -36,11 +36,15 @@ mixin ReactionPickerMixin<T extends StatefulWidget> on State<T> {
     FocusScope.of(context).unfocus();
     await Future.delayed(const Duration(milliseconds: 100));
 
+    if (!mounted) return;
+
+    // ignore: use_build_context_synchronously
     final RenderBox? renderBox = messageContext.findRenderObject() as RenderBox?;
     if (renderBox == null) return;
 
     final position = renderBox.localToGlobal(Offset.zero);
     final size = renderBox.size;
+    // ignore: use_build_context_synchronously
     final screenWidth = MediaQuery.of(context).size.width;
 
     const pickerWidth = 280.0;

@@ -1,5 +1,5 @@
-/// Call model for Agora RTC Engine integration (V2)
-/// This model represents a call document in Firestore collection 'calls_v2'
+// Call model for Agora RTC Engine integration (V2)
+// This model represents a call document in Firestore collection 'calls_v2'
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 

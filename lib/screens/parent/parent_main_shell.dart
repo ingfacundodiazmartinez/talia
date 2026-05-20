@@ -16,6 +16,9 @@ import '../../controllers/parent_main_shell_controller.dart';
 import '../../utils/release_logger.dart';
 import '../../notification_service.dart';
 import '../../reports_screen.dart';
+import '../../services/bottom_nav_visibility.dart';
+import '../../services/credit_wallet_service.dart';
+import 'wallet/daily_bonus_modal.dart';
 
 /// Clase para combinar todos los datos del BottomNavigationBar en un solo stream
 class BottomNavData {
@@ -99,6 +102,7 @@ class ParentMainShell extends StatefulWidget {
   const ParentMainShell({super.key});
 
   /// GlobalKey para acceder al estado del shell desde otros widgets
+  // ignore: library_private_types_in_public_api
   static final GlobalKey<_ParentMainShellState> shellKey =
       GlobalKey<_ParentMainShellState>();
 
@@ -168,6 +172,27 @@ class _ParentMainShellState extends State<ParentMainShell> {
     // ✅ FIX: Limpiar current_chat_id cuando llegas a ParentMainShell (lista de chats)
     // Esto asegura que las notificaciones se muestren correctamente
     NotificationService().clearCurrentChat();
+
+    // 💰 Wallet Fase 1 (modo sombra): welcome bonus + daily bonus.
+    // Ambas funciones son idempotentes (welcome=one-time, daily=por fecha UTC).
+    // Fire-and-forget — no bloqueamos el init del shell.
+    _initializeWalletShadow();
+  }
+
+  /// Reclama welcome y daily bonus en segundo plano y, si el daily fue nuevo,
+  /// muestra el modal celebratorio.
+  void _initializeWalletShadow() {
+    Future<void>.microtask(() async {
+      final wallet = CreditWalletService();
+      await wallet.claimWelcomeBonus(); // one-time (silencioso, sin modal)
+      final dailyClaimed = await wallet.claimDailyBonus();
+      if (dailyClaimed && mounted) {
+        // Esperar a que el shell esté listo antes de mostrar el modal
+        await Future.delayed(const Duration(milliseconds: 600));
+        if (!mounted) return;
+        await DailyBonusModal.show(context);
+      }
+    });
   }
 
 
@@ -228,6 +253,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
         // ✅ FIX: Pop hasta la raíz antes de navegar para evitar duplicados
         // Esto maneja el caso de app reiniciada donde currentOpenChatId es null
         // pero hay un chat en el stack de navegación
+        if (!mounted) return;
         Navigator.of(context).popUntil((route) => route.isFirst);
 
         await Navigator.of(context).push(
@@ -263,6 +289,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
         ReleaseLogger.log('Correct chatId: $correctChatId', tag: 'ParentMainShell');
 
         // ✅ FIX: Pop hasta la raíz antes de navegar para evitar duplicados
+        if (!mounted) return;
         Navigator.of(context).popUntil((route) => route.isFirst);
 
         await Navigator.of(context).push(
@@ -493,12 +520,6 @@ class _ParentMainShellState extends State<ParentMainShell> {
           child: child,
         ),
       ],
-      onPopPage: (route, result) {
-        if (!route.didPop(result)) {
-          return false;
-        }
-        return true;
-      },
       observers: [_NavigatorObserver(_onNavigationChanged)],
     );
   }
@@ -545,11 +566,9 @@ class _ParentMainShellState extends State<ParentMainShell> {
 
   @override
   Widget build(BuildContext context) {
-    final currentUserId = _getCurrentUserId();
-
     return PopScope(
       canPop: false,
-      onPopInvoked: (bool didPop) async {
+      onPopInvokedWithResult: (bool didPop, dynamic result) async {
         if (didPop) return;
 
         // Si hay navegación anidada, hacer pop en el navegador del tab actual
@@ -615,8 +634,17 @@ class _ParentMainShellState extends State<ParentMainShell> {
           ),
         ],
       ),
-      // Ocultar bottom nav bar cuando hay rutas anidadas (ej: chat abierto)
-      bottomNavigationBar: _hasNestedRoute ? null : _buildBottomNavigationBar(),
+      // Bottom nav siempre visible salvo cuando hay una pantalla full-screen
+      // registrada (chat detail, llamadas, story viewer, AR camera, media viewer).
+      // Pantallas anidadas "ligeras" (settings, edit profile, etc.) NO ocultan
+      // el bottom nav.
+      bottomNavigationBar: ValueListenableBuilder<int>(
+        valueListenable: BottomNavVisibility.instance.fullScreenCount,
+        builder: (context, fullScreenCount, _) {
+          if (fullScreenCount > 0) return const SizedBox.shrink();
+          return _buildBottomNavigationBar();
+        },
+      ),
       // ✅ CORRECTO: Usar controller para datos de floating action button
       floatingActionButton: StreamBuilder<int>(
               stream: _controller.getPendingGroupInvitationsStream(),
@@ -734,7 +762,7 @@ class _ParentMainShellState extends State<ParentMainShell> {
           BottomNavigationBarItem(
             icon: _buildIconWithBadge(Icons.shield_outlined, whitelistBadgeCount),
             activeIcon: _buildIconWithBadge(Icons.shield, whitelistBadgeCount),
-            label: 'Lista Blanca',
+            label: 'Familia',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.person_outline),

@@ -61,7 +61,6 @@ class _StoryNativeAdWidgetState extends State<StoryNativeAdWidget>
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
-    final screenHeight = MediaQuery.of(context).size.height;
 
     return Material(
       color: Colors.white,
@@ -93,12 +92,14 @@ class _StoryNativeAdWidgetState extends State<StoryNativeAdWidget>
               ),
             ),
 
-            // Native Ad content - centrado vertical y horizontalmente
+            // Native Ad content - ocupa todo el espacio disponible debajo
+            // del header (timer + "Patrocinado") y por encima del bottom
+            // input/safe area. Padding horizontal mínimo para que respire.
             Positioned(
-              left: screenWidth * 0.15,
-              right: screenWidth * 0.15,
-              top: screenHeight * 0.20,
-              bottom: screenHeight * 0.20,
+              left: 12,
+              right: 12,
+              top: MediaQuery.of(context).padding.top + 80,
+              bottom: MediaQuery.of(context).padding.bottom + 16,
               child: Center(
                 child: AdWidget(ad: widget.nativeAd),
               ),
@@ -115,7 +116,7 @@ class _StoryNativeAdWidgetState extends State<StoryNativeAdWidget>
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Colors.black.withOpacity(0.5),
+                    Colors.black.withValues(alpha: 0.5),
                     Colors.transparent,
                   ],
                 ),
@@ -132,7 +133,7 @@ class _StoryNativeAdWidgetState extends State<StoryNativeAdWidget>
                         builder: (context, child) {
                           return LinearProgressIndicator(
                             value: _progressController.value,
-                            backgroundColor: Colors.white.withOpacity(0.3),
+                            backgroundColor: Colors.white.withValues(alpha: 0.3),
                             valueColor: const AlwaysStoppedAnimation<Color>(
                               Colors.white,
                             ),

@@ -126,7 +126,7 @@ class _EmergencyAlertWidgetState extends State<EmergencyAlertWidget> {
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
               BoxShadow(
-                color: Colors.red.withOpacity(0.4),
+                color: Colors.red.withValues(alpha: 0.4),
                 blurRadius: 12,
                 offset: Offset(0, 6),
               ),
@@ -165,7 +165,7 @@ class _EmergencyAlertWidgetState extends State<EmergencyAlertWidget> {
                         Container(
                           padding: EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
+                            color: Colors.white.withValues(alpha: 0.2),
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
@@ -205,7 +205,7 @@ class _EmergencyAlertWidgetState extends State<EmergencyAlertWidget> {
                                       '$childName necesita ayuda',
                                       style: TextStyle(
                                         fontSize: 15,
-                                        color: Colors.white.withOpacity(0.95),
+                                        color: Colors.white.withValues(alpha: 0.95),
                                       ),
                                     );
                                   },
@@ -215,7 +215,7 @@ class _EmergencyAlertWidgetState extends State<EmergencyAlertWidget> {
                                   '${emergencies.length} emergencias activas',
                                   style: TextStyle(
                                     fontSize: 15,
-                                    color: Colors.white.withOpacity(0.95),
+                                    color: Colors.white.withValues(alpha: 0.95),
                                   ),
                                 ),
                             ],
@@ -235,7 +235,7 @@ class _EmergencyAlertWidgetState extends State<EmergencyAlertWidget> {
                         vertical: 10,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
+                        color: Colors.white.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Row(

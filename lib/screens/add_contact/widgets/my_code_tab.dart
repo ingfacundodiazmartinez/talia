@@ -116,6 +116,10 @@ class _MyCodeTabState extends State<MyCodeTab> {
     return Colors.green;
   }
 
+  // Sólo "expirado" si el código tiene expiración (legacy) y ya transcurrió.
+  // Para códigos permanentes (widget.expiresAt == null), siempre es false.
+  bool get _isExpired => widget.expiresAt != null && _timeRemaining.inSeconds <= 0;
+
   void _handleCopy(BuildContext context) {
     if (widget.userCode != null) {
       Clipboard.setData(ClipboardData(text: widget.userCode!));
@@ -125,11 +129,13 @@ class _MyCodeTabState extends State<MyCodeTab> {
 
   void _handleShare() {
     if (widget.userCode != null) {
-      Share.share(
-        'Agregame como contacto en Talia!\n\n'
-        'Haz click aqui: $_deepLink\n\n'
-        'O usa mi codigo: ${widget.userCode}',
-        subject: 'Agregame en Talia',
+      SharePlus.instance.share(
+        ShareParams(
+          text: 'Agregame como contacto en Tália!\n\n'
+              'Haz click aqui: $_deepLink\n\n'
+              'O usa mi codigo: ${widget.userCode}',
+          subject: 'Agregame en Tália',
+        ),
       );
     }
     widget.onShare();
@@ -175,8 +181,12 @@ class _MyCodeTabState extends State<MyCodeTab> {
       padding: EdgeInsets.all(24),
       child: Column(
         children: [
-          _buildExpirationBanner(colorScheme),
-          SizedBox(height: 16),
+          // Banner de expiración solo aparece para códigos legacy con expiresAt.
+          // Códigos nuevos son permanentes — el usuario puede regenerar manualmente.
+          if (widget.expiresAt != null) ...[
+            _buildExpirationBanner(colorScheme),
+            SizedBox(height: 16),
+          ],
           _buildInfoBanner(colorScheme),
           SizedBox(height: 24),
           _buildQRCodeCard(colorScheme),
@@ -195,7 +205,7 @@ class _MyCodeTabState extends State<MyCodeTab> {
 
   Widget _buildExpirationBanner(ColorScheme colorScheme) {
     final expirationColor = _getExpirationColor();
-    final isExpired = _timeRemaining.inSeconds <= 0;
+    final isExpired = _isExpired;
 
     return Container(
       padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -261,7 +271,7 @@ class _MyCodeTabState extends State<MyCodeTab> {
   }
 
   Widget _buildQRCodeCard(ColorScheme colorScheme) {
-    final isExpired = _timeRemaining.inSeconds <= 0;
+    final isExpired = _isExpired;
 
     return Container(
       padding: EdgeInsets.all(24),
@@ -304,7 +314,8 @@ class _MyCodeTabState extends State<MyCodeTab> {
                     version: QrVersions.auto,
                     size: 200.0,
                     backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
+                    eyeStyle: const QrEyeStyle(color: Colors.black),
+                    dataModuleStyle: const QrDataModuleStyle(color: Colors.black),
                   ),
                 ),
               ),
@@ -336,7 +347,7 @@ class _MyCodeTabState extends State<MyCodeTab> {
   }
 
   Widget _buildTextCodeCard(ColorScheme colorScheme) {
-    final isExpired = _timeRemaining.inSeconds <= 0;
+    final isExpired = _isExpired;
 
     return Container(
       padding: EdgeInsets.all(24),
@@ -403,7 +414,7 @@ class _MyCodeTabState extends State<MyCodeTab> {
   }
 
   Widget _buildActionButtons(BuildContext context, ColorScheme colorScheme) {
-    final isExpired = _timeRemaining.inSeconds <= 0;
+    final isExpired = _isExpired;
 
     return Row(
       children: [

@@ -304,6 +304,7 @@ class DeviceManagementService {
         DateTime.now().millisecondsSinceEpoch,
       );
     } catch (e) {
+      // Silently ignore - local authorization save is best-effort
     }
   }
 
@@ -350,6 +351,7 @@ class DeviceManagementService {
       await prefs.remove('authorized_device_fingerprint');
       await prefs.remove('authorization_timestamp');
     } catch (e) {
+      // Silently ignore - local authorization clear is best-effort
     }
   }
 

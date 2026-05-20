@@ -1,4 +1,4 @@
-/**
+/*
  * ═══════════════════════════════════════════════════════════════
  * CHILD NOTIFICATIONS SCREEN - FALSE READ RECEIPTS PREVENTION
  * ═══════════════════════════════════════════════════════════════
@@ -15,7 +15,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import '../../lib/screens/parent/dashboard/widgets/child_notifications_screen.dart';
+import 'package:talia/screens/parent/dashboard/widgets/child_notifications_screen.dart';
 
 void main() {
   group('🚨 CRITICAL: Child Notifications Screen - False Read Receipts Prevention', () {

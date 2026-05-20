@@ -5,18 +5,12 @@ import android.media.AudioManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import com.talia.chat.ArFiltersPlugin
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.talia.talia/ringer_mode"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-
-        // ═══════════════════════════════════════════════════════════════
-        // REGISTRAR PLUGIN DE DEEPAR
-        // ═══════════════════════════════════════════════════════════════
-        flutterEngine.plugins.add(ArFiltersPlugin())
 
         // ═══════════════════════════════════════════════════════════════
         // RINGER MODE CHANNEL

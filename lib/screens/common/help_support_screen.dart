@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../services/support_service.dart';
 
 class HelpSupportScreen extends StatelessWidget {
   const HelpSupportScreen({super.key});
@@ -108,7 +107,7 @@ class HelpSupportScreen extends StatelessWidget {
             context: context,
             question: '¿Cómo vinculo a mi hijo?',
             answer:
-                'Ve a la sección "Hijos" en tu perfil y presiona "Vincular Hijo". Se generará un código de 6 dígitos que tu hijo debe ingresar en su aplicación de Talia.',
+                'Ve a la sección "Hijos" en tu perfil y presiona "Vincular Hijo". Se generará un código de 6 dígitos que tu hijo debe ingresar en su aplicación de Tália.',
           ),
 
           _buildFAQItem(
@@ -129,7 +128,7 @@ class HelpSupportScreen extends StatelessWidget {
             context: context,
             question: '¿Cómo funcionan las llamadas?',
             answer:
-                'Talia permite llamadas de voz y video entre contactos aprobados. Recibirás notificaciones cuando tu hijo reciba llamadas y podrás ver el historial de llamadas.',
+                'Tália permite llamadas de voz y video entre contactos aprobados. Recibirás notificaciones cuando tu hijo reciba llamadas y podrás ver el historial de llamadas.',
           ),
 
           _buildFAQItem(
@@ -143,7 +142,7 @@ class HelpSupportScreen extends StatelessWidget {
             context: context,
             question: '¿Puedo ver los mensajes de mi hijo?',
             answer:
-                'No. Talia respeta la privacidad de tu hijo. Solo recibes reportes abstractos sobre su bienestar emocional y alertas de seguridad, no el contenido de sus conversaciones.',
+                'No. Tália respeta la privacidad de tu hijo. Solo recibes reportes abstractos sobre su bienestar emocional y alertas de seguridad, no el contenido de sus conversaciones.',
           ),
 
           _buildFAQItem(
@@ -217,7 +216,7 @@ class HelpSupportScreen extends StatelessWidget {
             child: Column(
               children: [
                 Text(
-                  'Talia v1.0.0',
+                  'Tália v1.0.0',
                   style: TextStyle(
                     fontWeight: FontWeight.w600,
                     color: colorScheme.onSurface,
@@ -225,7 +224,7 @@ class HelpSupportScreen extends StatelessWidget {
                 ),
                 SizedBox(height: 4),
                 Text(
-                  '© 2025 Talia. Todos los derechos reservados.',
+                  '© 2025 Tália. Todos los derechos reservados.',
                   style: TextStyle(
                     fontSize: 12,
                     color: colorScheme.onSurfaceVariant,
@@ -591,17 +590,21 @@ class HelpSupportScreen extends StatelessWidget {
                           description: problemController.text.trim(),
                         );
 
-                        Navigator.pop(context);
+                        if (context.mounted) {
+                          Navigator.pop(context);
+                        }
                       } catch (e) {
                         setState(() {
                           isLoading = false;
                         });
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Error al enviar reporte: $e'),
-                            backgroundColor: Colors.red,
-                          ),
-                        );
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Error al enviar reporte: $e'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
                       }
                     },
               style: ElevatedButton.styleFrom(
@@ -631,37 +634,10 @@ class HelpSupportScreen extends StatelessWidget {
     required String title,
     required String description,
   }) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      throw Exception('Usuario no autenticado');
-    }
-
-    await FirebaseFirestore.instance.collection('support_reports').add({
-      'userId': user.uid,
-      'userEmail': user.email,
-      'category': category,
-      'title': title,
-      'description': description,
-      'status': 'pending',
-      'priority': _getPriorityFromCategory(category),
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-      'deviceInfo': {'platform': 'mobile', 'appVersion': '1.0.0'},
-    });
-  }
-
-  String _getPriorityFromCategory(String category) {
-    switch (category) {
-      case 'Problema de seguridad':
-        return 'high';
-      case 'Error técnico':
-      case 'Problema de conexión':
-        return 'medium';
-      case 'Error en la interfaz':
-      case 'Sugerencia de mejora':
-      case 'Otro':
-      default:
-        return 'low';
-    }
+    await SupportService().submitReport(
+      category: category,
+      title: title,
+      description: description,
+    );
   }
 }

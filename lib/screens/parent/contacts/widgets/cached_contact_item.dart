@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../../models/child.dart';
 import '../../../../services/contact_alias_service.dart';
+import '../../../../services/user_cache_service.dart';
 import 'contact_card_widget.dart';
 import 'filterable_contact_item.dart';
 
@@ -25,20 +25,16 @@ class CachedContactItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ⚡ CACHE: StreamBuilder con includeMetadataChanges para obtener datos del cache inmediatamente
-    // Firestore maneja el cache automáticamente y mostrará datos antiguos mientras actualiza
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(contactId)
-          .snapshots(includeMetadataChanges: true),
+    // ⚡ CACHE: StreamBuilder usando UserCacheService para obtener datos del cache
+    return StreamBuilder<Map<String, dynamic>?>(
+      stream: UserCacheService().watchUser(contactId),
       builder: (context, snapshot) {
         // Mostrar placeholder mínimo mientras carga SOLO si no hay datos en absoluto
-        if (!snapshot.hasData || !snapshot.data!.exists) {
+        if (!snapshot.hasData) {
           return const SizedBox.shrink();
         }
 
-        final userData = snapshot.data!.data() as Map<String, dynamic>?;
+        final userData = snapshot.data;
         if (userData == null) return const SizedBox.shrink();
 
         final realName = userData['name'] ?? 'Usuario';

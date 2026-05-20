@@ -216,7 +216,7 @@ class _ShareTargetSelectionScreenState
               Image.file(
                 File(item.mediaPath!),
                 fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => Icon(
+                errorBuilder: (context, error, stackTrace) => Icon(
                   item.type == SharedContentType.video
                       ? Icons.video_file
                       : Icons.image,
@@ -411,7 +411,6 @@ class _ShareTargetSelectionScreenState
   }
 
   Widget _buildDestinationPicker(BuildContext context, ShareTargetState state) {
-    final colorScheme = Theme.of(context).colorScheme;
     final isChat = state.destination != ShareDestination.story;
     final isStory = state.destination == ShareDestination.story;
 
@@ -512,7 +511,7 @@ class _ShareTargetSelectionScreenState
                       child: Image.file(
                         File(content.mediaPath!),
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
+                        errorBuilder: (context, error, stackTrace) => Container(
                           width: 200,
                           height: 300,
                           color: Colors.grey[300],

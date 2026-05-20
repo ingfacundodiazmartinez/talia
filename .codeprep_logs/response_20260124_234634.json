@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-01-24T23:46:34.982831",
+  "query": "Ok, arreglalo",
+  "input_tokens": 28056,
+  "output_tokens": 15,
+  "cache_creation_tokens": 0,
+  "cache_read_tokens": 0,
+  "total_tokens": 28071,
+  "cost_usd": 0,
+  "duration_ms": 0,
+  "prompt_length": 112224,
+  "response_length": 62,
+  "project": "/Users/olagg/Personal/talia"
+}

@@ -29,7 +29,7 @@ void main() {
 
       // Setup mocks
       when(service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Hello'},
         priority: 5,
       )).thenAnswer((_) async => operationId);
@@ -37,7 +37,7 @@ void main() {
       when(service.hasPendingOperations).thenReturn(true);
 
       final result = await service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Hello'},
         priority: 5,
       );
@@ -50,13 +50,13 @@ void main() {
     test('multiple operations are queued correctly', () async {
       // Setup mocks
       when(service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Message 1'},
         priority: 5,
       )).thenAnswer((_) async => 'id1');
 
       when(service.enqueueOperation(
-        type: OfflineQueueService.OP_UPDATE_PROFILE,
+        type: OfflineQueueService.opUpdateProfile,
         data: {'name': 'John'},
         priority: 3,
       )).thenAnswer((_) async => 'id2');
@@ -64,13 +64,13 @@ void main() {
       when(service.pendingOperationsCount).thenReturn(2);
 
       await service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Message 1'},
         priority: 5,
       );
 
       await service.enqueueOperation(
-        type: OfflineQueueService.OP_UPDATE_PROFILE,
+        type: OfflineQueueService.opUpdateProfile,
         data: {'name': 'John'},
         priority: 3,
       );
@@ -83,7 +83,7 @@ void main() {
       final mockOperations = [
         {
           'id': operationId,
-          'type': OfflineQueueService.OP_SEND_MESSAGE,
+          'type': OfflineQueueService.opSendMessage,
           'data': {'text': 'Test'},
           'priority': 5,
           'createdAt': DateTime.now().toIso8601String(),
@@ -94,7 +94,7 @@ void main() {
 
       // Setup mocks
       when(service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Test'},
         priority: 5,
       )).thenAnswer((_) async => operationId);
@@ -102,14 +102,14 @@ void main() {
       when(service.getPendingOperations()).thenReturn(mockOperations);
 
       await service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Test'},
         priority: 5,
       );
 
       final operations = service.getPendingOperations();
       expect(operations.length, 1);
-      expect(operations[0]['type'], OfflineQueueService.OP_SEND_MESSAGE);
+      expect(operations[0]['type'], OfflineQueueService.opSendMessage);
       expect(operations[0]['priority'], 5);
     });
 
@@ -118,7 +118,7 @@ void main() {
 
       // Setup mocks
       when(service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Test'},
         priority: 5,
       )).thenAnswer((_) async => operationId);
@@ -127,7 +127,7 @@ void main() {
       when(service.pendingOperationsCount).thenReturn(0);
 
       final id = await service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Test'},
         priority: 5,
       );
@@ -139,7 +139,7 @@ void main() {
     test('clearQueue removes all operations', () async {
       // Setup mocks
       when(service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: anyNamed('data'),
         priority: anyNamed('priority'),
       )).thenAnswer((_) async => 'test-id');
@@ -148,13 +148,13 @@ void main() {
       when(service.pendingOperationsCount).thenReturn(0);
 
       await service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Test 1'},
         priority: 5,
       );
 
       await service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Test 2'},
         priority: 5,
       );
@@ -167,19 +167,19 @@ void main() {
       final mockOperations = [
         {
           'id': 'op1',
-          'type': OfflineQueueService.OP_SEND_MESSAGE,
+          'type': OfflineQueueService.opSendMessage,
           'data': {'text': 'Low priority'},
           'priority': 10,
         },
         {
           'id': 'op2',
-          'type': OfflineQueueService.OP_CREATE_EMERGENCY,
+          'type': OfflineQueueService.opCreateEmergency,
           'data': {'emergency': true},
           'priority': 1,
         },
         {
           'id': 'op3',
-          'type': OfflineQueueService.OP_UPDATE_PROFILE,
+          'type': OfflineQueueService.opUpdateProfile,
           'data': {'name': 'Test'},
           'priority': 5,
         },
@@ -196,19 +196,19 @@ void main() {
 
       // Add operations (order doesn't matter for mock)
       await service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Low priority'},
         priority: 10,
       );
 
       await service.enqueueOperation(
-        type: OfflineQueueService.OP_CREATE_EMERGENCY,
+        type: OfflineQueueService.opCreateEmergency,
         data: {'emergency': true},
         priority: 1,
       );
 
       await service.enqueueOperation(
-        type: OfflineQueueService.OP_UPDATE_PROFILE,
+        type: OfflineQueueService.opUpdateProfile,
         data: {'name': 'Test'},
         priority: 5,
       );
@@ -224,7 +224,7 @@ void main() {
       const operationId = 'test-id';
       final mockOperation = {
         'id': operationId,
-        'type': OfflineQueueService.OP_SEND_MESSAGE,
+        'type': OfflineQueueService.opSendMessage,
         'data': {'text': 'Test'},
         'priority': 5,
         'createdAt': DateTime.now().toIso8601String(),
@@ -234,7 +234,7 @@ void main() {
 
       // Setup mocks
       when(service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Test'},
         priority: 5,
       )).thenAnswer((_) async => operationId);
@@ -242,7 +242,7 @@ void main() {
       when(service.getPendingOperations()).thenReturn([mockOperation]);
 
       await service.enqueueOperation(
-        type: OfflineQueueService.OP_SEND_MESSAGE,
+        type: OfflineQueueService.opSendMessage,
         data: {'text': 'Test'},
         priority: 5,
       );

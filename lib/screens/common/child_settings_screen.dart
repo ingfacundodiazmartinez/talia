@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../services/user_settings_service.dart';
 
 class ChildSettingsScreen extends StatefulWidget {
   const ChildSettingsScreen({super.key});
@@ -10,13 +9,12 @@ class ChildSettingsScreen extends StatefulWidget {
 }
 
 class _ChildSettingsScreenState extends State<ChildSettingsScreen> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final UserSettingsService _settingsService = UserSettingsService();
 
   bool _notificationsEnabled = true;
   bool _soundEnabled = true;
   bool _vibrationEnabled = true;
-  bool _showOnlineStatus = true;
+  bool _showOnlineStatus = false; // Default OFF para menores (privacidad)
 
   @override
   void initState() {
@@ -26,18 +24,13 @@ class _ChildSettingsScreenState extends State<ChildSettingsScreen> {
 
   Future<void> _loadSettings() async {
     try {
-      final doc = await _firestore
-          .collection('users')
-          .doc(_auth.currentUser?.uid)
-          .get();
-
-      if (doc.exists) {
-        final data = doc.data();
+      final data = await _settingsService.loadSettings();
+      if (data.isNotEmpty) {
         setState(() {
-          _notificationsEnabled = data?['notificationsEnabled'] ?? true;
-          _soundEnabled = data?['soundEnabled'] ?? true;
-          _vibrationEnabled = data?['vibrationEnabled'] ?? true;
-          _showOnlineStatus = data?['showOnlineStatus'] ?? true;
+          _notificationsEnabled = data['notificationsEnabled'] ?? true;
+          _soundEnabled = data['soundEnabled'] ?? true;
+          _vibrationEnabled = data['vibrationEnabled'] ?? true;
+          _showOnlineStatus = data['showOnlineStatus'] ?? false;
         });
       }
     } catch (e) {
@@ -45,12 +38,9 @@ class _ChildSettingsScreenState extends State<ChildSettingsScreen> {
     }
   }
 
-  Future<void> _updateSetting(String key, dynamic value) async {
+  Future<void> _updateSetting(String key, bool value) async {
     try {
-      await _firestore.collection('users').doc(_auth.currentUser?.uid).update({
-        key: value,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+      await _settingsService.updateSetting(key, value);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

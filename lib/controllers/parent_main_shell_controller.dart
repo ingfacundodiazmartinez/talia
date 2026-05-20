@@ -379,7 +379,7 @@ class ParentMainShellController {
     return LocalUnreadCountService().watchTotalUnreadCount();
   }
 
-  /// Stream de solicitudes de historia pendientes (solo no expiradas)
+  /// Stream de solicitudes de historia pendientes (solo no expiradas y no vistas por el padre)
   /// Usa tiempo del servidor via RTDB para evitar manipulación del reloj
   Stream<int> getPendingStoryRequestsStream() {
     return _firestore
@@ -388,6 +388,14 @@ class ParentMainShellController {
         .where('status', isEqualTo: 'pending')
         .snapshots(includeMetadataChanges: false)
         .asyncMap((snapshot) async {
+          // Filtrar las que ya vio el padre (no engrosar el badge)
+          final unviewedDocs = snapshot.docs.where((doc) {
+            return doc.data()['viewedByParent'] != true;
+          }).toList();
+          if (unviewedDocs.isEmpty) {
+            // Optimización: si todas están vistas, retornar 0 sin más
+            return 0;
+          }
           // Obtener offset del servidor desde RTDB
           // Envuelto en try-catch porque puede fallar en algunos dispositivos
           // y el SDK lanza una excepción mal formateada
@@ -406,7 +414,7 @@ class ParentMainShellController {
           // Calcular tiempo del servidor
           final serverNow = DateTime.now().add(Duration(milliseconds: offset));
 
-          return snapshot.docs.where((doc) {
+          return unviewedDocs.where((doc) {
             final data = doc.data();
             final expiresAt = data['expiresAt'];
             if (expiresAt == null) return true;

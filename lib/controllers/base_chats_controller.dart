@@ -1,6 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
-import '../services/chat_service.dart';
 import '../services/group_chat_service.dart';
 // ✅ Nuevos servicios atómicos
 import '../services/chats/chat_services.dart';
@@ -16,7 +15,6 @@ import '../utils/release_logger.dart';
 abstract class BaseChatsController {
   final String userId;
   final FirebaseFirestore _firestore;
-  final ChatService _chatService;
   final GroupChatService _groupChatService;
   // ✅ Nuevo servicio atómico para grupos
   final LeaveGroupService _leaveGroupService;
@@ -26,20 +24,15 @@ abstract class BaseChatsController {
   BaseChatsController({
     required this.userId,
     FirebaseFirestore? firestore,
-    ChatService? chatService,
     GroupChatService? groupChatService,
     LeaveGroupService? leaveGroupService,
     ChatPreferencesCache? preferencesCache,
   }) : _firestore = firestore ?? FirebaseFirestore.instance,
-       _chatService = chatService ?? ChatService(),
        _groupChatService = groupChatService ?? GroupChatService(),
        _leaveGroupService = leaveGroupService ?? LeaveGroupService(),
        _preferencesCache = preferencesCache ?? ChatPreferencesCache();
 
-  // Getters protegidos para acceso desde subclases
-  @protected
-  ChatService get chatService => _chatService;
-
+  // Getter protegido para acceso desde subclases
   @protected
   GroupChatService get groupChatService => _groupChatService;
 
@@ -88,7 +81,7 @@ abstract class BaseChatsController {
             );
           }
           for (final doc in snapshot.docs) {
-            final data = doc.data() as Map<String, dynamic>;
+            final data = doc.data();
             ReleaseLogger.log(
               '  → Grupo: ${doc.id}, nombre: ${data['name']}, members: ${(data['members'] as List?)?.length ?? 0}',
               tag: 'BaseChats',
@@ -208,7 +201,15 @@ abstract class BaseChatsController {
 
   /// Filtra chats eliminados
   List<QueryDocumentSnapshot> filterDeletedChats(QuerySnapshot snapshot) {
-    return _chatService.filterDeletedChats(snapshot);
+    return snapshot.docs.where((doc) {
+      final data = doc.data() as Map<String, dynamic>;
+      // ✅ Defensive: handle corrupted data where field might be List instead of Map
+      final deletedBy = data['deletedBy'] is Map
+          ? data['deletedBy'] as Map<String, dynamic>
+          : null;
+      if (deletedBy == null) return true;
+      return deletedBy[userId] != true;
+    }).toList();
   }
 
   /// Filtra chats archivados usando Hive cache (no Firestore)

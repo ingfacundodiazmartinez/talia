@@ -655,7 +655,7 @@ class ChildNotificationsController {
         return NotificationStyle(
           color: const Color(0xFF3F51B5), // Indigo
           icon: Icons.shield,
-          label: 'Cambio en Lista Blanca',
+          label: 'Cambio en Familia',
         );
       default:
         return NotificationStyle(

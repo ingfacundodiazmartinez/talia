@@ -1,13 +1,49 @@
 import UserNotifications
 import Intents  // Para INPerson y Communication Notifications
 import UIKit    // Para UIImage
+import FirebaseCore
+import FirebaseAuth
+import FirebaseFirestore
 
-/// NSE que descarga foto del sender y crea Communication Notification con foto circular
+/// NSE que descarga foto del sender y crea Communication Notification con foto circular.
+/// ADEMÁS: marca delivery receipt (`lastReceivedAt_{uid}`) en el chat doc cuando llega
+/// una push de chat_message — funciona incluso con la app principal totalmente cerrada.
 @objc(NotificationService)
 class NotificationService: UNNotificationServiceExtension {
 
     var contentHandler: ((UNNotificationContent) -> Void)?
     var bestAttemptContent: UNMutableNotificationContent?
+
+    /// Configurar Firebase una sola vez por proceso de NSE.
+    /// Como NSE puede ser reusada (mismo proceso para múltiples pushes), guardamos
+    /// un flag estático. Si ya está configurada, no la reconfigure.
+    private static var firebaseConfigured = false
+
+    private static func ensureFirebaseConfigured() {
+        guard !firebaseConfigured else { return }
+        // Opciones hardcoded del proyecto (talia-chat-app-v2). Valores públicos
+        // — son los mismos del GoogleService-Info.plist que ya vive en Runner.
+        let options = FirebaseOptions(
+            googleAppID: "1:858375352661:ios:cfdb7fe8506f903361bfdc",
+            gcmSenderID: "858375352661"
+        )
+        options.apiKey = "AIzaSyDQNZf12r6tPZ6ErEVBW7Wu2x7KBYYn6_w"
+        options.projectID = "talia-chat-app-v2"
+        options.storageBucket = "talia-chat-app-v2.firebasestorage.app"
+        options.databaseURL = "https://talia-chat-app-v2-default-rtdb.firebaseio.com"
+        options.bundleID = "com.talia.chat"
+        FirebaseApp.configure(options: options)
+
+        // Configurar Auth para leer del shared keychain (mismo grupo que la app
+        // principal — ver Runner.entitlements + NSE.entitlements).
+        do {
+            try Auth.auth().useUserAccessGroup("J642AAS7WP.com.talia.chat.shared")
+            NSLog("✅ [NSE] Firebase configurado + shared keychain")
+        } catch {
+            NSLog("⚠️ [NSE] Error shared keychain: %@", "\(error)")
+        }
+        firebaseConfigured = true
+    }
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
         self.contentHandler = contentHandler
@@ -23,6 +59,30 @@ class NotificationService: UNNotificationServiceExtension {
         let senderId = bestAttemptContent.userInfo["senderId"] as? String ?? "unknown"
         let senderName = bestAttemptContent.userInfo["senderName"] as? String ?? "Usuario"
         let chatId = bestAttemptContent.userInfo["chatId"] as? String ?? senderId
+        let pushType = bestAttemptContent.userInfo["type"] as? String
+
+        // ✅ DELIVERY RECEIPT (server-confirmed). Si es chat 1-1, escribir
+        // `lastReceivedAt_{uid}` en el chat doc. Fire-and-forget — no
+        // bloqueamos la entrega de la notificación.
+        if pushType == "chat_message" && chatId != "unknown" && chatId != senderId {
+            Self.ensureFirebaseConfigured()
+            if let uid = Auth.auth().currentUser?.uid {
+                Firestore.firestore()
+                    .collection("chats")
+                    .document(chatId)
+                    .updateData([
+                        "lastReceivedAt_\(uid)": FieldValue.serverTimestamp()
+                    ]) { error in
+                        if let error = error {
+                            NSLog("⚠️ [NSE] Error marcando lastReceivedAt: %@", "\(error)")
+                        } else {
+                            NSLog("📬 [NSE] lastReceivedAt_%@ actualizado para %@", uid, chatId)
+                        }
+                    }
+            } else {
+                NSLog("⚠️ [NSE] currentUser nil — no se puede marcar receipt")
+            }
+        }
 
         // ✅ FIX: Usar getCachedPhotoIfUrlMatches para detectar fotos actualizadas
         // Si la URL cambió, retorna nil y fuerza re-descarga

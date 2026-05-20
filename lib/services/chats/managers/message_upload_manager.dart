@@ -307,7 +307,7 @@ class MessageUploadManager {
   void dispose() {
     // Cancelar uploads sin esperar (fire and forget)
     for (var task in _activeUploads.values) {
-      task.cancel().catchError((e) {
+      task.cancel().then((_) {}).catchError((e) {
         ReleaseLogger.error('Error en dispose upload: $e', tag: 'MessageUpload');
       });
     }

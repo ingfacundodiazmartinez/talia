@@ -1,0 +1,322 @@
+═══════════════════════════════════════════════════════════════
+CODEPREP - Registro de Query
+═══════════════════════════════════════════════════════════════
+
+Fecha: 2026-01-24 22:44:17
+Proyecto: /Users/olagg/Personal/talia
+
+─── MÉTRICAS REALES ───
+Input tokens:       6,674
+Output tokens:      794
+Cache creado:       0
+Cache leído:        0
+TOTAL:              7,468 tokens
+Costo:              $0.0012 USD
+Tiempo:             0.0s
+
+─── QUERY ───
+Este proyecto se genero con claude puro, sin codeprep. Necesito que identifiques donde hay queries a firestore que no sean nada performantes. Por ejemplo, loops de x usuarios donde por cada iteracion se haga una query
+
+─── CONTEXTO ENVIADO ───
+# Contexto Pre-procesado por Cliente Local
+
+*Este contexto fue compilado por un modelo local (7B) para optimizar tu razonamiento.*
+
+## 📋 Reglas del Proyecto (CLAUDE.md)
+*Estas reglas son OBLIGATORIAS. Violaciones = código rechazado.*
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Reglas por Capa:**
+- **Screen** - PROHIBIDO: `FirebaseFirestore.instance.collection(...)`, `FirebaseFunctions.instance.httpsCallable(...)`, Direct calls to Services
+
+**Prohibiciones Globales:**
+- ❌ print() - usar ReleaseLogger
+- ❌ debugPrint() - usar ReleaseLogger
+- ❌ Firestore directo en Screen - usar Controller
+- ❌ Functions directo en Screen - usar Controller
+- ❌ Llamadas directas a Services desde Screen
+
+**Servicios Documentados:**
+- `notificationService`: NotificationService(),
+- `videoCallService`: VideoCallService(),
+- `autoApprovalService`: AutoApprovalService(),
+
+## 📊 Inventario del Proyecto
+
+**Archivos:** 596 | **Líneas:** 205,966
+**Lenguajes:** .dart: 504, .js: 84, .py: 7, .rb: 1
+
+### Services (203)
+- `GeminiAIService` → lib/gemini_ai_service.dart
+- `NotificationService` → lib/notification_service.dart
+- `ThemeService` → lib/theme_service.dart
+- `MessageReportService` → lib/services/message_report_service.dart
+- `GroupService` → lib/services/group_service.dart
+- `BlockService` → lib/services/block_service.dart
+- `DeepARService` → lib/services/deepar_service.dart
+- `CallKitService` → lib/services/callkit_service.dart
+- `StoryService` → lib/services/story_service_refactored.dart
+- `PermissionService` → lib/services/permission_service.dart
+- ... y 193 más
+
+### Controllers (44)
+- `GroupChatController` → lib/controllers/group_chat_controller.dart
+- `ChatsController` → lib/controllers/chats_controller.dart
+- `ChildContactsController` → lib/controllers/child_contacts_controller.dart
+- `ChildMainShellController` → lib/controllers/child_main_shell_controller.dart
+- `BaseChatsController` → lib/controllers/base_chats_controller.dart
+- `MessageInfoController` → lib/controllers/message_info_controller.dart
+- `ShareTargetController` → lib/controllers/share_target_controller.dart
+- `ChatAppBarController` → lib/controllers/chat_app_bar_controller.dart
+- `ChildHomeController` → lib/controllers/child_home_controller.dart
+- `StoryCameraController` → lib/controllers/story_camera_controller.dart
+- ... y 34 más
+
+### 🔄 Clases con Nombres Similares
+- ***CacheService** (13): UICacheService, UserCacheService, UserProfileCacheService, ShareExtensionCacheService, WaveformCacheService
+- ***ChatService** (9): GroupChatService, CreateChatService, ClearChatService, UnmuteChatService, ArchiveChatService
+- ***ContactService** (7): ContactService, RejectWhitelistContactService, ApproveWhitelistContactService, ReapproveWhitelistContactService, RevokeWhitelistContactService
+- ***GroupService** (6): GroupService, DeleteGroupService, LeaveGroupService, CreateGroupService, UpdateGroupService
+- ***ChatsController** (6): ChatsController, BaseChatsController, ParentChatsController, ParentArchivedChatsController, ChildChatsController
+
+## Proyecto
+Proyecto Flutter/Dart en /Users/olagg/Personal/talia
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Convenciones:**
+- Controllers usan ChangeNotifier
+- Modelos en lib/models/
+
+## Análisis Previo (modelo local)
+*Confianza del análisis: 50%*
+
+### Pensamiento inicial
+Tarea de modificación: Este proyecto se genero con claude puro, sin codeprep. Necesito que identifiques donde hay queries a firestore que no sean nada performantes. Por ejemplo, loops de x usuarios donde por cada iteracion se haga una query
+
+### Módulos relevantes
+- `/Users/olagg/Personal/talia/lib/utils/release_logger.dart`
+- `/Users/olagg/Personal/talia/lib/main.dart`
+- `/Users/olagg/Personal/talia/functions/sticker-sync-service.js`
+
+### Patrones observados en el proyecto
+- Screen → Controller → Service → Model
+
+### Borrador de approach
+Implementar modificación siguiendo la arquitectura del proyecto.
+
+### Puntos que requieren tu análisis
+- ¿Qué archivos específicos debo modificar?
+- ¿Hay widgets o servicios existentes que deba reutilizar?
+
+## ⚠️ Anti-Frankenstein: NO DUPLIQUES
+*El modelo local analizó TODO el proyecto y encontró código reutilizable.*
+
+### Código que DEBES reutilizar (no crear de nuevo)
+- **`initAppConfig`** en `/Users/olagg/Personal/talia/functions/scripts/init-app-config.js`
+  - Propósito: function en init-app-config.js
+  - Firma: `async function initAppConfig()`
+  - Relevancia: 69%
+- **`deleteVoIPToken`** en `/Users/olagg/Personal/talia/scripts/delete_voip_token.js`
+  - Propósito: function en delete_voip_token.js
+  - Firma: `async function deleteVoIPToken()`
+  - Relevancia: 67%
+- **`migrateSticker`** en `/Users/olagg/Personal/talia/scripts/migrate_stickers_to_storage.js`
+  - Propósito: extension en migrate_stickers_to_storage.js
+  - Firma: `function migrateSticker(stickerId, stickerData)`
+  - Relevancia: 67%
+- **`StickerSyncService.searchStickers`** en `/Users/olagg/Personal/talia/functions/sticker-sync-service.js`
+  - Propósito: service en sticker-sync-service.js
+  - Firma: `searchStickers(query, limit = 20)`
+  - Relevancia: 66%
+- **`activateExtraChildForUser`** en `/Users/olagg/Personal/talia/functions/iap-verification.js`
+  - Propósito: function en iap-verification.js
+  - Firma: `function activateExtraChildForUser(userId, expiryTimeMillis, platform, productId)`
+  - Relevancia: 66%
+
+### Patrones del Proyecto (DEBES seguir)
+- **Singletons:** Mixto o no detectado
+- **Clases base:** CustomPainter
+- **State management:** No detectado
+- **Naming:** Sufijos comunes: {'Widget': 3, 'Service': 2}
+
+### ⚠️ Advertencias
+- Clases base comunes: CustomPainter
+- State management: No detectado
+
+### 🧟 Código Duplicado EXISTENTE (Frankenstein actual)
+*El proyecto YA tiene este código duplicado. NO agregues otra copia.*
+
+**Manejo de errores de Firebase** (10 copias)
+  - `test/test_helpers.dart:41`
+  - `lib/main.dart:142`
+  - `lib/notification_service.dart:79`
+  - 💡 **Refactor sugerido:** Crear FirebaseErrorHandler centralizado
+
+**Validación de null con early return/throw** (386 copias)
+  - `lib/link_parent_child.dart:88`
+  - `lib/link_parent_child.dart:116`
+  - `lib/link_parent_child.dart:158`
+  - 💡 **Refactor sugerido:** Usar extensión o helper de validación
+
+**Validación de strings vacíos/null** (52 copias)
+  - `lib/link_parent_child.dart:73`
+  - `lib/gemini_ai_service.dart:57`
+  - `lib/models/child.dart:17`
+  - 💡 **Refactor sugerido:** Crear StringUtils.isNullOrEmpty()
+
+**Formateo de tiempo relativo (hace X minutos/horas/días)** (33 copias)
+  - `lib/reports_screen.dart:503`
+  - `lib/reports_screen.dart:505`
+  - `lib/reports_screen.dart:507`
+  - 💡 **Refactor sugerido:** Crear DateTimeUtils.formatRelative(DateTime) -> String
+
+**Formateo de fechas con DateFormat** (8 copias)
+  - `lib/screens/reported_messages_screen.dart:173`
+  - `lib/screens/message_info_screen.dart:315`
+  - `lib/screens/message_info_screen.dart:318`
+  - 💡 **Refactor sugerido:** Crear DateTimeUtils con formatos constantes
+
+**Manejo de estado de loading** (47 copias)
+  - `lib/screens/add_contact_screen.dart:284`
+  - `lib/screens/add_contact_screen.dart:343`
+  - `lib/screens/splash_wrapper.dart:40`
+  - 💡 **Refactor sugerido:** Usar mixin o helper de loading state
+
+## Código Relevante
+*9 archivos por relevancia semántica + 3 por grafo de dependencias*
+
+### `/Users/olagg/Personal/talia/lib/utils/release_logger.dart` 🔗 (relevancia: 0.90)
+```dart
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+class ReleaseLogger {
+  static ReleaseLogger? _instance;
+  static ReleaseLogger get instance {
+    _instance ??= ReleaseLogger._();
+    return _instance!;
+  }
+
+  File? _logFile;
+
+  ReleaseLogger._() {
+    _initializeLogger();
+  }
+
+  Future<void> _initializeLogger() async {
+    try {
+      debugPrint('📝 [ReleaseLogger] Logs escribiendo a: ${_logFile!.path}');
+    } catch (e) {
+      debugPrint('❌ [ReleaseLogger] Error inicializando logger: $e');
+    }
+  }
+
+  static void log(String message, ...
+
+─── RESPUESTA DE CLAUDE ───
+Analizando el proyecto para identificar queries a Firestore no performantes. Voy a buscar patrones comunes de N+1 queries, loops innecesarios y optimizaciones posibles.
+
+## Análisis de Queries No Performantes
+
+### 1. **Patrón N+1 en Servicios de Contactos**
+Primero, necesito ver cómo se manejan los contactos y usuarios:
+
+```
+[NEED_CONTEXT: archivos relacionados con contactos, whitelist y búsqueda de usuarios]
+```
+
+### 2. **Patrón de Queries en Loops**
+Buscaré archivos donde haya `for` o `forEach` con queries dentro:
+
+```
+[NEED_CONTEXT: archivos que contengan FirebaseFirestore.instance.collection dentro de loops]
+```
+
+### 3. **Servicios de Chat y Mensajes**
+Los chats suelen tener problemas de performance:
+
+```
+[NEED_CONTEXT: archivos de servicios de chat, group_service, chat_service]
+```
+
+### 4. **Servicios de Notificaciones y Estado**
+Las notificaciones pueden tener queries redundantes:
+
+```
+[NEED_CONTEXT: archivos de notification_service, online_status_service, user_status_service]
+```
+
+### 5. **Servicios de Dashboard y Reportes**
+Los dashboards suelen hacer múltiples queries:
+
+```
+[NEED_CONTEXT: archivos de dashboard, reports, analytics]
+```
+
+Mientras espero el contexto adicional, puedo identificar algunos patrones problemáticos basándome en la arquitectura del proyecto:
+
+## Problemas Potenciales Identificables:
+
+### 1. **En `ChatStreamManager`** (ya visto en el contexto):
+```dart
+// Posible problema: múltiples listeners por chat
+final Map<String, StreamSubscription> _messageStreamSubscriptions = {};
+```
+Esto podría crear un listener por chat, lo cual es ineficiente.
+
+### 2. **En `NotificationService`**:
+Las notificaciones push suelen requerir múltiples queries para obtener datos de usuario, chat, etc.
+
+### 3. **Patrones comunes en apps de chat:**
+- Obtener datos de usuario uno por uno en lugar de usar `whereIn`
+- No cachear datos de usuario frecuentemente accedidos
+- Hacer queries en loops para verificar permisos/estados
+
+## Recomendaciones Iniciales:
+
+### 1. **Implementar Batch Queries**:
+```dart
+// MAL: Query por cada usuario
+for (var userId in userIds) {
+  var userDoc = await FirebaseFirestore.instance
+      .collection('users')
+      .doc(userId)
+      .get();
+}
+
+// BIEN: Batch query
+var userDocs = await FirebaseFirestore.instance
+    .collection('users')
+    .where(FieldPath.documentId, whereIn: userIds)
+    .get();
+```
+
+### 2. **Cachear Datos de Usuario**:
+Extender `UserCacheService` para cachear datos frecuentemente accedidos.
+
+### 3. **Optimizar Listeners**:
+Consolidar listeners en lugar de tener uno por chat.
+
+### 4. **Usar Field Selectivity**:
+Solo obtener los campos necesarios:
+```dart
+// En lugar de .get()
+await docRef.get();
+
+// Usar .get() con selección de campos
+await docRef.get().then((snap) => snap.data()?['campoNecesario']);
+```
+
+¿Quieres que me enfoque en algún área específica primero? Por ejemplo:
+1. Servicios de contacto/whitelist
+2. Sistema de chat/mensajes
+3. Notificaciones y estado en línea
+4. Dashboard y reportes
+
+O prefieres que revise todos los archivos problemáticos sistemáticamente?
+
+═══════════════════════════════════════════════════════════════

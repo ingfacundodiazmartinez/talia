@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -123,14 +124,18 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
 
       if (doc.docs.isNotEmpty) {
         final data = doc.docs.first.data();
-        final expiry = (data['expiresAt'] as Timestamp).toDate();
+        // ✅ Códigos permanentes: si está activo, mostrarlo. Si tiene expiresAt
+        // (legacy) y ya expiró, ignorarlo.
+        final expiryTs = data['expiresAt'] as Timestamp?;
+        final expiry = expiryTs?.toDate();
+        final isStillValid = expiry == null || expiry.isAfter(DateTime.now());
 
-        if (expiry.isAfter(DateTime.now())) {
+        if (isStillValid) {
           setState(() {
             _linkCode = data['code'];
-            _expiryTime = expiry;
+            _expiryTime = expiry; // null para códigos permanentes
           });
-          _startCountdownTimer();
+          if (expiry != null) _startCountdownTimer();
         }
       }
     } catch (e) {
@@ -167,32 +172,29 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
         await doc.reference.update({'isActive': false});
       }
 
-      // Generar código de 6 dígitos
+      // Generar código de 6 dígitos (permanente — el padre puede regenerar manualmente)
       final code = _generateRandomCode();
-      final expiresAt = DateTime.now().add(Duration(minutes: 5));
-      final deleteAt = DateTime.now().add(Duration(minutes: 5)); // TTL para Firestore
 
-      // Guardar en Firestore
+      // Guardar en Firestore (sin expiresAt ni deleteAt: el código es permanente)
       await _firestore.collection('link_codes').add({
         'code': code,
         'parentId': parentId,
         'createdBy': parentId, // Requerido por reglas de seguridad
         'isActive': true,
         'createdAt': FieldValue.serverTimestamp(),
-        'expiresAt': Timestamp.fromDate(expiresAt),
-        'deleteAt': Timestamp.fromDate(deleteAt), // TTL: 5 minutos
         'used': false,
       });
 
       setState(() {
         _linkCode = code;
-        _expiryTime = expiresAt;
+        _expiryTime = null; // Permanente
       });
-      _startCountdownTimer();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('❌ Error: $e'), backgroundColor: Colors.red),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('❌ Error: $e'), backgroundColor: Colors.red),
+        );
+      }
     } finally {
       setState(() => _isGenerating = false);
     }
@@ -217,7 +219,9 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
     return '${minutes}m ${seconds.toString().padLeft(2, '0')}s';
   }
 
-  bool get _isExpired => _timeRemaining.inSeconds <= 0;
+  // Sólo "expirado" si el código tiene expiración y ya transcurrió.
+  // Para códigos permanentes (_expiryTime == null), siempre es false.
+  bool get _isExpired => _expiryTime != null && _timeRemaining.inSeconds <= 0;
 
   @override
   Widget build(BuildContext context) {
@@ -241,7 +245,7 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                     colorScheme.surface,
                   ]
                 : [
-                    colorScheme.primary.withOpacity(0.1),
+                    colorScheme.primary.withValues(alpha: 0.1),
                     colorScheme.surface,
                   ],
           ),
@@ -335,47 +339,49 @@ class _GenerateLinkCodeScreenState extends State<GenerateLinkCodeScreen> {
                 SizedBox(height: 40),
 
                 if (_linkCode != null) ...[
-                  // Countdown banner
-                  Container(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: _getExpirationColor().withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: _getExpirationColor().withValues(alpha: 0.5)),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          _isExpired ? Icons.timer_off : Icons.timer,
-                          color: _getExpirationColor(),
-                          size: 20,
-                        ),
-                        SizedBox(width: 8),
-                        Text(
-                          _isExpired ? 'Codigo expirado' : 'Expira en: ${_formatTimeRemaining()}',
-                          style: TextStyle(
+                  // Countdown banner — solo aparece para códigos legacy con expiración.
+                  // Códigos nuevos son permanentes; el padre puede regenerar manualmente.
+                  if (_expiryTime != null) ...[
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: _getExpirationColor().withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: _getExpirationColor().withValues(alpha: 0.5)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            _isExpired ? Icons.timer_off : Icons.timer,
                             color: _getExpirationColor(),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
+                            size: 20,
                           ),
-                        ),
-                        if (_isExpired) ...[
-                          SizedBox(width: 12),
-                          TextButton(
-                            onPressed: _generateLinkCode,
-                            style: TextButton.styleFrom(
-                              foregroundColor: _getExpirationColor(),
-                              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          SizedBox(width: 8),
+                          Text(
+                            _isExpired ? 'Codigo expirado' : 'Expira en: ${_formatTimeRemaining()}',
+                            style: TextStyle(
+                              color: _getExpirationColor(),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
                             ),
-                            child: Text('Regenerar'),
                           ),
+                          if (_isExpired) ...[
+                            SizedBox(width: 12),
+                            TextButton(
+                              onPressed: _generateLinkCode,
+                              style: TextButton.styleFrom(
+                                foregroundColor: _getExpirationColor(),
+                                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                              ),
+                              child: Text('Regenerar'),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
-
-                  SizedBox(height: 16),
+                    SizedBox(height: 16),
+                  ],
 
                   // Code display card
                   Container(
@@ -737,19 +743,21 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
 
       if (validationData['valid'] != true) {
         final error = validationData['error'] ?? 'Código inválido o expirado';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ $error'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('❌ $error'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
         return;
       }
 
       // Si ya está vinculado
       if (validationData['alreadyLinked'] == true) {
         ReleaseLogger.log('Ya existe un vínculo activo entre este padre e hijo', tag: 'LinkParentChild');
-        Navigator.of(context).pop(false);
+        if (mounted) Navigator.of(context).pop(false);
         return;
       }
 
@@ -770,7 +778,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
           linkCode: code, // Usar código en lugar de docId para seguridad
         );
 
-        Navigator.of(context).pop(true);
+        if (mounted) Navigator.of(context).pop(true);
         return;
       }
 
@@ -796,13 +804,15 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         }
       } catch (e) {
         ReleaseLogger.error('Error al llamar Cloud Function: $e', tag: 'LinkParentChild');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('❌ Error al crear vínculo: $e'),
-            backgroundColor: Colors.red,
-            duration: Duration(seconds: 4),
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('❌ Error al crear vínculo: $e'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
         return;
       }
 
@@ -929,7 +939,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
 
           // Mostrar diálogo explicativo en ambas plataformas
           // (El dialog ahora maneja correctamente iOS y Android)
-          await LocationPermissionDialog.show(context);
+          if (mounted) await LocationPermissionDialog.show(context);
         } else {
           ReleaseLogger.log('Permisos de ubicación ya concedidos (always), omitiendo solicitud', tag: 'LinkParentChild');
         }
@@ -939,9 +949,11 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
         Navigator.of(context).pop(true);
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('❌ Error: $e'), backgroundColor: Colors.red),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('❌ Error: $e'), backgroundColor: Colors.red),
+        );
+      }
     } finally {
       setState(() => _isVerifying = false);
     }
@@ -1018,7 +1030,7 @@ class _EnterLinkCodeScreenState extends State<EnterLinkCodeScreen> {
                     colorScheme.primary.withValues(alpha: 0.3),
                     colorScheme.surface,
                   ]
-                : [Color(0xFF9D7FE8).withOpacity(0.1), Colors.white],
+                : [ThemeService.primaryColor.withValues(alpha: 0.1), Colors.white],
           ),
         ),
         child: Center(

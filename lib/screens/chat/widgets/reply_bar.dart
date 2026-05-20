@@ -71,7 +71,7 @@ class ReplyBar extends StatelessWidget {
                     color: Colors.black.withValues(alpha: 0.1),
                     child: hasImage
                         ? CachedNetworkImage(
-                            imageUrl: imageUrl!, // hasImage already verifies non-null
+                            imageUrl: imageUrl, // hasImage already verifies non-null
                             fit: BoxFit.cover,
                             placeholder: (context, url) => Icon(
                               Icons.image,

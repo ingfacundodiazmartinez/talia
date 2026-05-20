@@ -169,7 +169,7 @@ class AppConfigService {
       final envValue = dotenv.env['PREMIUM_ENABLED'];
       if (envValue != null && envValue.isNotEmpty) {
         final enabled = envValue.toLowerCase() == 'true';
-        print('🎛️ [PremiumFlag] desde .env: $enabled');
+        ReleaseLogger.log('🎛️ [PremiumFlag] desde .env: $enabled');
         return enabled;
       }
     } catch (_) {
@@ -180,15 +180,15 @@ class AppConfigService {
     if (_initialized && _remoteConfig != null) {
       try {
         final remoteValue = _remoteConfig!.getBool('premium_enabled');
-        print('🎛️ [PremiumFlag] desde Remote Config: $remoteValue');
+        ReleaseLogger.log('🎛️ [PremiumFlag] desde Remote Config: $remoteValue');
         return remoteValue;
       } catch (e) {
-        print('🎛️ [PremiumFlag] Remote Config error: $e');
+        ReleaseLogger.log('🎛️ [PremiumFlag] Remote Config error: $e');
       }
     }
 
     // 3. Default: true (premium habilitado por defecto)
-    print('🎛️ [PremiumFlag] usando default: true');
+    ReleaseLogger.log('🎛️ [PremiumFlag] usando default: true');
     return true;
   }
 

@@ -329,18 +329,18 @@ class _NudgeReceiverOverlayState extends State<NudgeReceiverOverlay>
           borderRadius: BorderRadius.circular(16),
           border: isDark
               ? Border.all(
-                  color: primaryColor.withOpacity(0.3),
+                  color: primaryColor.withValues(alpha: 0.3),
                   width: 1,
                 )
               : null,
           boxShadow: [
             BoxShadow(
-              color: primaryColor.withOpacity(isDark ? 0.2 : 0.25),
+              color: primaryColor.withValues(alpha: isDark ? 0.2 : 0.25),
               blurRadius: 16,
               offset: Offset(0, 6),
             ),
             BoxShadow(
-              color: Colors.black.withOpacity(isDark ? 0.3 : 0.08),
+              color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.08),
               blurRadius: 8,
               offset: Offset(0, 2),
             ),
@@ -413,7 +413,7 @@ class _NudgeReceiverOverlayState extends State<NudgeReceiverOverlay>
         border: Border.all(color: primaryColor, width: 2),
         boxShadow: [
           BoxShadow(
-            color: primaryColor.withOpacity(0.25),
+            color: primaryColor.withValues(alpha: 0.25),
             blurRadius: 6,
             spreadRadius: 0,
           ),
@@ -424,8 +424,8 @@ class _NudgeReceiverOverlayState extends State<NudgeReceiverOverlay>
             ? CachedNetworkImage(
                 imageUrl: photoUrl,
                 fit: BoxFit.cover,
-                placeholder: (_, __) => _buildAvatarPlaceholder(name, primaryColor, surfaceColor),
-                errorWidget: (_, __, ___) => _buildAvatarPlaceholder(name, primaryColor, surfaceColor),
+                placeholder: (context, url) => _buildAvatarPlaceholder(name, primaryColor, surfaceColor),
+                errorWidget: (context, url, error) => _buildAvatarPlaceholder(name, primaryColor, surfaceColor),
               )
             : _buildAvatarPlaceholder(name, primaryColor, surfaceColor),
       ),
@@ -434,7 +434,7 @@ class _NudgeReceiverOverlayState extends State<NudgeReceiverOverlay>
 
   Widget _buildAvatarPlaceholder(String name, Color primaryColor, Color surfaceColor) {
     return Container(
-      color: primaryColor.withOpacity(0.15),
+      color: primaryColor.withValues(alpha: 0.15),
       child: Center(
         child: Text(
           name.isNotEmpty ? name[0].toUpperCase() : '?',
@@ -465,7 +465,7 @@ class _NudgeReceiverOverlayState extends State<NudgeReceiverOverlay>
           borderRadius: BorderRadius.circular(20),
           boxShadow: _isResponding ? [] : [
             BoxShadow(
-              color: primaryColor.withOpacity(0.3),
+              color: primaryColor.withValues(alpha: 0.3),
               blurRadius: 6,
               offset: Offset(0, 2),
             ),

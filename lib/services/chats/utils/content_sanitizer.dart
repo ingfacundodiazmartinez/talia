@@ -134,10 +134,8 @@ class ContentSanitizer {
 
   /// Limpiar emojis duplicados o excesivos
   static String limitEmojis(String input, {int maxConsecutive = 5}) {
-    // Pattern para detectar emojis consecutivos
-    final emojiPattern = RegExp(r'[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]', unicode: true);
-
-    return input.replaceAllMapped(RegExp(r'([\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]){${maxConsecutive + 1},}', unicode: true), (match) {
+    final threshold = maxConsecutive + 1;
+    return input.replaceAllMapped(RegExp('([\\u{1F600}-\\u{1F64F}]|[\\u{1F300}-\\u{1F5FF}]|[\\u{1F680}-\\u{1F6FF}]|[\\u{1F1E0}-\\u{1F1FF}]|[\\u{2600}-\\u{26FF}]|[\\u{2700}-\\u{27BF}]){$threshold,}', unicode: true), (match) {
       final emoji = match.group(0)!.substring(0, 2); // Tomar el primer emoji
       return emoji * maxConsecutive; // Limitarlo al máximo
     });

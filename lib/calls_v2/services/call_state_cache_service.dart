@@ -1,12 +1,12 @@
-/// Call State Cache Service
-///
-/// Centralized cache for call processing state to prevent duplicate processing.
-/// This service ensures that only one component processes a call at a time,
-/// preventing race conditions from VoIP push, FCM notifications, and Firestore listeners.
+// Call State Cache Service
+//
+// Centralized cache for call processing state to prevent duplicate processing.
+// This service ensures that only one component processes a call at a time,
+// preventing race conditions from VoIP push, FCM notifications, and Firestore listeners.
 
 import '../../utils/release_logger.dart';
 
-/// Singleton service for managing call processing state
+// Singleton service for managing call processing state
 class CallStateCacheService {
   static final CallStateCacheService _instance = CallStateCacheService._internal();
   factory CallStateCacheService() => _instance;
@@ -88,7 +88,6 @@ class CallStateCacheService {
   /// Cleanup expired entries from the cache
   /// Should be called periodically
   void cleanupExpired() {
-    final now = DateTime.now();
     final beforeCount = _cache.length;
 
     _cache.removeWhere((key, state) => state.isExpired());
@@ -227,7 +226,7 @@ class CallStateCacheService {
   }
 }
 
-/// Represents the processing state of a call
+// Represents the processing state of a call
 class CallProcessingState {
   final String callId;
   final CallProcessingSource source;
@@ -254,7 +253,7 @@ class CallProcessingState {
   }
 }
 
-/// Sources that can process calls
+// Sources that can process calls
 enum CallProcessingSource {
   /// iOS VoIP push notification
   voipPush,

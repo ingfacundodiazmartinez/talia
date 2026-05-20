@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -25,7 +26,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
   SubscriptionTier _selectedTier = SubscriptionTier.premium;
 
   // Colores alineados con el tema de la app (ThemeService)
-  static const Color _primaryPurple = Color(0xFF9D7FE8);  // primaryColor
+  static const Color _primaryPurple = ThemeService.primaryColor;  // primaryColor
   static const Color _secondaryPurple = Color(0xFF7B5FC7); // primaryDarkColor
   static const Color _accentGold = Color(0xFFFFD700);
 
@@ -227,7 +228,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    isPremium ? 'Eres ${tier.displayName}' : 'Talia Premium',
+                    isPremium ? 'Eres ${tier.displayName}' : 'Tália Premium',
                     style: const TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.bold,
@@ -237,7 +238,7 @@ class _SubscriptionScreenState extends State<SubscriptionScreen> {
                   const SizedBox(height: 4),
                   Text(
                     isPremium
-                        ? 'Gracias por ser parte de Talia'
+                        ? 'Gracias por ser parte de Tália'
                         : 'Desbloquea todas las funciones',
                     style: TextStyle(
                       fontSize: 13,

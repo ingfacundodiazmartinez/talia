@@ -27,7 +27,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 // ═══════════════════════════════════════════════════════════════
 
 const TALIA_ID = "talia-assistant";
-const TALIA_NAME = "Talia";
+const TALIA_NAME = "Tália";
 const TALIA_PHOTO_URL = "https://firebasestorage.googleapis.com/v0/b/talia-chat-app-v2.firebasestorage.app/o/system%2Flogo.png?alt=media";
 
 // Rate limits
@@ -65,7 +65,7 @@ if (!genAI) {
 // SYSTEM PROMPT - MODO AMIGA (Base corto - siempre incluido)
 // ═══════════════════════════════════════════════════════════════
 
-const TALIA_SYSTEM_PROMPT_BASE = `Sos Talia, una amiga virtual. NO sos asistente ni bot de ayuda.
+const TALIA_SYSTEM_PROMPT_BASE = `Sos Tália, una amiga virtual. NO sos asistente ni bot de ayuda.
 
 ## Personalidad
 - Curiosa, te interesa la vida del usuario
@@ -80,7 +80,17 @@ const TALIA_SYSTEM_PROMPT_BASE = `Sos Talia, una amiga virtual. NO sos asistente
 - NUNCA abuses del "che"
 - Tuteo argentino: "vos", "tenés", "querés"
 
-## REGLAS DE PRIVACIDAD (MUY IMPORTANTE)
+## REGLA MÁS IMPORTANTE: NUNCA MENTIR NI INVENTAR
+- Si NO sabés algo, decí "no sé" o "no tengo idea"
+- Si te preguntan sobre algo que NO podés ver (fotos, videos, stories, audios), decí honestamente que NO podés verlo
+- NUNCA inventes contenido de fotos, videos o stories - NO PODÉS VERLOS
+- NUNCA digas que "viste" una historia si no sabés qué contenía
+- Si el usuario pregunta "¿viste mi story?", respondé honestamente: "Sé que subiste una pero no puedo ver qué es, contame!"
+- Si te muestran una foto y preguntan qué te parece, decí que no podés ver imágenes
+- NUNCA alucines ni inventes información que no tenés
+- Es mejor decir "no sé" que inventar algo falso
+
+## REGLAS DE PRIVACIDAD
 - NUNCA menciones otros contactos del usuario a menos que ÉL los mencione primero
 - NUNCA preguntes "¿hablaste con X?" o "¿cómo está X?"
 - NUNCA menciones información personal que sabés del usuario a menos que sea relevante a lo que pregunta
@@ -284,7 +294,7 @@ async function extractMemorableFacts(userMessage, taliaResponse) {
   if (!genAI) return [];
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
     const prompt = `Analiza este mensaje del usuario y extrae información importante para recordar sobre su vida.
 Solo extrae hechos concretos y personales (nombres de amigos, eventos, gustos, problemas).
@@ -368,7 +378,7 @@ async function generateUserProfileSummary(userId, facts) {
   console.log(`📊 [Talia] Generando perfil resumido para ${userId}...`);
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
     const prompt = `Analiza estos datos sobre un usuario y genera un perfil estructurado.
 
@@ -727,7 +737,7 @@ async function generateResponse(userMessage, chatId, userId) {
     const systemPrompt = buildSystemPrompt(userMessage, contextInfo);
 
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash-lite",
       systemInstruction: systemPrompt,
     });
 
@@ -864,7 +874,7 @@ exports.onUserCreatedCreateTaliaChat = onDocumentCreated(
       }
 
       const now = Timestamp.now();
-      const welcomeMessage = `Holaaa${firstName ? ` ${firstName}` : ''}! 👋 Soy Talia, qué onda? Contame qué andás haciendo`;
+      const welcomeMessage = `Holaaa${firstName ? ` ${firstName}` : ''}! 👋 Soy Tália, qué onda? Contame qué andás haciendo`;
 
       await chatRef.set({
         participants,
@@ -1120,28 +1130,22 @@ exports.processTaliaPendingReactions = onSchedule(
 
 /**
  * Genera un comentario natural sobre una story
+ * NOTA: Tália NO puede ver el contenido de las stories, solo sabe que se publicó una
  */
 async function generateStoryComment(storyType, userId) {
   const memory = await getTaliaMemory(userId);
   const userName = memory.userName || "";
 
-  // Comentarios predefinidos variados
-  const photoComments = [
-    "Ey vi tu historia! 📸 Qué onda, dónde estás?",
-    "Opa, qué foto! Contame más",
-    "Jaja me encanta, qué andás haciendo?",
-    "Vi tu story! Todo bien por ahí?",
-    "Uh qué buena esa! 😄",
+  // Comentarios honestos - Tália sabe que subieron una story pero NO puede ver el contenido
+  const comments = [
+    "Ey subiste una historia! 📸 Qué es? Contame!",
+    "Vi que subiste algo a tu historia, qué onda? 😊",
+    "Opa, nueva historia! De qué se trata?",
+    "Ey! Me di cuenta que publicaste una historia, qué es?",
+    "Subiste una story! No la puedo ver bien, contame qué es 👀",
+    "Nueva historia! Qué andás haciendo? Contame!",
   ];
 
-  const videoComments = [
-    "Jaja vi tu video, muy bueno 😂",
-    "Ey vi tu story! Qué es eso?",
-    "Opa qué video, contame el contexto jaja",
-    "Vi tu historia, todo bien? 😊",
-  ];
-
-  const comments = storyType === "video" ? videoComments : photoComments;
   const randomComment = comments[Math.floor(Math.random() * comments.length)];
 
   return randomComment;

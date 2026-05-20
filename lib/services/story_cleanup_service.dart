@@ -43,9 +43,6 @@ class StoryCleanupService {
       }
 
 
-      int deletedFiles = 0;
-      int deletedDocs = 0;
-
       for (final storyDoc in expiredStoriesQuery.docs) {
         try {
           final storyData = storyDoc.data();
@@ -56,21 +53,22 @@ class StoryCleanupService {
               final mediaUrl = storyData['mediaUrl'] as String;
               final storageRef = _storage.refFromURL(mediaUrl);
               await storageRef.delete();
-              deletedFiles++;
-            } catch (e) {
+            } catch (_) {
+              // Silently ignored - storage cleanup should not block other operations
             }
           }
 
           // Eliminar documento de Firestore
           await storyDoc.reference.delete();
-          deletedDocs++;
 
-        } catch (e) {
+        } catch (_) {
+          // Silently ignored - individual story cleanup errors should not block others
         }
       }
 
 
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cleanup errors should not crash the app
     }
   }
 
@@ -93,19 +91,22 @@ class StoryCleanupService {
               final mediaUrl = storyData['mediaUrl'] as String;
               final storageRef = _storage.refFromURL(mediaUrl);
               await storageRef.delete();
-            } catch (e) {
+            } catch (_) {
+              // Silently ignored - storage cleanup should not block other operations
             }
           }
 
           // Eliminar documento
           await storyDoc.reference.delete();
 
-        } catch (e) {
+        } catch (_) {
+          // Silently ignored - individual story cleanup errors should not block others
         }
       }
 
 
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cleanup errors should not crash the app
     }
   }
 

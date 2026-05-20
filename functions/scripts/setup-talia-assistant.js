@@ -31,7 +31,7 @@ const fs = require("fs");
 // ═══════════════════════════════════════════════════════════════
 
 const TALIA_ID = "talia-assistant";
-const TALIA_NAME = "Talia";
+const TALIA_NAME = "Tália";
 const TALIA_EMAIL = "talia@talia.app";
 const TALIA_PHOTO_URL = "https://firebasestorage.googleapis.com/v0/b/talia-chat-app-v2.firebasestorage.app/o/system%2Flogo.png?alt=media";
 
@@ -188,7 +188,7 @@ async function createTaliaChatsForExistingUsers() {
     try {
       const now = Timestamp.now();
       const firstName = userName.split(' ')[0];
-      const welcomeMessage = `Holaaa${firstName ? ` ${firstName}` : ''}! 👋 Soy Talia, qué onda? Contame qué andás haciendo`;
+      const welcomeMessage = `Holaaa${firstName ? ` ${firstName}` : ''}! 👋 Soy Tália, qué onda? Contame qué andás haciendo`;
 
       // Create chat
       await chatRef.set({

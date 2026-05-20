@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import '../../../services/user_cache_service.dart';
 
 /// Bottom sheet que muestra quién reaccionó a un mensaje
 class ReactionsDetailSheet extends StatefulWidget {
@@ -177,8 +177,8 @@ class _ReactionsDetailSheetState extends State<ReactionsDetailSheet>
   }
 
   Widget _buildUserTile(String userId) {
-    return FutureBuilder<DocumentSnapshot>(
-      future: FirebaseFirestore.instance.collection('users').doc(userId).get(),
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: UserCacheService().getUserData(userId),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return ListTile(
@@ -195,7 +195,7 @@ class _ReactionsDetailSheetState extends State<ReactionsDetailSheet>
           );
         }
 
-        final userData = snapshot.data!.data() as Map<String, dynamic>?;
+        final userData = snapshot.data;
         final name = userData?['name'] as String? ?? 'Usuario';
         final photoURL = userData?['photoURL'] as String?;
 

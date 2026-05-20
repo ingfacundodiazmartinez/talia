@@ -85,7 +85,7 @@ class MessageInfoScreen extends StatelessWidget {
                       _buildSectionHeader(
                         context,
                         'Leído por',
-                        Icons.drafts_outlined, // Sobre abierto
+                        Icons.done_all, // 2 tildes (azul = leído)
                       ),
                       ...readBy.map((userId) => _buildMemberTile(
                             context,
@@ -100,7 +100,7 @@ class MessageInfoScreen extends StatelessWidget {
                       _buildSectionHeader(
                         context,
                         'Entregado a',
-                        Icons.markunread, // Sobre con marca
+                        Icons.done_all, // 2 tildes (gris = entregado)
                       ),
                       ...deliveredTo
                           .where((userId) => !readBy.contains(userId))
@@ -117,7 +117,7 @@ class MessageInfoScreen extends StatelessWidget {
                       _buildSectionHeader(
                         context,
                         'Pendiente',
-                        Icons.mail_outline, // Sobre cerrado
+                        Icons.check, // 1 tilde (enviado, no entregado aún)
                       ),
                       ...otherMembers
                           .where((m) => !deliveredTo.contains(m) && !readBy.contains(m))
@@ -233,22 +233,24 @@ class MessageInfoScreen extends StatelessWidget {
         final name = userData?['name'] as String? ?? 'Usuario';
         final photoURL = userData?['photoURL'] as String?;
 
-        // Ícono según el estado (sin color específico, usa tema)
+        // Ícono según el estado (estilo WhatsApp: tildes)
         IconData statusIcon;
+        Color? statusIconColor;
         String statusLabel;
 
         switch (status) {
           case 'read':
-            statusIcon = Icons.drafts_outlined; // Sobre abierto
+            statusIcon = Icons.done_all; // 2 tildes
+            statusIconColor = const Color(0xFF53BDEB); // azul WhatsApp
             statusLabel = _formatTimestamp(timestamp);
             break;
           case 'delivered':
-            statusIcon = Icons.markunread; // Sobre con marca
+            statusIcon = Icons.done_all; // 2 tildes gris
             statusLabel = _formatTimestamp(timestamp);
             break;
           case 'pending':
           default:
-            statusIcon = Icons.mail_outline; // Sobre cerrado
+            statusIcon = Icons.check; // 1 tilde
             statusLabel = 'Pendiente';
             break;
         }
@@ -292,7 +294,8 @@ class MessageInfoScreen extends StatelessWidget {
               Icon(
                 statusIcon,
                 size: 16,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                color: statusIconColor ??
+                    Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ],
           ),

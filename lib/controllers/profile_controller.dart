@@ -125,9 +125,9 @@ class ProfileController {
 
     if (errorString.contains('PlatformException')) {
       if (errorString.contains('camera_access_denied')) {
-        return 'Acceso a la cámara denegado. Ve a Configuración > Aplicaciones > Talia > Permisos para habilitarlo.';
+        return 'Acceso a la cámara denegado. Ve a Configuración > Aplicaciones > Tália > Permisos para habilitarlo.';
       } else if (errorString.contains('photo_access_denied')) {
-        return 'Acceso a la galería denegado. Ve a Configuración > Aplicaciones > Talia > Permisos para habilitarlo.';
+        return 'Acceso a la galería denegado. Ve a Configuración > Aplicaciones > Tália > Permisos para habilitarlo.';
       } else {
         return 'Error de plataforma. Intenta reiniciar la aplicación.';
       }

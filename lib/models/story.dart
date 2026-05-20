@@ -114,8 +114,8 @@ class Story {
         final repliesData = data['replies'];
         if (repliesData != null && repliesData is List<dynamic>) {
           replies = repliesData
-              .where((reply) => reply is Map<String, dynamic>)
-              .map((reply) => StoryReply.fromMap(reply as Map<String, dynamic>))
+              .whereType<Map<String, dynamic>>()
+              .map((reply) => StoryReply.fromMap(reply))
               .toList();
         }
       } catch (e) {

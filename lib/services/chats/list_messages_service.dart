@@ -33,7 +33,7 @@ class ListMessagesService {
   /// [limit] - Número máximo de mensajes (default: 50)
   /// [startAfter] - Cursor para paginación
   ///
-  /// Retorna Stream<List<ChatMessage>> ordenado por timestamp descendente
+  /// Retorna `Stream<List<ChatMessage>>` ordenado por timestamp descendente
   Stream<List<ChatMessage>> call({
     required String chatId,
     bool isGroup = false,

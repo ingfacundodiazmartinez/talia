@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show DeviceOrientation;
 import 'package:camera/camera.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../services/permission_service.dart';
@@ -9,7 +10,6 @@ import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_functions/cloud_functions.dart';
-import '../services/deepar_service.dart';
 import '../services/story_service_refactored.dart';
 import '../services/stickers_service.dart';
 import '../services/character_service.dart';
@@ -18,7 +18,7 @@ import '../services/subscription_service.dart';
 import '../services/story_upload_progress_service.dart';
 import '../services/face_detection_service.dart';
 import '../models/character.dart';
-import '../widgets/character_selector_dialog.dart';
+import '../screens/character_selector_screen.dart';
 import '../utils/release_logger.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -26,29 +26,18 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 ///
 /// Responsabilidades:
 /// - Gestión de cámara y permisos
-/// - Procesamiento de filtros y transformaciones
+/// - Procesamiento de filtros de color y transformaciones (face swap con IA)
 /// - Subida de historias a Firebase
 /// - Gestión de límites de uso y suscripciones
 /// - Coordinación entre servicios
-///
-/// ## DeepAR License Keys:
-/// Las keys están configuradas por plataforma (iOS/Android).
-/// Para producción, actualizar las keys desde https://developer.deepar.ai/
 class StoryCameraController {
   final String userId;
-
-  // DeepAR License Keys por plataforma
-  static const String _iosLicenseKey =
-      'bc5821fe04221f7349429783cced44ddbe6006d0287c4397dc97fc5dd993a843429712eda6fe98c9';
-  static const String _androidLicenseKey =
-      'e54c25aaa8b14776f4837d0c406f91bebb6f9652716847c37004a458645242ccce15c78ea3f1084b';
 
   // Hive keys para preferencias locales
   static const String _featureFlagsBoxName = 'feature_flags';
   static const String _hasUsedFaceSwapKey = 'hasUsedFaceSwap';
 
   // Servicios privados
-  final DeepARService _deepARService;
   final StoryService _storyService;
   final StickersService _stickersService;
   final CharacterService _characterService;
@@ -69,11 +58,6 @@ class StoryCameraController {
 
   // Estado de filtros
   String? _selectedFilter;
-  String? _selectedARFilter = DeepARFilters.none;
-  String _filterType = 'color';
-  bool _isDeepARInitialized = false;
-  int _deepARReinitCounter = 0;
-  bool _hasCleanedUpDeepAR = false;
 
   // Estado de grabación
   bool _isRecordingVideo = false;
@@ -112,7 +96,6 @@ class StoryCameraController {
   // Constructor
   StoryCameraController({
     required this.userId,
-    DeepARService? deepARService,
     StoryService? storyService,
     StickersService? stickersService,
     CharacterService? characterService,
@@ -121,8 +104,7 @@ class StoryCameraController {
     StoryUploadProgressService? uploadProgressService,
     PermissionService? permissionService,
     ImagePicker? imagePicker,
-  }) : _deepARService = deepARService ?? DeepARService(),
-       _storyService = storyService ?? StoryService(),
+  }) : _storyService = storyService ?? StoryService(),
        _stickersService = stickersService ?? StickersService(),
        _characterService = characterService ?? CharacterService(),
        _usageLimitsService = usageLimitsService ?? UsageLimitsService(),
@@ -139,11 +121,6 @@ class StoryCameraController {
   bool get hasInitializationFailed => _hasInitializationFailed;
   int get selectedCameraIndex => _selectedCameraIndex;
   String? get selectedFilter => _selectedFilter;
-  String? get selectedARFilter => _selectedARFilter;
-  String get filterType => _filterType;
-  bool get isDeepARInitialized => _isDeepARInitialized;
-  int get deepARReinitCounter => _deepARReinitCounter;
-  bool get hasCleanedUpDeepAR => _hasCleanedUpDeepAR;
   bool get isRecordingVideo => _isRecordingVideo;
   String? get recordedVideoPath => _recordedVideoPath;
   int get recordingSecondsRemaining => _recordingSecondsRemaining;
@@ -363,6 +340,16 @@ class StoryCameraController {
       _cameraController = newController;
       _isCameraInitialized = true;
 
+      // Bloquear orientación a portrait para que el preview no rote cuando
+      // el usuario gira físicamente el celular (la app está locked a portrait
+      // en Info.plist/AndroidManifest, pero el plugin sigue escuchando
+      // UIDevice.orientationDidChangeNotification y rotaría el preview).
+      try {
+        await newController.lockCaptureOrientation(DeviceOrientation.portraitUp);
+      } catch (e) {
+        ReleaseLogger.warning('No se pudo bloquear orientación: $e', tag: 'StoryCameraController');
+      }
+
       ReleaseLogger.log(
         '🤳 Camera inicializada en índice $_selectedCameraIndex (${_cameras![_selectedCameraIndex].lensDirection})',
         tag: 'StoryCameraController',
@@ -433,24 +420,7 @@ class StoryCameraController {
 
   /// Cambiar cámara (frontal/trasera)
   /// Solo alterna entre cámara frontal y trasera, ignorando otras cámaras (telephoto, ultra-wide, etc.)
-  /// Funciona tanto con la cámara Flutter como con DeepAR.
   Future<void> switchCamera() async {
-    // ✅ Si DeepAR está activo, usar su método switchCamera
-    if (_filterType == 'deepar' && _isDeepARInitialized) {
-      ReleaseLogger.log('🔄 Switching DeepAR camera...', tag: 'StoryCameraController');
-      final success = await _deepARService.switchCamera();
-      if (success) {
-        ReleaseLogger.log('✅ DeepAR camera switched successfully', tag: 'StoryCameraController');
-        // Notificar a la UI para que se actualice
-        onCameraInitialized?.call();
-      } else {
-        ReleaseLogger.error('❌ Failed to switch DeepAR camera', tag: 'StoryCameraController');
-        onError?.call('No se pudo cambiar la cámara');
-      }
-      return;
-    }
-
-    // Cámara Flutter estándar
     if (_cameras == null || _cameras!.length <= 1) return;
 
     // Determinar la dirección actual
@@ -488,9 +458,9 @@ class StoryCameraController {
   Future<void> toggleFlashMode() async {
     FlashMode nextMode;
 
-    // Para cámara frontal (o DeepAR en modo frontal): solo off ↔ always (screen flash)
+    // Para cámara frontal: solo off ↔ always (screen flash)
     // El screen flash funciona mostrando pantalla blanca, no requiere cameraController
-    if (!isBackCamera || (_filterType == 'deepar' && _isDeepARInitialized)) {
+    if (!isBackCamera) {
       nextMode = _flashMode == FlashMode.off ? FlashMode.always : FlashMode.off;
       _flashMode = nextMode;
       ReleaseLogger.log('🔦 Screen flash: ${nextMode == FlashMode.always ? "ON" : "OFF"}', tag: 'StoryCameraController');
@@ -592,190 +562,9 @@ class StoryCameraController {
     await setExposureOffset(0.0);
   }
 
-  /// Aplicar filtro DeepAR
-  Future<void> applyARFilter(String filterName) async {
-    // 🔒 Prevenir aplicar filtros durante inicialización de cámara
-    if (_isInitializingCamera || _isLoading) {
-      ReleaseLogger.log('⚠️ Ignorando filtro - cámara inicializando', tag: 'StoryCameraController');
-      return;
-    }
-
-    try {
-      // 🔄 VERIFICAR LÍMITES PARA FACE SWAP
-      if (filterName == DeepARFilters.faceSwap) {
-        final canUseFaceSwap = await _usageLimitsService.canUseFaceSwap();
-        if (!canUseFaceSwap) {
-          // Verificar si tiene suscripción premium
-          final hasSubscription = await hasActiveSubscription();
-          if (!hasSubscription) {
-            final usage = await _usageLimitsService.getFaceSwapUsage();
-            onError?.call('Has usado todos tus ${usage['limit']} face swaps gratuitos este mes. Suscríbete para uso ilimitado.');
-            return;
-          }
-        }
-      }
-
-      _selectedARFilter = filterName;
-
-      // ✅ CASO 0: Si se selecciona "Normal" (DeepARFilters.none), volver a cámara Flutter
-      if (filterName == DeepARFilters.none || filterName.isEmpty) {
-        ReleaseLogger.log(
-          '🔄 Volviendo a modo normal desde DeepAR',
-          tag: 'StoryCameraController',
-        );
-        // Delegamos a applyColorFilter que maneja el cleanup y reinicio de Flutter camera
-        await applyColorFilter('none');
-        return;
-      }
-
-      _filterType = 'deepar';
-
-      if (_filterType == 'deepar') {
-        // ✅ CASO 1: DeepAR ya está inicializado - solo cambiar el filtro
-        if (_isDeepARInitialized) {
-          ReleaseLogger.log(
-            '🔄 DeepAR ya inicializado, cambiando filtro a: $filterName',
-            tag: 'StoryCameraController',
-          );
-
-          if (filterName.isNotEmpty) {
-            final filterApplied = await _deepARService.switchFilter(filterName);
-            if (filterApplied) {
-              ReleaseLogger.log('✅ Filtro cambiado exitosamente', tag: 'StoryCameraController');
-            } else {
-              ReleaseLogger.error('❌ Error cambiando filtro', tag: 'StoryCameraController');
-            }
-          }
-        } else {
-          // ✅ CASO 2: Primera vez inicializando DeepAR
-
-          // Liberar la cámara Flutter ANTES de inicializar DeepAR
-          if (_cameraController != null) {
-            ReleaseLogger.log(
-              '📷 Liberando cámara Flutter antes de DeepAR...',
-              tag: 'StoryCameraController',
-            );
-            await _cameraController!.dispose();
-            _cameraController = null;
-            _isCameraInitialized = false;
-            await Future.delayed(const Duration(milliseconds: 100));
-          }
-
-          // Seleccionar license key según plataforma
-          final licenseKey = Platform.isIOS ? _iosLicenseKey : _androidLicenseKey;
-
-          ReleaseLogger.log(
-            '🎭 Inicializando DeepAR con license key de ${Platform.isIOS ? "iOS" : "Android"}',
-            tag: 'StoryCameraController',
-          );
-
-          // ✅ FIX #6 (v4): NO forzar dispose antes de inicializar
-          // El SDK de DeepAR no se reinicializa correctamente después de release()
-          // El lado nativo ahora mantiene DeepAR vivo y lo reutiliza
-          // Solo necesitamos llamar a initialize() que detectará si ya está listo
-          ReleaseLogger.log('🎭 Inicializando DeepAR desde cero...', tag: 'StoryCameraController');
-          final initResult = await _deepARService.initialize(licenseKey: licenseKey);
-
-          if (!initResult) {
-            ReleaseLogger.error('❌ Fallo al inicializar DeepAR', tag: 'StoryCameraController');
-            onError?.call('Error inicializando filtros AR');
-            return;
-          }
-
-          _deepARReinitCounter++;
-          _isDeepARInitialized = true;
-          _hasCleanedUpDeepAR = false; // ✅ Resetear flag para permitir cleanup futuro
-          ReleaseLogger.log('✅ DeepAR initialized successfully (reinit #$_deepARReinitCounter)', tag: 'StoryCameraController');
-
-          // Notificar UI para que se actualice con DeepAR view
-          onCameraInitialized?.call();
-
-          // Esperar a que el platform view esté completamente configurado
-          ReleaseLogger.log('⏳ Esperando a que platform view esté listo...', tag: 'StoryCameraController');
-          await Future.delayed(const Duration(milliseconds: 500));
-
-          // Aplicar el filtro seleccionado
-          if (filterName.isNotEmpty) {
-            ReleaseLogger.log(
-              '🎭 Aplicando filtro DeepAR: $filterName',
-              tag: 'StoryCameraController',
-            );
-            final filterApplied = await _deepARService.switchFilter(filterName);
-            if (filterApplied) {
-              ReleaseLogger.log('✅ Filtro aplicado exitosamente', tag: 'StoryCameraController');
-            } else {
-              ReleaseLogger.error('❌ Error aplicando filtro', tag: 'StoryCameraController');
-            }
-          }
-        }
-
-        // 🔄 INCREMENTAR CONTADOR PARA FACE SWAP después de aplicar exitosamente
-        if (filterName == DeepARFilters.faceSwap) {
-          await _usageLimitsService.incrementFaceSwapUsage();
-          await _markFaceSwapAsUsed();
-          final usage = await _usageLimitsService.getFaceSwapUsage();
-          final isUnlimited = usage['unlimited'] == true;
-          final successMessage = isUnlimited
-              ? 'Face swap aplicado exitosamente!'
-              : 'Face swap aplicado. Te quedan ${usage['remaining']} usos gratuitos este mes.';
-          onSuccess?.call(successMessage);
-        }
-      }
-    } catch (e) {
-
-      onError?.call('Error aplicando filtro: $e');
-    }
-  }
-
-  /// Aplicar filtro de color
+  /// Aplicar filtro de color (sepia, vintage, etc.)
   Future<void> applyColorFilter(String filterName) async {
-    final wasDeepAR = _filterType == 'deepar';
-
     _selectedFilter = filterName;
-    _filterType = 'color';
-    _selectedARFilter = DeepARFilters.none; // ✅ Limpiar selección de filtro AR
-
-    // Si estábamos en DeepAR, necesitamos reinicializar la cámara Flutter
-    if (wasDeepAR) {
-      ReleaseLogger.log(
-        '📷 Cambiando de DeepAR a cámara Flutter...',
-        tag: 'StoryCameraController',
-      );
-
-      // Notificar UI inmediatamente para mostrar loading
-      onCameraInitialized?.call();
-
-      // Limpiar DeepAR primero (esto toma ~500ms en nativo)
-      ReleaseLogger.log('🧹 Limpiando DeepAR...', tag: 'StoryCameraController');
-      await cleanupDeepAR();
-
-      // Esperar suficiente para que DeepAR libere la cámara completamente
-      ReleaseLogger.log('⏳ Esperando liberación de recursos...', tag: 'StoryCameraController');
-      await Future.delayed(const Duration(milliseconds: 600));
-
-      // Reinicializar cámara Flutter
-      ReleaseLogger.log('📷 Reinicializando cámara Flutter...', tag: 'StoryCameraController');
-
-      // Asegurar que tenemos la lista de cámaras disponibles
-      if (_cameras == null || _cameras!.isEmpty) {
-        ReleaseLogger.log('📷 Obteniendo lista de cámaras...', tag: 'StoryCameraController');
-        _cameras = await availableCameras();
-
-        // Buscar cámara frontal por defecto
-        for (int i = 0; i < _cameras!.length; i++) {
-          if (_cameras![i].lensDirection == CameraLensDirection.front) {
-            _selectedCameraIndex = i;
-            break;
-          }
-        }
-      }
-
-      await _initializeCameraController();
-
-      // Notificar UI que la cámara está lista
-      onCameraInitialized?.call();
-      ReleaseLogger.log('✅ Cámara Flutter lista', tag: 'StoryCameraController');
-    }
   }
 
   /// Tomar foto
@@ -783,27 +572,6 @@ class StoryCameraController {
     try {
       _setLoading(true);
 
-      // ✅ CASO 1: Modo DeepAR - usar screenshot de DeepAR
-      if (_filterType == 'deepar' && _isDeepARInitialized) {
-        ReleaseLogger.log('📸 Tomando screenshot con DeepAR...', tag: 'StoryCameraController');
-
-        final imageData = await _deepARService.takeScreenshot();
-        if (imageData == null) {
-          throw Exception('No se pudo capturar screenshot de DeepAR');
-        }
-
-        // Guardar screenshot a archivo temporal
-        final tempDir = await getTemporaryDirectory();
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-        final filePath = '${tempDir.path}/deepar_photo_$timestamp.jpg';
-        final file = File(filePath);
-        await file.writeAsBytes(imageData);
-
-        ReleaseLogger.log('✅ Screenshot DeepAR guardado: $filePath', tag: 'StoryCameraController');
-        return filePath;
-      }
-
-      // ✅ CASO 2: Modo Flutter Camera normal
       if (!_isCameraInitialized || _cameraController == null) {
         throw Exception('Cámara no inicializada');
       }
@@ -833,27 +601,11 @@ class StoryCameraController {
     try {
       if (_isRecordingVideo) return;
 
-      // ✅ CASO 1: Modo DeepAR - usar grabación de DeepAR
-      if (_filterType == 'deepar' && _isDeepARInitialized) {
-        ReleaseLogger.log('🎬 Iniciando grabación con DeepAR...', tag: 'StoryCameraController');
-
-        final tempDir = await getTemporaryDirectory();
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-        _recordedVideoPath = '${tempDir.path}/deepar_video_$timestamp.mp4';
-
-        await _deepARService.startRecording(
-          outputPath: _recordedVideoPath!,
-          width: 720,
-          height: 1280,
-        );
-      } else {
-        // ✅ CASO 2: Modo Flutter Camera normal
-        if (!_isCameraInitialized || _cameraController == null) {
-          throw Exception('Cámara no inicializada');
-        }
-
-        await _cameraController!.startVideoRecording();
+      if (!_isCameraInitialized || _cameraController == null) {
+        throw Exception('Cámara no inicializada');
       }
+
+      await _cameraController!.startVideoRecording();
 
       _isRecordingVideo = true;
       _recordingSecondsRemaining = 10;
@@ -882,25 +634,6 @@ class StoryCameraController {
       _recordingTimer = null;
       _isRecordingVideo = false;
 
-      // ✅ CASO 1: Modo DeepAR
-      if (_filterType == 'deepar' && _isDeepARInitialized) {
-        ReleaseLogger.log('⏹️ Deteniendo grabación DeepAR...', tag: 'StoryCameraController');
-
-        // ✅ FIX: Esperar a que DeepAR procese el video y lo guarde
-        // Antes retornábamos inmediatamente, pero el video todavía no existía
-        final videoPath = await _deepARService.stopRecordingAndWaitForVideo();
-
-        if (videoPath != null && videoPath.isNotEmpty) {
-          _recordedVideoPath = videoPath;
-          ReleaseLogger.log('✅ Video DeepAR guardado: $videoPath', tag: 'StoryCameraController');
-          return videoPath;
-        } else {
-          ReleaseLogger.error('❌ DeepAR no retornó path de video', tag: 'StoryCameraController');
-          return null;
-        }
-      }
-
-      // ✅ CASO 2: Modo Flutter Camera normal
       if (_cameraController == null) return null;
 
       final videoFile = await _cameraController!.stopVideoRecording();
@@ -1111,10 +844,12 @@ class StoryCameraController {
       // Capturar context antes de operaciones async
       if (!context.mounted) return null;
 
-      // Mostrar selector de personajes
-      final selectedCharacter = await showDialog<Character>(
-        context: context,
-        builder: (context) => const CharacterSelectorDialog(),
+      // Mostrar selector de personajes (pantalla fullscreen)
+      final selectedCharacter = await Navigator.of(context).push<Character>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => const CharacterSelectorScreen(),
+        ),
       );
 
       if (selectedCharacter == null) return null;
@@ -1517,47 +1252,10 @@ class StoryCameraController {
     }
   }
 
-  /// Limpiar DeepAR (llamar cuando se cambie a cámara nativa)
-  Future<void> cleanupDeepAR() async {
-    if (!_hasCleanedUpDeepAR) {
-      await _deepARService.dispose();
-      _hasCleanedUpDeepAR = true;
-      _isDeepARInitialized = false;
-    }
-  }
-
   /// Métodos auxiliares privados
   void _setLoading(bool loading) {
     _isLoading = loading;
     onLoadingChanged?.call(loading);
-  }
-
-  /// Obtener filtros DeepAR disponibles
-  Map<String, Map<String, dynamic>> getAvailableDeepARFilters() {
-    return {
-      DeepARFilters.none: {'name': 'Normal', 'icon': 'face', 'emoji': '😊'},
-      DeepARFilters.vendetta: {'name': 'Vendetta', 'icon': 'face', 'emoji': '🎭'},
-      DeepARFilters.eightBitHearts: {'name': '8-Bit Hearts', 'icon': 'favorite', 'emoji': '💕'},
-      DeepARFilters.elephantTrunk: {'name': 'Elephant Trunk', 'icon': 'face', 'emoji': '🐘'},
-      DeepARFilters.emotionMeter: {'name': 'Emotion Meter', 'icon': 'mood', 'emoji': '📊'},
-      DeepARFilters.emotionsExaggerator: {'name': 'Emotions Exaggerator', 'icon': 'mood', 'emoji': '😱'},
-      DeepARFilters.fireEffect: {'name': 'Fire Effect', 'icon': 'whatshot', 'emoji': '🔥'},
-      DeepARFilters.hope: {'name': 'Hope', 'icon': 'star', 'emoji': '⭐'},
-      DeepARFilters.humanoid: {'name': 'Humanoid', 'icon': 'android', 'emoji': '🤖'},
-      DeepARFilters.makeupLook: {'name': 'Makeup Look', 'icon': 'face', 'emoji': '💄'},
-      DeepARFilters.neonDevilHorns: {'name': 'Neon Devil Horns', 'icon': 'ac_unit', 'emoji': '😈'},
-      DeepARFilters.pingPong: {'name': 'Ping Pong', 'icon': 'sports_tennis', 'emoji': '🏓'},
-      DeepARFilters.splitViewLook: {'name': 'Split View Look', 'icon': 'flip', 'emoji': '🔀'},
-      DeepARFilters.stallone: {'name': 'Stallone', 'icon': 'face', 'emoji': '🥊'},
-      DeepARFilters.vendettaMask: {'name': 'Vendetta Mask', 'icon': 'face', 'emoji': '🎭'},
-      DeepARFilters.burningEffect: {'name': 'Burning Effect', 'icon': 'whatshot', 'emoji': '🔥'},
-      DeepARFilters.flowerFace: {'name': 'Flower Face', 'icon': 'local_florist', 'emoji': '🌸'},
-      DeepARFilters.galaxyBackground: {'name': 'Galaxy Background', 'icon': 'stars', 'emoji': '🌌'},
-      DeepARFilters.vikingHelmet: {'name': 'Viking Helmet', 'icon': 'shield', 'emoji': '⚔️'},
-      DeepARFilters.barbieAd: {'name': 'Barbie', 'icon': 'face', 'emoji': '💖'},
-      DeepARFilters.faceSwap: {'name': 'Face Swap', 'icon': 'swap_horiz', 'emoji': '🔄'},
-      DeepARFilters.harryPotter: {'name': 'Harry Potter', 'icon': 'auto_fix_high', 'emoji': '⚡'},
-    };
   }
 
   /// 📷 Encontrar índice de cámara frontal para selfies
@@ -1649,18 +1347,6 @@ class StoryCameraController {
       _cameraController!.dispose();
     }
     _cameraController = null;
-
-    // ✅ FIX #6 (v4): NO liberar DeepAR en dispose del controller
-    // El SDK de DeepAR no se reinicializa correctamente después de release()
-    // Lo mantenemos vivo en el lado nativo para reutilización
-    // Solo pausamos y limpiamos recursos locales
-    if (_isDeepARInitialized) {
-      ReleaseLogger.log('🧹 Dispose: Pausando DeepAR (manteniéndolo vivo para reutilización)', tag: 'StoryCameraController');
-      // Solo detener la cámara, no liberar DeepAR
-      _deepARService.stopCamera();
-    } else {
-      ReleaseLogger.log('🧹 Dispose: DeepAR no estaba inicializado', tag: 'StoryCameraController');
-    }
 
     // ❌ NO HACER: _uploadProgressService.dispose();
     // ✅ CORRECTO: StoryUploadProgressService es un singleton global,

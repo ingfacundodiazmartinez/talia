@@ -24,7 +24,6 @@ class ParentChatsController extends BaseChatsController {
   ParentChatsController({
     required super.userId,
     super.firestore,
-    super.chatService,
     super.groupChatService,
     firebase_auth.FirebaseAuth? auth,
     SearchService? searchService,

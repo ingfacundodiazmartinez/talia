@@ -65,6 +65,7 @@ class WaveformCacheService {
       await _cleanupCacheIfNeeded(prefs);
 
     } catch (e) {
+      // Silently ignore - cache save failure is non-critical
     }
   }
 
@@ -85,6 +86,7 @@ class WaveformCacheService {
       }
 
     } catch (e) {
+      // Silently ignore - cache clear failure is non-critical
     }
   }
 
@@ -124,6 +126,7 @@ class WaveformCacheService {
         }
       }
     } catch (e) {
+      // Silently ignore - cache cleanup failure is non-critical
     }
   }
 

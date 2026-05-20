@@ -1,6 +1,6 @@
-/// Call Service Wrapper - V2 Only
-/// Routes all calls to the new Agora V2 system
-/// Legacy system completely removed
+// Call Service Wrapper - V2 Only
+// Routes all calls to the new Agora V2 system
+// Legacy system completely removed
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -14,12 +14,9 @@ class CallServiceWrapper {
   factory CallServiceWrapper() => _instance;
   CallServiceWrapper._internal();
 
-  GlobalKey<NavigatorState>? _navigatorKey;
-
   /// Initialize Agora V2 call service
+  // ignore: unused_element_parameter
   Future<void> initialize({GlobalKey<NavigatorState>? navigatorKey}) async {
-    _navigatorKey = navigatorKey;
-
     ReleaseLogger.log(
       '🚀 Initializing Agora Call Service (V2 ONLY) - VoIP/CallKit handles incoming calls',
       tag: 'CallServiceWrapper',

@@ -56,7 +56,9 @@ class LocationService {
       if (!hasPermission) return null;
 
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
 
       return position;
@@ -172,6 +174,7 @@ class LocationService {
 
       }
     } catch (e) {
+      // Silently ignore - location update failure is non-critical
     }
   }
 
@@ -212,6 +215,7 @@ class LocationService {
     try {
       await _backgroundService.initialize();
     } catch (e) {
+      // Silently ignore - background tracking initialization is optional
     }
   }
 
@@ -220,6 +224,7 @@ class LocationService {
     try {
       await _backgroundService.startBackgroundTracking();
     } catch (e) {
+      // Silently ignore - background tracking start is optional
     }
   }
 
@@ -228,6 +233,7 @@ class LocationService {
     try {
       await _backgroundService.stopBackgroundTracking();
     } catch (e) {
+      // Silently ignore - background tracking stop is optional
     }
   }
 

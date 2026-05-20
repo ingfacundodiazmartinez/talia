@@ -419,6 +419,7 @@ class _TriviaPlayScreenState extends State<TriviaPlayScreen>
             onPressed: () async {
               final shouldPop = await _onWillPop();
               if (shouldPop && context.mounted) {
+                // ignore: use_build_context_synchronously
                 Navigator.pop(context);
               }
             },

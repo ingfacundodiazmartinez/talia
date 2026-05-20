@@ -26,7 +26,6 @@ class ChildChatsController extends BaseChatsController with ChangeNotifier {
   ChildChatsController({
     required super.userId,
     super.firestore,
-    super.chatService,
     super.groupChatService,
     ContactService? contactService,
     UserRoleService? userRoleService,

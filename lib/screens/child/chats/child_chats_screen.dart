@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
@@ -7,7 +8,6 @@ import '../../../controllers/child_chats_controller.dart';
 import '../../../widgets/stories_section.dart';
 import '../../../widgets/emergency_button.dart';
 import '../../../groups/groups.dart'; // Groups V2
-import '../../../services/chat_service.dart';
 import '../../../services/chats/chat_services.dart';
 import '../../../services/message_status_helper.dart';
 import '../../../services/local_unread_count_service.dart';
@@ -51,7 +51,6 @@ class ChildChatsScreen extends StatefulWidget {
 
 class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepAliveClientMixin {
   late ChildChatsController _chatsController;
-  final ChatService _chatService = ChatService();
   final LeaveGroupService _leaveGroupService = LeaveGroupService();
   final UserCacheService _userCacheService = UserCacheService();
   final BlockService _blockService = BlockService();
@@ -133,7 +132,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                   colorScheme.primary.withValues(alpha: 0.3),
                   colorScheme.primary.withValues(alpha: 0.2),
                 ]
-              : [Color(0xFF9D7FE8), Color(0xFFB39DDB)],
+              : [ThemeService.primaryColor, Color(0xFFB39DDB)],
         ),
       ),
       child: SafeArea(
@@ -160,8 +159,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
   Widget _buildHeader(bool isDarkMode, ColorScheme colorScheme) {
     return ChatHeaderWidget(
-      title: '¡Hola! 👋',
-      subtitle: 'Tus conversaciones seguras',
+      title: 'Chats',
       isDarkMode: isDarkMode,
       onArchivedTap: () {
         Navigator.push(
@@ -229,7 +227,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           if (_lastValidChatsData != null) {
             final cacheAge = DateTime.now().difference(_lastValidChatsTimestamp).inMinutes;
             if (cacheAge < 5) {
-              var chatDocs = _chatService.filterDeletedChats(_lastValidChatsData!);
+              var chatDocs = _chatsController.filterDeletedChats(_lastValidChatsData!);
               chatDocs = _chatsController.filterArchivedChats(chatDocs);
               return _buildChatListContent(chatDocs, colorScheme);
             }
@@ -247,7 +245,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           return Center(child: CircularProgressIndicator());
         }
 
-        var chatDocs = _chatService.filterDeletedChats(dataToUse);
+        var chatDocs = _chatsController.filterDeletedChats(dataToUse);
 
         // Filtrar chats archivados
         chatDocs = _chatsController.filterArchivedChats(chatDocs);
@@ -471,9 +469,11 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   }) {
     final photoURL = childData['photoURL'];
 
+    // Solo el bloqueador ve la marca de "Contacto bloqueado" en su lista.
+    // El bloqueado nunca debe enterarse, pero sí oculta la foto del bloqueador.
     return StreamBuilder<bool>(
       key: ValueKey('blocked_$childId'),
-      stream: _blockService.isBlockedStream(childId),
+      stream: _blockService.iBlockedStream(childId),
       initialData: false,
       builder: (context, blockedSnapshot) {
         final isBlocked = blockedSnapshot.data ?? false;
@@ -705,6 +705,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           }
 
           // Usar calculateGroupV2Status - seen solo si TODOS los miembros leyeron
+          // ignore: deprecated_member_use_from_same_package
           lastMessageStatus = MessageStatusHelper.calculateGroupV2Status(
             data: lastMessageData,
             senderId: senderId,

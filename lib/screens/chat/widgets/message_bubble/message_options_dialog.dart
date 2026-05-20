@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import '../../../../services/reaction_service.dart';
+import '../../../../services/message_report_service.dart';
 import '../../../../models/chat_message.dart';
 import '../../../../utils/release_logger.dart';
 
@@ -41,51 +41,54 @@ class MessageOptionsDialog {
       canDelete = difference.inMinutes < 5;
     }
 
-    showDialog(
+    showModalBottomSheet(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.5),
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (BuildContext dialogContext) {
         final colorScheme = Theme.of(context).colorScheme;
 
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: EdgeInsets.symmetric(horizontal: 16),
-          child: Container(
-            constraints: BoxConstraints(maxWidth: 400),
-            decoration: BoxDecoration(
-              color: colorScheme.surface,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Mensaje preview (arriba)
-                if (messageText != null && messageText.isNotEmpty)
-                  Container(
-                    padding: EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surfaceContainerHighest.withOpacity(0.3),
-                      borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(20),
-                        topRight: Radius.circular(20),
-                      ),
-                    ),
-                    child: Text(
-                      messageText,
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: colorScheme.onSurface,
-                        height: 1.4,
-                      ),
-                      maxLines: 4,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Drag handle (estándar Material 3)
+              Center(
+                child: Container(
+                  margin: const EdgeInsets.only(top: 12, bottom: 8),
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(2),
                   ),
+                ),
+              ),
 
-                // Divisor sutil
-                if (messageText != null && messageText.isNotEmpty)
-                  Divider(height: 1, thickness: 0.5, color: colorScheme.outline.withOpacity(0.2)),
+              // Mensaje preview (arriba)
+              if (messageText != null && messageText.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    messageText,
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: colorScheme.onSurface,
+                      height: 1.4,
+                    ),
+                    maxLines: 4,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
 
                 // Sección de reacciones rápidas
                 Container(
@@ -170,7 +173,7 @@ class MessageOptionsDialog {
                 ),
 
                 // Divisor
-                Divider(height: 1, thickness: 0.5, color: colorScheme.outline.withOpacity(0.2)),
+                Divider(height: 1, thickness: 0.5, color: colorScheme.outline.withValues(alpha: 0.2)),
 
                 // Opciones de acción
                 Padding(
@@ -289,8 +292,7 @@ class MessageOptionsDialog {
                     ],
                   ),
                 ),
-              ],
-            ),
+            ],
           ),
         );
       },
@@ -310,7 +312,7 @@ class MessageOptionsDialog {
         width: 40,
         height: 40,
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5),
+          color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Center(
@@ -337,7 +339,7 @@ class MessageOptionsDialog {
         width: 40,
         height: 40,
         decoration: BoxDecoration(
-          color: colorScheme.primary.withOpacity(0.15),
+          color: colorScheme.primary.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Center(
@@ -373,7 +375,7 @@ class MessageOptionsDialog {
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                color: colorScheme.onSurfaceVariant.withOpacity(0.3),
+                color: colorScheme.onSurfaceVariant.withValues(alpha: 0.3),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -568,7 +570,7 @@ class MessageOptionsDialog {
     );
   }
 
-  /// Guarda el reporte en Firestore
+  /// Guarda el reporte usando MessageReportService
   static Future<void> _reportMessage({
     required BuildContext context,
     required String chatId,
@@ -576,23 +578,11 @@ class MessageOptionsDialog {
     String? messageText,
   }) async {
     try {
-      final currentUserId = FirebaseAuth.instance.currentUser?.uid;
-      if (currentUserId == null) return;
-
-      // Guardar reporte en Firestore
-      await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(chatId)
-          .collection('reported_messages')
-          .doc(messageId)
-          .set({
-        'messageId': messageId,
-        'messageText': messageText ?? '',
-        'reportedBy': currentUserId,
-        'reportedAt': FieldValue.serverTimestamp(),
-        'reason': 'offensive', // Categoría: ofensivo
-      });
-
+      await MessageReportService().reportMessage(
+        chatId: chatId,
+        messageId: messageId,
+        messageText: messageText,
+      );
     } catch (e) {
       ReleaseLogger.error('Error reportando mensaje: $e', tag: 'MessageOptionsDialog');
 

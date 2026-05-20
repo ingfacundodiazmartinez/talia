@@ -252,7 +252,6 @@ class CharacterService {
       });
 
       final statusDocId = createResult.data['statusDocId'] as String;
-      final characterName = createResult.data['characterName'] as String?;
 
       // 2. Escuchar cambios en Firestore en tiempo real
       // ✅ RENAMED: transformationStatus → transformation_status (snake_case)

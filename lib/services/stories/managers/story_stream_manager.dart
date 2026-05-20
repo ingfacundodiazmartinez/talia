@@ -99,12 +99,17 @@ class StoryStreamManager {
       if (userStories.isNotEmpty) {
         // Crear UserStories para este usuario
         final story = userStories.first;
+        // ✅ FIX: calcular hasUnviewed real basado en viewedBy del current user.
+        // Hardcodear true rompe el gradient después de que el viewer ya marcó las
+        // historias como vistas (caso típico: padre responde historia del menor).
+        final viewerId = _storyRepository.currentUserId;
+        final hasUnviewed = _hasUnviewedStories(userStories, viewerId);
         final newUserStories = UserStories(
           userId: userId,
           userName: story.userName,
           userPhotoURL: story.userPhotoURL,
           stories: userStories,
-          hasUnviewed: true, // Marcar como no visto
+          hasUnviewed: hasUnviewed,
         );
 
         // Agregar al cache usando el método específico del cache manager
@@ -484,7 +489,7 @@ class StoryStreamManager {
     }
 
     ReleaseLogger.log(
-      '📊 [StoryStreamManager] Visibility filter result: ${filteredStories.length} passed, ${blockedCount} blocked, ${parentOnlyCount} parent-only, ${otherCount} other',
+      '📊 [StoryStreamManager] Visibility filter result: ${filteredStories.length} passed, $blockedCount blocked, $parentOnlyCount parent-only, $otherCount other',
       tag: 'StoryStreamManager',
     );
 

@@ -1,5 +1,5 @@
-/// Call Orchestrator - Coordinates multiple services for complex call operations
-/// This is the only place where multiple services are used together
+// Call Orchestrator - Coordinates multiple services for complex call operations
+// This is the only place where multiple services are used together
 
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -7,7 +7,6 @@ import '../models/call_v2.dart';
 import '../models/service_response.dart';
 import '../services/create_call_service.dart';
 import '../services/get_call_service.dart';
-import '../services/update_call_service.dart';
 import '../services/call_status_service.dart';
 import '../services/agora_engine_service.dart';
 import '../services/watch_call_service.dart';
@@ -20,7 +19,6 @@ class CallOrchestrator {
   // Service instances
   final _createCallService = CreateCallService();
   final _getCallService = GetCallService();
-  final _updateCallService = UpdateCallService();
   final _callStatusService = CallStatusService();
   final _agoraEngineService = AgoraEngineService();
   final _watchCallService = WatchCallService();

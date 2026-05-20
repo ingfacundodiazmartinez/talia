@@ -120,6 +120,7 @@ class ChildMainShellController {
         ReleaseLogger.log('Usuario es $userRole - inicializando ChildHomeController', tag: 'ChildMainShell');
         _childController = ChildHomeController(
           childId: childId,
+          // ignore: use_build_context_synchronously
           context: context,
         );
 

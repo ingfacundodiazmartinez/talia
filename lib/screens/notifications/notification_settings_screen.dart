@@ -102,7 +102,7 @@ class _NotificationSettingsScreenState
               if (_isParent)
                 _buildSwitchOption(
                   icon: Icons.checklist,
-                  title: 'Cambios en Lista Blanca',
+                  title: 'Cambios en Familia',
                   subtitle: 'Cuando el hijo aprueba o rechaza contactos',
                   value: prefs['whitelistChangesEnabled'] ?? true,
                   onChanged: (value) =>

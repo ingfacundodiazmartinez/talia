@@ -1,5 +1,5 @@
-/// Unified response model for all services
-/// Provides consistent error handling and data passing
+// Unified response model for all services
+// Provides consistent error handling and data passing
 
 class ServiceResponse<T> {
   final bool success;
@@ -46,7 +46,7 @@ class ServiceResponse<T> {
   ServiceResponse<R> map<R>(R Function(T data) mapper) {
     if (success && data != null) {
       try {
-        return ServiceResponse.success(mapper(data!), metadata: metadata);
+        return ServiceResponse.success(mapper(data as T), metadata: metadata);
       } catch (e) {
         return ServiceResponse.error(
           'Error mapping data: $e',

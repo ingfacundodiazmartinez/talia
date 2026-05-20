@@ -29,8 +29,8 @@ class StoryReplyInput extends StatelessWidget {
             begin: Alignment.bottomCenter,
             end: Alignment.topCenter,
             colors: [
-              Colors.black.withOpacity(0.8),
-              Colors.black.withOpacity(0.5),
+              Colors.black.withValues(alpha: 0.8),
+              Colors.black.withValues(alpha: 0.5),
               Colors.transparent,
             ],
             stops: const [0.0, 0.6, 1.0],
@@ -46,10 +46,10 @@ class StoryReplyInput extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
+                    color: Colors.white.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(24),
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.3),
+                      color: Colors.white.withValues(alpha: 0.3),
                       width: 1,
                     ),
                   ),
@@ -105,13 +105,13 @@ class StoryReplyInput extends StatelessWidget {
                   height: 48,
                   decoration: BoxDecoration(
                     color: isLiked
-                        ? Colors.red.withOpacity(0.2)
-                        : Colors.white.withOpacity(0.1),
+                        ? Colors.red.withValues(alpha: 0.2)
+                        : Colors.white.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
                     border: Border.all(
                       color: isLiked
-                          ? Colors.red.withOpacity(0.5)
-                          : Colors.white.withOpacity(0.3),
+                          ? Colors.red.withValues(alpha: 0.5)
+                          : Colors.white.withValues(alpha: 0.3),
                       width: 1,
                     ),
                   ),

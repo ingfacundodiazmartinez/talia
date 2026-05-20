@@ -8,7 +8,6 @@ import 'package:file_picker/file_picker.dart';
 import '../models/chat_message.dart';
 import '../services/chats/chat_orchestrator.dart';
 import '../services/chats/repositories/user_repository.dart';
-import '../services/chats/repositories/chat_repository.dart';
 import '../services/chats/services/chat_messaging_service.dart';  // For MessageType enum
 // ✅ Nuevos servicios atómicos
 import '../services/chats/chat_services.dart';
@@ -32,10 +31,6 @@ class _QueuedMessage {
   final String type; // 'text', 'image', 'audio', 'video', 'file'
   final String? text;
   final Map<String, dynamic>? replyTo;
-  final File? file;
-  final String? fileName;
-  final String? mimeType;
-  final int? durationMs;
   final Completer<void> completer;
 
   _QueuedMessage({
@@ -43,10 +38,6 @@ class _QueuedMessage {
     required this.type,
     this.text,
     this.replyTo,
-    this.file,
-    this.fileName,
-    this.mimeType,
-    this.durationMs,
   }) : completer = Completer<void>();
 }
 
@@ -69,7 +60,6 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   // Services
   late final ChatOrchestrator _orchestrator;
   late final UserRepository _userRepository;
-  late final ChatRepository _chatRepository;
   late final TypingIndicatorService _typingService;
   late final BlockService _blockService;
   late final AudioProcessingService _audioService;
@@ -105,6 +95,13 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   bool _contactIsOnline = false;
 
   // Block state
+  // _isBlocked = true SOLO si el usuario actual fue quien bloqueó (es el "blocker").
+  // _isBlockedBy = true si el contacto bloqueó al usuario actual (uso INTERNO, NUNCA mostrar
+  // en UI: el bloqueado no debe enterarse de que fue bloqueado).
+  //
+  // NOTA: el filtrado de mensajes ya no se hace por timestamp aquí; lo hace el
+  // stream manager por `visibleTo`. Estos flags quedan solo para UI gating
+  // (barra de bloqueo, deshabilitar input, ocultar foto).
   bool _isBlocked = false;
   bool _isBlockedBy = false;
 
@@ -113,6 +110,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
 
   // ✅ V2 Read Receipts: lastOpenedAt del destinatario para calcular status
   DateTime? _recipientLastOpenedAt;
+  DateTime? _recipientLastReceivedAt;
 
   // ✅ MESSAGE QUEUE: Garantiza que los mensajes se envíen en orden FIFO
   final List<_QueuedMessage> _messageQueue = [];
@@ -143,7 +141,6 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     this.isGroup = false,
     ChatOrchestrator? orchestrator,
     UserRepository? userRepository,
-    ChatRepository? chatRepository,
     TypingIndicatorService? typingService,
     BlockService? blockService,
     AudioProcessingService? audioService,
@@ -152,10 +149,6 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     // Initialize services (dependency injection pattern)
     _orchestrator = orchestrator ?? ChatOrchestrator();
     _userRepository = userRepository ?? UserRepository(
-      firestore: FirebaseFirestore.instance,
-      auth: FirebaseAuth.instance,
-    );
-    _chatRepository = chatRepository ?? ChatRepository(
       firestore: FirebaseFirestore.instance,
       auth: FirebaseAuth.instance,
     );
@@ -273,10 +266,13 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     }
   }
 
-  /// Setup block status listeners
+  /// Setup block status listeners.
+  ///
+  /// Solo actualizamos los flags para UI. El filtrado de mensajes por
+  /// visibilidad lo hace el stream manager (filtro `visibleTo`).
   void _setupBlockListeners() {
-    _isBlockedSubscription = _blockService.isBlockedStream(contactId).listen((isBlocked) {
-      _isBlocked = isBlocked;
+    _isBlockedSubscription = _blockService.iBlockedStream(contactId).listen((iBlocked) {
+      _isBlocked = iBlocked;
       notifyListeners();
     });
 
@@ -423,13 +419,22 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         final data = docSnapshot.data();
         if (data == null) return;
 
-        // Para chats 1-1: obtener lastOpenedAt del destinatario (contactId)
-        final newLastOpenedAt = data['lastOpenedAt_$contactId'] as Timestamp?;
-        final newDateTime = newLastOpenedAt?.toDate();
+        // Para chats 1-1: leer ambos timestamps del destinatario.
+        // - lastOpenedAt: necesario para tildes azules (seen).
+        // - lastReceivedAt: necesario para doble tilde gris (delivered) — el
+        //   receptor lo escribe en background al detectar el mensaje, incluso
+        //   sin abrir el chat.
+        final newLastOpenedAt =
+            (data['lastOpenedAt_$contactId'] as Timestamp?)?.toDate();
+        final newLastReceivedAt =
+            (data['lastReceivedAt_$contactId'] as Timestamp?)?.toDate();
 
-        // Solo recalcular si cambió
-        if (newDateTime != _recipientLastOpenedAt) {
-          _recipientLastOpenedAt = newDateTime;
+        final openedChanged = newLastOpenedAt != _recipientLastOpenedAt;
+        final receivedChanged = newLastReceivedAt != _recipientLastReceivedAt;
+
+        if (openedChanged || receivedChanged) {
+          _recipientLastOpenedAt = newLastOpenedAt;
+          _recipientLastReceivedAt = newLastReceivedAt;
           _recalculateMessageStatuses();
         }
       },
@@ -439,9 +444,13 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     );
   }
 
-  /// ✅ V2 Read Receipts: Recalculate message statuses based on lastOpenedAt
+  /// ✅ V2 Read Receipts: Recalcula status de mensajes propios usando
+  /// `lastReceivedAt` (delivered) y `lastOpenedAt` (seen) del destinatario.
   void _recalculateMessageStatuses() {
-    if (_recipientLastOpenedAt == null) return;
+    // Si ninguno de los dos timestamps está cargado, no hay nada que recalcular.
+    if (_recipientLastOpenedAt == null && _recipientLastReceivedAt == null) {
+      return;
+    }
     if (_messages.isEmpty) return;
 
     bool hasChanges = false;
@@ -458,6 +467,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         messageTimestamp: message.timestamp?.toDate(),
         senderId: message.senderId,
         recipientLastOpenedAt: _recipientLastOpenedAt,
+        recipientLastReceivedAt: _recipientLastReceivedAt,
       );
 
       // Solo actualizar si cambió
@@ -484,8 +494,12 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         ReleaseLogger.log('Received ${messages.length} messages from cache for chat $chatId');
         // ✅ FIX: Merge with locally deleted messages to preserve isDeletedForEveryone state
         _messages = _mergeWithLocalDeletedState(messages);
-        // ✅ V2 Read Receipts: Recalcular status basado en lastOpenedAt
-        if (!isGroup && _recipientLastOpenedAt != null) {
+        // El filtrado por bloqueo lo hace el stream manager vía `visibleTo`.
+        // ✅ V2 Read Receipts: Recalcular status (delivered/seen) si tenemos
+        // cualquiera de los dos timestamps del destinatario cargado.
+        if (!isGroup &&
+            (_recipientLastOpenedAt != null ||
+                _recipientLastReceivedAt != null)) {
           _recalculateMessageStatuses();
         }
         // ✅ FIX: Mark loading as done when first messages arrive
@@ -964,11 +978,10 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   ///
   /// [transcription] - Transcripción local del audio (gratis, usando STT del dispositivo)
   /// Se envía al servidor para moderación en lugar de usar APIs de pago como Whisper
-  Future<void> processAndUploadAudio(String audioPath, {bool isAiGenerated = false, String? transcription}) async {
+  Future<void> processAndUploadAudio(String audioPath, {String? transcription}) async {
     try {
       // Construir metadata con transcripción si está disponible
       final Map<String, dynamic> metadata = {};
-      if (isAiGenerated) metadata['isAiGenerated'] = true;
       if (transcription != null && transcription.isNotEmpty) {
         metadata['transcription'] = transcription;
         ReleaseLogger.log('📝 Enviando audio con transcripción local', tag: 'Audio');

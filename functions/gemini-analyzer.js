@@ -49,9 +49,10 @@ async function analyzeMessageWithGemini(
   }
 
   try {
-    // Usar gemini-2.0-flash-lite que es el más barato y rápido
+    // Usar gemini-2.5-flash-lite (drop-in replacement de 2.0-flash-lite,
+    // mismo precio $0.10/$0.40 por 1M tokens, mejor calidad).
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash-lite",
+      model: "gemini-2.5-flash-lite",
     });
 
     const contextSection = conversationContext

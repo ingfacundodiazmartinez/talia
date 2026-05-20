@@ -1,0 +1,248 @@
+═══════════════════════════════════════════════════════════════
+CODEPREP - Registro de Query
+═══════════════════════════════════════════════════════════════
+
+Fecha: 2026-01-24 23:46:34
+Proyecto: /Users/olagg/Personal/talia
+
+─── MÉTRICAS REALES ───
+Input tokens:       28,056
+Output tokens:      15
+Cache creado:       0
+Cache leído:        0
+TOTAL:              28,071 tokens
+Costo:              $0.0000 USD
+Tiempo:             0.0s
+
+─── QUERY ───
+Ok, arreglalo
+
+─── CONTEXTO ENVIADO ───
+# Contexto Pre-procesado por Cliente Local
+
+*Este contexto fue compilado por un modelo local (7B) para optimizar tu razonamiento.*
+
+## 📋 Reglas del Proyecto (CLAUDE.md)
+*Estas reglas son OBLIGATORIAS. Violaciones = código rechazado.*
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Reglas por Capa:**
+- **Screen** - PROHIBIDO: `FirebaseFirestore.instance.collection(...)`, `FirebaseFunctions.instance.httpsCallable(...)`, Direct calls to Services
+
+**Prohibiciones Globales:**
+- ❌ print() - usar ReleaseLogger
+- ❌ debugPrint() - usar ReleaseLogger
+- ❌ Firestore directo en Screen - usar Controller
+- ❌ Functions directo en Screen - usar Controller
+- ❌ Llamadas directas a Services desde Screen
+
+**Servicios Documentados:**
+- `notificationService`: NotificationService(),
+- `videoCallService`: VideoCallService(),
+- `autoApprovalService`: AutoApprovalService(),
+
+## 📊 Inventario del Proyecto
+
+**Archivos:** 596 | **Líneas:** 205,966
+**Lenguajes:** .dart: 504, .js: 84, .py: 7, .rb: 1
+
+### Services (203)
+- `GeminiAIService` → lib/gemini_ai_service.dart
+- `NotificationService` → lib/notification_service.dart
+- `ThemeService` → lib/theme_service.dart
+- `MessageReportService` → lib/services/message_report_service.dart
+- `GroupService` → lib/services/group_service.dart
+- `BlockService` → lib/services/block_service.dart
+- `DeepARService` → lib/services/deepar_service.dart
+- `CallKitService` → lib/services/callkit_service.dart
+- `StoryService` → lib/services/story_service_refactored.dart
+- `PermissionService` → lib/services/permission_service.dart
+- ... y 193 más
+
+### Controllers (44)
+- `GroupChatController` → lib/controllers/group_chat_controller.dart
+- `ChatsController` → lib/controllers/chats_controller.dart
+- `ChildContactsController` → lib/controllers/child_contacts_controller.dart
+- `ChildMainShellController` → lib/controllers/child_main_shell_controller.dart
+- `BaseChatsController` → lib/controllers/base_chats_controller.dart
+- `MessageInfoController` → lib/controllers/message_info_controller.dart
+- `ShareTargetController` → lib/controllers/share_target_controller.dart
+- `ChatAppBarController` → lib/controllers/chat_app_bar_controller.dart
+- `ChildHomeController` → lib/controllers/child_home_controller.dart
+- `StoryCameraController` → lib/controllers/story_camera_controller.dart
+- ... y 34 más
+
+### 🔄 Clases con Nombres Similares
+- ***CacheService** (13): UICacheService, UserCacheService, UserProfileCacheService, ShareExtensionCacheService, WaveformCacheService
+- ***ChatService** (9): GroupChatService, CreateChatService, ClearChatService, UnmuteChatService, ArchiveChatService
+- ***ContactService** (7): ContactService, RejectWhitelistContactService, ApproveWhitelistContactService, ReapproveWhitelistContactService, RevokeWhitelistContactService
+- ***GroupService** (6): GroupService, DeleteGroupService, LeaveGroupService, CreateGroupService, UpdateGroupService
+- ***ChatsController** (6): ChatsController, BaseChatsController, ParentChatsController, ParentArchivedChatsController, ChildChatsController
+
+## Proyecto
+Proyecto Flutter/Dart en /Users/olagg/Personal/talia
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Convenciones:**
+- Controllers usan ChangeNotifier
+- Modelos en lib/models/
+
+## Análisis Previo (modelo local)
+*Confianza del análisis: 50%*
+
+### Pensamiento inicial
+Tarea de modificación: Ok, arreglalo
+
+### Módulos relevantes
+- `/Users/olagg/Personal/talia/lib/utils/release_logger.dart`
+- `/Users/olagg/Personal/talia/lib/main.dart`
+- `/Users/olagg/Personal/talia/lib/screens/trivia/trivia_viewer_screen.dart`
+
+### Patrones observados en el proyecto
+- Screen → Controller → Service → Model
+
+### Borrador de approach
+Implementar modificación siguiendo la arquitectura del proyecto.
+
+### Puntos que requieren tu análisis
+- ¿Qué archivos específicos debo modificar?
+- ¿Hay widgets o servicios existentes que deba reutilizar?
+
+## ⚠️ Anti-Frankenstein: NO DUPLIQUES
+*El modelo local analizó TODO el proyecto y encontró código reutilizable.*
+
+### Código que DEBES reutilizar (no crear de nuevo)
+- **`_ParentChatsScreenState._buildItemWidget`** en `/Users/olagg/Personal/talia/lib/screens/parent/chats/parent_chats_screen.dart`
+  - Propósito: function en parent_chats_screen.dart
+  - Firma: `_buildItemWidget(
+    ChatListItemType item,
+    List<QueryDocumentSnapshot> chatDocs,
+    String searchQuery,
+  )`
+  - Relevancia: 65%
+- **`_StoryCameraScreenState._buildShadowedIconButton`** en `/Users/olagg/Personal/talia/lib/screens/story_camera_screen.dart`
+  - Propósito: function en story_camera_screen.dart
+  - Firma: `_buildShadowedIconButton({
+    required VoidCallback onPressed,
+    required IconData icon,
+    String? tooltip,
+  })`
+  - Relevancia: 65%
+- **`_ShareTargetSelectionScreenState._buildPreviewItem`** en `/Users/olagg/Personal/talia/lib/screens/share_target_selection_screen.dart`
+  - Propósito: function en share_target_selection_screen.dart
+  - Firma: `_buildPreviewItem(SharedContent item)`
+  - Relevancia: 65%
+- **`initAppConfig`** en `/Users/olagg/Personal/talia/functions/scripts/init-app-config.js`
+  - Propósito: function en init-app-config.js
+  - Firma: `async function initAppConfig()`
+  - Relevancia: 65%
+- **`validateAuth`** en `/Users/olagg/Personal/talia/functions/__tests__/cloud-functions-verification.test.js`
+  - Propósito: function en cloud-functions-verification.test.js
+  - Firma: `function validateAuth(request)`
+  - Relevancia: 64%
+
+### Patrones del Proyecto (DEBES seguir)
+- **Singletons:** Mixto o no detectado
+- **Clases base:** CustomPainter
+- **State management:** No detectado
+- **Naming:** Sufijos comunes: {'Widget': 3, 'Service': 2}
+
+### ⚠️ Advertencias
+- Clases base comunes: CustomPainter
+- State management: No detectado
+
+## Código Relevante
+*5 archivos por relevancia semántica + 2 por grafo de dependencias*
+
+### `/Users/olagg/Personal/talia/lib/utils/release_logger.dart` 🔗 (relevancia: 0.90)
+```dart
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+class ReleaseLogger {
+  static ReleaseLogger? _instance;
+  static ReleaseLogger get instance {
+    _instance ??= ReleaseLogger._();
+    return _instance!;
+  }
+
+  File? _logFile;
+
+  ReleaseLogger._() {
+    _initializeLogger();
+  }
+
+  Future<void> _initializeLogger() async {
+    try {
+      debugPrint('📝 [ReleaseLogger] Logs escribiendo a: ${_logFile!.path}');
+    } catch (e) {
+      debugPrint('❌ [ReleaseLogger] Error inicializando logger: $e');
+    }
+  }
+
+  static void log(String message, {String? tag}) {
+    var fullMessage = tag != null ? '[$tag] $message' : message;
+    final time = DateTime.now().toIso8601String();
+
+    final consoleMessage = '$time = $fullMessage';
+
+    // ✅ MÉTODO 2: stdout directo - más confiable en release
+    stdout.writeln('🔷 $consoleMessage');
+    debugPrint('🔷 $consoleMessage');
+  }
+
+  static void error(
+    String message, {
+    dynamic error,
+    StackTrace? stackTrace,
+    String? tag,
+  }) {
+    final fullMessage = tag != null ? '[$tag] $message' : message;
+    final time = DateTime.now().toIso8601String();
+
+    final consoleMessage = '❌ $fullMessage';
+    final consoleWithTime = '$time = $consoleMessage';
+
+    // ✅ MÉTODO 2: stderr directo - más confiable en release para errores
+    stderr.writeln('🔴 $consoleWithTime');
+    if (error != null) {
+      stderr.writeln('🔴    Error: $error');
+    }
+  }
+
+  static void info(String message, {String? tag}) {
+    log('ℹ️ $message', tag: tag);
+  }
+
+  static void success(String message, {String? tag}) {
+    log('✅ $message', tag: tag);
+  }
+
+  static void warning(String message, {String? tag}) {
+    log('⚠️ $message', tag: tag);
+  }
+}
+```
+
+### `/Users/olagg/Personal/talia/lib/main.dart` 🔗 (relevancia: 0.90)
+```dart
+// 12 imports omitidos para brevedad
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+// ... y 9 más
+
+import 'auth_screen.dart';
+import 'screens/parent/parent_main_shell.dart';
+import 'screens/child/child_main_shell.dart';
+import 'sc...
+
+─── RESPUESTA DE CLAUDE ───
+You've hit your limit · resets 12am (America/Argentina/Salta)
+
+
+═══════════════════════════════════════════════════════════════

@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
@@ -67,7 +68,7 @@ class _SplashWrapperState extends State<SplashWrapper> {
         backgroundColor: Colors.white,
         body: Center(
           child: CircularProgressIndicator(
-            color: Color(0xFF9D7FE8),
+            color: ThemeService.primaryColor,
           ),
         ),
       );

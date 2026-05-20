@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import '../../../../services/typing_indicator_service.dart';
 import '../../../../services/nudge_service.dart';
+import '../../../../services/block_service.dart';
 import '../../../../controllers/chat_list_item_controller.dart';
 import '../../../../models/chat_message.dart';
 import '../../../../models/nudge.dart';
@@ -12,7 +13,6 @@ import '../../../../widgets/message_status_indicator.dart';
 import '../../../../widgets/synced_user_widgets.dart';
 import '../../../../widgets/nudge/nudge_type_selector.dart';
 import '../../../../widgets/nudge/nudge_tutorial.dart';
-import '../../../../utils/release_logger.dart';
 import '../../../chat_detail_screen.dart';
 
 class ChatListItem extends StatefulWidget {
@@ -80,24 +80,38 @@ class _ChatListItemState extends State<ChatListItem> {
   Future<void> _archiveChat() async {
     final success = await _controller.archiveChat();
 
-    if (mounted) {
-      if (!success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error al archivar chat'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      } else {
-        // ✅ Log para verificar que el callback se ejecuta
-        if (widget.onArchived != null) {
-          ReleaseLogger.log('✅ [ChatListItem] Llamando onArchived callback', tag: 'ChatListItem');
-          widget.onArchived!.call();
-        } else {
-          ReleaseLogger.warning('⚠️ [ChatListItem] onArchived callback es NULL!', tag: 'ChatListItem');
-        }
-      }
+    if (!mounted) return;
+
+    if (!success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error al archivar chat'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
     }
+
+    widget.onArchived?.call();
+
+    // Snackbar con acción "Deshacer"
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('Chat archivado'),
+        duration: const Duration(seconds: 4),
+        action: SnackBarAction(
+          label: 'Deshacer',
+          onPressed: () async {
+            final reverted = await _controller.unarchiveChat();
+            if (reverted && mounted) {
+              widget.onArchived?.call();
+            }
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _muteChat() async {
@@ -317,6 +331,7 @@ class _ChatListItemState extends State<ChatListItem> {
 
                                 if (mounted) {
                                   if (!success) {
+                                    // ignore: use_build_context_synchronously
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
                                         content: Text('Error al limpiar chat'),
@@ -363,13 +378,20 @@ class _ChatListItemState extends State<ChatListItem> {
                   children: [
                     Stack(
                       children: [
-                        CircleAvatar(
+                        // Si el contacto bloqueó al usuario actual, no se muestra su foto.
+                        StreamBuilder<bool>(
+                          stream: BlockService().shouldHidePhotoOfStream(widget.userId),
+                          initialData: false,
+                          builder: (context, hideSnap) {
+                            final hidePhoto = hideSnap.data ?? false;
+                            final effectivePhoto = hidePhoto ? null : widget.photoURL;
+                            return CircleAvatar(
                           radius: 28,
                           backgroundColor: colorScheme.primary.withValues(alpha: 0.2),
-                          child: widget.photoURL != null && widget.photoURL!.isNotEmpty
+                          child: effectivePhoto != null && effectivePhoto.isNotEmpty
                               ? ClipOval(
                                   child: CachedNetworkImage(
-                                    imageUrl: widget.photoURL!,
+                                    imageUrl: effectivePhoto,
                                     width: 56,
                                     height: 56,
                                     fit: BoxFit.cover,
@@ -399,6 +421,8 @@ class _ChatListItemState extends State<ChatListItem> {
                                     color: colorScheme.primary,
                                   ),
                                 ),
+                            );
+                          },
                         ),
                         if (widget.isBlocked)
                           Positioned(

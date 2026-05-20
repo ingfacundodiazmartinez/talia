@@ -1,0 +1,2133 @@
+{
+  "fix_logger_line": {
+    "name": "fix_logger_line",
+    "file": "fix_syntax_errors.py",
+    "line": 10,
+    "calls": [],
+    "called_by": [
+      "process_file"
+    ]
+  },
+  "process_file": {
+    "name": "process_file",
+    "file": "scripts/fix_applogger_syntax.py",
+    "line": 44,
+    "calls": [
+      "fix_logger_line",
+      "fix_applogger_line"
+    ],
+    "called_by": [
+      "main"
+    ]
+  },
+  "main": {
+    "name": "main",
+    "file": "functions/scripts/setup-talia-assistant.js",
+    "line": 244,
+    "calls": [
+      "process_file",
+      "fix_file",
+      "str",
+      "migrate_file",
+      "migrateSticker",
+      "question",
+      "deleteCollection",
+      "deleteDemoDocuments",
+      "cleanChatMessages",
+      "cleanGroupMessages",
+      "deleteDemoAuthUsers",
+      "downloadFromOpenmoji",
+      "uploadToStorage",
+      "updateOrCreateSticker",
+      "createUser",
+      "linkParentChild",
+      "createFamilyGroup",
+      "createContact",
+      "createChat",
+      "createStory",
+      "createLocation",
+      "createWeeklyReport",
+      "createTaliaUser",
+      "createTaliaChatsForExistingUsers"
+    ],
+    "called_by": []
+  },
+  "fix_applogger_line": {
+    "name": "fix_applogger_line",
+    "file": "scripts/fix_applogger_syntax.py",
+    "line": 9,
+    "calls": [],
+    "called_by": [
+      "process_file"
+    ]
+  },
+  "create_gradient_text": {
+    "name": "create_gradient_text",
+    "file": "scripts/generate_splash.py",
+    "line": 27,
+    "calls": [],
+    "called_by": [
+      "generate_splash"
+    ]
+  },
+  "generate_splash": {
+    "name": "generate_splash",
+    "file": "scripts/generate_splash.py",
+    "line": 65,
+    "calls": [
+      "create_gradient_text"
+    ],
+    "called_by": []
+  },
+  "fix_file": {
+    "name": "fix_file",
+    "file": "scripts/fix_broken_logs.py",
+    "line": 10,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "determine_level": {
+    "name": "determine_level",
+    "file": "scripts/migrate_logs.py",
+    "line": 11,
+    "calls": [],
+    "called_by": [
+      "replace_debug_print",
+      "replace_print"
+    ]
+  },
+  "migrate_file": {
+    "name": "migrate_file",
+    "file": "scripts/migrate_logs.py",
+    "line": 26,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "replace_debug_print": {
+    "name": "replace_debug_print",
+    "file": "scripts/migrate_logs.py",
+    "line": 56,
+    "calls": [
+      "determine_level"
+    ],
+    "called_by": []
+  },
+  "replace_print": {
+    "name": "replace_print",
+    "file": "scripts/migrate_logs.py",
+    "line": 77,
+    "calls": [
+      "determine_level"
+    ],
+    "called_by": []
+  },
+  "handle_new_rx_page": {
+    "name": "handle_new_rx_page",
+    "file": "ios/Flutter/ephemeral/flutter_lldb_helper.py",
+    "line": 7,
+    "calls": [],
+    "called_by": []
+  },
+  "__lldb_init_module": {
+    "name": "__lldb_init_module",
+    "file": "ios/Flutter/ephemeral/flutter_lldb_helper.py",
+    "line": 24,
+    "calls": [],
+    "called_by": []
+  },
+  "setup_model": {
+    "name": "setup_model",
+    "file": "functions/runpod-flux-kontext-worker/handler.py",
+    "line": 19,
+    "calls": [],
+    "called_by": [
+      "handler"
+    ]
+  },
+  "download_image": {
+    "name": "download_image",
+    "file": "functions/runpod-facefusion-worker/handler.py",
+    "line": 111,
+    "calls": [],
+    "called_by": [
+      "handler"
+    ]
+  },
+  "handler": {
+    "name": "handler",
+    "file": "functions/runpod-facefusion-worker/handler.py",
+    "line": 174,
+    "calls": [
+      "setup_model",
+      "download_image",
+      "str",
+      "setup_models",
+      "fix_image_orientation",
+      "get_face",
+      "swap_face",
+      "enhance_face"
+    ],
+    "called_by": []
+  },
+  "setup_models": {
+    "name": "setup_models",
+    "file": "functions/runpod-facefusion-worker/handler.py",
+    "line": 42,
+    "calls": [],
+    "called_by": [
+      "handler"
+    ]
+  },
+  "fix_image_orientation": {
+    "name": "fix_image_orientation",
+    "file": "functions/runpod-facefusion-worker/handler.py",
+    "line": 84,
+    "calls": [],
+    "called_by": [
+      "handler"
+    ]
+  },
+  "get_face": {
+    "name": "get_face",
+    "file": "functions/runpod-facefusion-worker/handler.py",
+    "line": 136,
+    "calls": [],
+    "called_by": [
+      "handler"
+    ]
+  },
+  "swap_face": {
+    "name": "swap_face",
+    "file": "functions/runpod-facefusion-worker/handler.py",
+    "line": 152,
+    "calls": [],
+    "called_by": [
+      "handler"
+    ]
+  },
+  "enhance_face": {
+    "name": "enhance_face",
+    "file": "functions/runpod-facefusion-worker/handler.py",
+    "line": 160,
+    "calls": [],
+    "called_by": [
+      "handler"
+    ]
+  },
+  "checkNotifications": {
+    "name": "checkNotifications",
+    "file": "scripts/check_notifications.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "downloadImage": {
+    "name": "downloadImage",
+    "file": "scripts/migrate_stickers_to_storage.js",
+    "line": 30,
+    "calls": [],
+    "called_by": [
+      "migrateSticker"
+    ]
+  },
+  "getFileExtension": {
+    "name": "getFileExtension",
+    "file": "scripts/migrate_stickers_to_storage.js",
+    "line": 62,
+    "calls": [],
+    "called_by": [
+      "migrateSticker"
+    ]
+  },
+  "uploadToStorage": {
+    "name": "uploadToStorage",
+    "file": "scripts/upload_openmoji_stickers.js",
+    "line": 124,
+    "calls": [],
+    "called_by": [
+      "main",
+      "migrateSticker",
+      "StickerSyncService.processSticker"
+    ]
+  },
+  "migrateSticker": {
+    "name": "migrateSticker",
+    "file": "scripts/migrate_stickers_to_storage.js",
+    "line": 100,
+    "calls": [
+      "downloadImage",
+      "getFileExtension",
+      "uploadToStorage"
+    ],
+    "called_by": [
+      "main"
+    ]
+  },
+  "checkToken": {
+    "name": "checkToken",
+    "file": "scripts/check_token.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "normalizePhone": {
+    "name": "normalizePhone",
+    "file": "functions/phone-utils.js",
+    "line": 43,
+    "calls": [
+      "normalizePhone"
+    ],
+    "called_by": [
+      "normalizePhone",
+      "generateVariations",
+      "checkContacts",
+      "hashPhone",
+      "generatePhoneVariations"
+    ]
+  },
+  "generateVariations": {
+    "name": "generateVariations",
+    "file": "scripts/check_contacts.js",
+    "line": 54,
+    "calls": [
+      "normalizePhone"
+    ],
+    "called_by": [
+      "checkMatches",
+      "checkContacts"
+    ]
+  },
+  "checkMatches": {
+    "name": "checkMatches",
+    "file": "scripts/check_contact_matches.js",
+    "line": 56,
+    "calls": [
+      "generateVariations"
+    ],
+    "called_by": []
+  },
+  "question": {
+    "name": "question",
+    "file": "scripts/clean_demo_data.js",
+    "line": 29,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "deleteDemoAuthUsers": {
+    "name": "deleteDemoAuthUsers",
+    "file": "scripts/clean_demo_data.js",
+    "line": 36,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "deleteCollection": {
+    "name": "deleteCollection",
+    "file": "functions/account-deletion.js",
+    "line": 360,
+    "calls": [
+      "deleteQueryBatch"
+    ],
+    "called_by": [
+      "main",
+      "deleteChildAccount",
+      "deleteParentAccount",
+      "deleteAdultAccount",
+      "deleteUserLocations"
+    ]
+  },
+  "deleteQueryBatch": {
+    "name": "deleteQueryBatch",
+    "file": "scripts/clean_demo_data.js",
+    "line": 68,
+    "calls": [
+      "deleteQueryBatch"
+    ],
+    "called_by": [
+      "deleteCollection",
+      "deleteQueryBatch"
+    ]
+  },
+  "deleteDemoDocuments": {
+    "name": "deleteDemoDocuments",
+    "file": "scripts/clean_demo_data.js",
+    "line": 91,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "cleanChatMessages": {
+    "name": "cleanChatMessages",
+    "file": "scripts/clean_demo_data.js",
+    "line": 131,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "cleanGroupMessages": {
+    "name": "cleanGroupMessages",
+    "file": "scripts/clean_demo_data.js",
+    "line": 166,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "checkDevicePhoneNumbers": {
+    "name": "checkDevicePhoneNumbers",
+    "file": "scripts/check_device_phone_numbers.js",
+    "line": 14,
+    "calls": [],
+    "called_by": []
+  },
+  "checkVoIPToken": {
+    "name": "checkVoIPToken",
+    "file": "scripts/check_voip_token.js",
+    "line": 12,
+    "calls": [],
+    "called_by": []
+  },
+  "migrateModeration": {
+    "name": "migrateModeration",
+    "file": "scripts/migrate_moderation_settings.js",
+    "line": 18,
+    "calls": [],
+    "called_by": []
+  },
+  "downloadFromOpenmoji": {
+    "name": "downloadFromOpenmoji",
+    "file": "scripts/upload_openmoji_stickers.js",
+    "line": 91,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "updateOrCreateSticker": {
+    "name": "updateOrCreateSticker",
+    "file": "scripts/upload_openmoji_stickers.js",
+    "line": 145,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "uploadStickers": {
+    "name": "uploadStickers",
+    "file": "scripts/upload_stickers.js",
+    "line": 359,
+    "calls": [],
+    "called_by": []
+  },
+  "str": {
+    "name": "str",
+    "file": "scripts/debug_moderation.js",
+    "line": 15,
+    "calls": [],
+    "called_by": [
+      "main",
+      "handler",
+      "debugModeration"
+    ]
+  },
+  "debugModeration": {
+    "name": "debugModeration",
+    "file": "scripts/debug_moderation.js",
+    "line": 19,
+    "calls": [
+      "str"
+    ],
+    "called_by": []
+  },
+  "checkContacts": {
+    "name": "checkContacts",
+    "file": "scripts/check_contacts.js",
+    "line": 77,
+    "calls": [
+      "normalizePhone",
+      "generateVariations"
+    ],
+    "called_by": []
+  },
+  "disableModeration": {
+    "name": "disableModeration",
+    "file": "scripts/disable_moderation_facu_mica.js",
+    "line": 14,
+    "calls": [],
+    "called_by": []
+  },
+  "cleanupOldFields": {
+    "name": "cleanupOldFields",
+    "file": "scripts/cleanup_old_moderation_fields.js",
+    "line": 21,
+    "calls": [],
+    "called_by": []
+  },
+  "checkFormat": {
+    "name": "checkFormat",
+    "file": "scripts/check_parent_children_format.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "deleteVoIPToken": {
+    "name": "deleteVoIPToken",
+    "file": "scripts/delete_voip_token.js",
+    "line": 13,
+    "calls": [],
+    "called_by": []
+  },
+  "getChatId": {
+    "name": "getChatId",
+    "file": "scripts/seed_demo_data.js",
+    "line": 173,
+    "calls": [],
+    "called_by": [
+      "createContact",
+      "createChat"
+    ]
+  },
+  "getRandomDelay": {
+    "name": "getRandomDelay",
+    "file": "scripts/seed_demo_data.js",
+    "line": 177,
+    "calls": [],
+    "called_by": []
+  },
+  "createUser": {
+    "name": "createUser",
+    "file": "scripts/seed_demo_data.js",
+    "line": 184,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "linkParentChild": {
+    "name": "linkParentChild",
+    "file": "scripts/seed_demo_data.js",
+    "line": 225,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "createContact": {
+    "name": "createContact",
+    "file": "scripts/seed_demo_data.js",
+    "line": 244,
+    "calls": [
+      "getChatId"
+    ],
+    "called_by": [
+      "main"
+    ]
+  },
+  "createChat": {
+    "name": "createChat",
+    "file": "scripts/seed_demo_data.js",
+    "line": 262,
+    "calls": [
+      "getChatId"
+    ],
+    "called_by": [
+      "main"
+    ]
+  },
+  "createFamilyGroup": {
+    "name": "createFamilyGroup",
+    "file": "scripts/seed_demo_data.js",
+    "line": 313,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "createStory": {
+    "name": "createStory",
+    "file": "scripts/seed_demo_data.js",
+    "line": 362,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "createLocation": {
+    "name": "createLocation",
+    "file": "scripts/seed_demo_data.js",
+    "line": 385,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "createWeeklyReport": {
+    "name": "createWeeklyReport",
+    "file": "scripts/seed_demo_data.js",
+    "line": 411,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "getCachedContext": {
+    "name": "getCachedContext",
+    "file": "functions/moderation.js",
+    "line": 27,
+    "calls": [],
+    "called_by": []
+  },
+  "setCachedContext": {
+    "name": "setCachedContext",
+    "file": "functions/moderation.js",
+    "line": 35,
+    "calls": [],
+    "called_by": []
+  },
+  "checkUserPremiumPlus": {
+    "name": "checkUserPremiumPlus",
+    "file": "functions/moderation.js",
+    "line": 1259,
+    "calls": [],
+    "called_by": []
+  },
+  "moderateImageInternal": {
+    "name": "moderateImageInternal",
+    "file": "functions/moderation.js",
+    "line": 1303,
+    "calls": [],
+    "called_by": [
+      "moderateMultimediaInternal"
+    ]
+  },
+  "moderateAudioInternal": {
+    "name": "moderateAudioInternal",
+    "file": "functions/moderation.js",
+    "line": 1464,
+    "calls": [
+      "analyzeMessageWithGemini",
+      "shouldBlockByModerationLevel"
+    ],
+    "called_by": [
+      "moderateMultimediaInternal"
+    ]
+  },
+  "moderateVideoInternal": {
+    "name": "moderateVideoInternal",
+    "file": "functions/moderation.js",
+    "line": 1581,
+    "calls": [],
+    "called_by": [
+      "moderateMultimediaInternal"
+    ]
+  },
+  "moderateMultimediaInternal": {
+    "name": "moderateMultimediaInternal",
+    "file": "functions/moderation.js",
+    "line": 1722,
+    "calls": [
+      "moderateImageInternal",
+      "moderateAudioInternal",
+      "moderateVideoInternal"
+    ],
+    "called_by": []
+  },
+  "analyzeMessageWithGemini": {
+    "name": "analyzeMessageWithGemini",
+    "file": "functions/gemini-analyzer.js",
+    "line": 34,
+    "calls": [],
+    "called_by": [
+      "moderateAudioInternal"
+    ]
+  },
+  "checkStoryReplyRateLimit": {
+    "name": "checkStoryReplyRateLimit",
+    "file": "functions/stories.js",
+    "line": 28,
+    "calls": [],
+    "called_by": []
+  },
+  "incrementStoryReplyCount": {
+    "name": "incrementStoryReplyCount",
+    "file": "functions/stories.js",
+    "line": 91,
+    "calls": [],
+    "called_by": []
+  },
+  "checkStoryViewPermission": {
+    "name": "checkStoryViewPermission",
+    "file": "functions/stories.js",
+    "line": 290,
+    "calls": [],
+    "called_by": []
+  },
+  "sendLikeMessage": {
+    "name": "sendLikeMessage",
+    "file": "functions/stories.js",
+    "line": 338,
+    "calls": [],
+    "called_by": []
+  },
+  "getTierFromProductId": {
+    "name": "getTierFromProductId",
+    "file": "functions/iap-verification.js",
+    "line": 37,
+    "calls": [],
+    "called_by": []
+  },
+  "isExtraChildProduct": {
+    "name": "isExtraChildProduct",
+    "file": "functions/iap-verification.js",
+    "line": 49,
+    "calls": [],
+    "called_by": []
+  },
+  "generateAppStoreJWT": {
+    "name": "generateAppStoreJWT",
+    "file": "functions/iap-verification.js",
+    "line": 168,
+    "calls": [],
+    "called_by": []
+  },
+  "handleSubscriptionActive": {
+    "name": "handleSubscriptionActive",
+    "file": "functions/iap-verification.js",
+    "line": 526,
+    "calls": [],
+    "called_by": []
+  },
+  "activatePremiumForUser": {
+    "name": "activatePremiumForUser",
+    "file": "functions/iap-verification.js",
+    "line": 605,
+    "calls": [],
+    "called_by": []
+  },
+  "activateExtraChildForUser": {
+    "name": "activateExtraChildForUser",
+    "file": "functions/iap-verification.js",
+    "line": 637,
+    "calls": [],
+    "called_by": []
+  },
+  "handleSubscriptionExpired": {
+    "name": "handleSubscriptionExpired",
+    "file": "functions/iap-verification.js",
+    "line": 674,
+    "calls": [],
+    "called_by": []
+  },
+  "needsAppKnowledge": {
+    "name": "needsAppKnowledge",
+    "file": "functions/talia-assistant.js",
+    "line": 225,
+    "calls": [],
+    "called_by": [
+      "buildSystemPrompt"
+    ]
+  },
+  "buildSystemPrompt": {
+    "name": "buildSystemPrompt",
+    "file": "functions/talia-assistant.js",
+    "line": 233,
+    "calls": [
+      "needsAppKnowledge"
+    ],
+    "called_by": [
+      "generateResponse"
+    ]
+  },
+  "getTaliaMemory": {
+    "name": "getTaliaMemory",
+    "file": "functions/talia-assistant.js",
+    "line": 258,
+    "calls": [],
+    "called_by": [
+      "addFactsToMemory",
+      "generateResponse",
+      "generateStoryComment"
+    ]
+  },
+  "updateTaliaMemory": {
+    "name": "updateTaliaMemory",
+    "file": "functions/talia-assistant.js",
+    "line": 279,
+    "calls": [],
+    "called_by": []
+  },
+  "extractMemorableFacts": {
+    "name": "extractMemorableFacts",
+    "file": "functions/talia-assistant.js",
+    "line": 293,
+    "calls": [],
+    "called_by": []
+  },
+  "addFactsToMemory": {
+    "name": "addFactsToMemory",
+    "file": "functions/talia-assistant.js",
+    "line": 334,
+    "calls": [
+      "getTaliaMemory",
+      "generateUserProfileSummary"
+    ],
+    "called_by": []
+  },
+  "generateUserProfileSummary": {
+    "name": "generateUserProfileSummary",
+    "file": "functions/talia-assistant.js",
+    "line": 375,
+    "calls": [],
+    "called_by": [
+      "addFactsToMemory"
+    ]
+  },
+  "getUserProfile": {
+    "name": "getUserProfile",
+    "file": "functions/talia-assistant.js",
+    "line": 437,
+    "calls": [],
+    "called_by": [
+      "generateResponse"
+    ]
+  },
+  "messageNeedsProfileContext": {
+    "name": "messageNeedsProfileContext",
+    "file": "functions/talia-assistant.js",
+    "line": 454,
+    "calls": [],
+    "called_by": [
+      "generateResponse"
+    ]
+  },
+  "getUserChatContext": {
+    "name": "getUserChatContext",
+    "file": "functions/talia-assistant.js",
+    "line": 482,
+    "calls": [
+      "getTimeAgo"
+    ],
+    "called_by": []
+  },
+  "getTimeAgo": {
+    "name": "getTimeAgo",
+    "file": "functions/talia-assistant.js",
+    "line": 545,
+    "calls": [],
+    "called_by": [
+      "getUserChatContext"
+    ]
+  },
+  "getUserTimezone": {
+    "name": "getUserTimezone",
+    "file": "functions/talia-assistant.js",
+    "line": 572,
+    "calls": [],
+    "called_by": [
+      "isAppropriateTimeForUser"
+    ]
+  },
+  "getCurrentHourInTimezone": {
+    "name": "getCurrentHourInTimezone",
+    "file": "functions/talia-assistant.js",
+    "line": 592,
+    "calls": [],
+    "called_by": [
+      "isAppropriateTimeForUser"
+    ]
+  },
+  "isAppropriateTimeForUser": {
+    "name": "isAppropriateTimeForUser",
+    "file": "functions/talia-assistant.js",
+    "line": 610,
+    "calls": [
+      "getUserTimezone",
+      "getCurrentHourInTimezone"
+    ],
+    "called_by": []
+  },
+  "checkRateLimit": {
+    "name": "checkRateLimit",
+    "file": "functions/helpers.js",
+    "line": 291,
+    "calls": [],
+    "called_by": []
+  },
+  "getConversationHistory": {
+    "name": "getConversationHistory",
+    "file": "functions/talia-assistant.js",
+    "line": 664,
+    "calls": [],
+    "called_by": [
+      "generateResponse"
+    ]
+  },
+  "generateResponse": {
+    "name": "generateResponse",
+    "file": "functions/talia-assistant.js",
+    "line": 691,
+    "calls": [
+      "getTaliaMemory",
+      "getConversationHistory",
+      "messageNeedsProfileContext",
+      "getUserProfile",
+      "buildSystemPrompt"
+    ],
+    "called_by": []
+  },
+  "sendTaliaMessage": {
+    "name": "sendTaliaMessage",
+    "file": "functions/talia-assistant.js",
+    "line": 788,
+    "calls": [],
+    "called_by": []
+  },
+  "generateStoryComment": {
+    "name": "generateStoryComment",
+    "file": "functions/talia-assistant.js",
+    "line": 1135,
+    "calls": [
+      "getTaliaMemory"
+    ],
+    "called_by": []
+  },
+  "getUserData": {
+    "name": "getUserData",
+    "file": "functions/groups-v2.js",
+    "line": 31,
+    "calls": [],
+    "called_by": []
+  },
+  "getParentIds": {
+    "name": "getParentIds",
+    "file": "functions/groups-v2.js",
+    "line": 46,
+    "calls": [],
+    "called_by": []
+  },
+  "hasAutoApproveEnabled": {
+    "name": "hasAutoApproveEnabled",
+    "file": "functions/groups-v2.js",
+    "line": 68,
+    "calls": [],
+    "called_by": []
+  },
+  "createApprovalRequest": {
+    "name": "createApprovalRequest",
+    "file": "functions/groups-v2.js",
+    "line": 79,
+    "calls": [],
+    "called_by": []
+  },
+  "addMemberToGroup": {
+    "name": "addMemberToGroup",
+    "file": "functions/groups-v2.js",
+    "line": 152,
+    "calls": [],
+    "called_by": []
+  },
+  "addPendingMemberToGroup": {
+    "name": "addPendingMemberToGroup",
+    "file": "functions/groups-v2.js",
+    "line": 175,
+    "calls": [],
+    "called_by": []
+  },
+  "removePendingMemberFromGroup": {
+    "name": "removePendingMemberFromGroup",
+    "file": "functions/groups-v2.js",
+    "line": 200,
+    "calls": [],
+    "called_by": []
+  },
+  "movePendingToApproved": {
+    "name": "movePendingToApproved",
+    "file": "functions/groups-v2.js",
+    "line": 217,
+    "calls": [],
+    "called_by": []
+  },
+  "isPremiumSystemEnabled": {
+    "name": "isPremiumSystemEnabled",
+    "file": "functions/payments.js",
+    "line": 19,
+    "calls": [],
+    "called_by": [
+      "checkFaceSwapLimit"
+    ]
+  },
+  "getCurrentDay": {
+    "name": "getCurrentDay",
+    "file": "functions/transformations.js",
+    "line": 70,
+    "calls": [],
+    "called_by": []
+  },
+  "getCurrentMonth": {
+    "name": "getCurrentMonth",
+    "file": "functions/transformations.js",
+    "line": 81,
+    "calls": [],
+    "called_by": []
+  },
+  "getStartOfDay": {
+    "name": "getStartOfDay",
+    "file": "functions/transformations.js",
+    "line": 91,
+    "calls": [],
+    "called_by": [
+      "checkFaceSwapLimit"
+    ]
+  },
+  "getStartOfMonth": {
+    "name": "getStartOfMonth",
+    "file": "functions/transformations.js",
+    "line": 99,
+    "calls": [],
+    "called_by": [
+      "checkFaceSwapLimit"
+    ]
+  },
+  "checkFaceSwapLimit": {
+    "name": "checkFaceSwapLimit",
+    "file": "functions/transformations.js",
+    "line": 110,
+    "calls": [
+      "isPremiumSystemEnabled",
+      "getStartOfDay",
+      "getStartOfMonth"
+    ],
+    "called_by": []
+  },
+  "determineAiModel": {
+    "name": "determineAiModel",
+    "file": "functions/transformations.js",
+    "line": 193,
+    "calls": [],
+    "called_by": []
+  },
+  "transformWithNanoBanana": {
+    "name": "transformWithNanoBanana",
+    "file": "functions/transformations.js",
+    "line": 219,
+    "calls": [],
+    "called_by": []
+  },
+  "transformWithRunPodFaceSwap": {
+    "name": "transformWithRunPodFaceSwap",
+    "file": "functions/transformations.js",
+    "line": 265,
+    "calls": [
+      "uploadBase64ToStorage",
+      "pollRunPodJob"
+    ],
+    "called_by": []
+  },
+  "pollRunPodJob": {
+    "name": "pollRunPodJob",
+    "file": "functions/transformations.js",
+    "line": 342,
+    "calls": [
+      "uploadBase64ToStorage"
+    ],
+    "called_by": [
+      "transformWithRunPodFaceSwap"
+    ]
+  },
+  "uploadBase64ToStorage": {
+    "name": "uploadBase64ToStorage",
+    "file": "functions/transformations.js",
+    "line": 384,
+    "calls": [],
+    "called_by": [
+      "transformWithRunPodFaceSwap",
+      "pollRunPodJob"
+    ]
+  },
+  "normalizeImageOrientation": {
+    "name": "normalizeImageOrientation",
+    "file": "functions/transformations.js",
+    "line": 421,
+    "calls": [],
+    "called_by": []
+  },
+  "cleanupTempFile": {
+    "name": "cleanupTempFile",
+    "file": "functions/transformations.js",
+    "line": 488,
+    "calls": [],
+    "called_by": [
+      "pollPredictionAndUpdateFirestore"
+    ]
+  },
+  "pollPredictionAndUpdateFirestore": {
+    "name": "pollPredictionAndUpdateFirestore",
+    "file": "functions/transformations.js",
+    "line": 1181,
+    "calls": [
+      "cleanupTempFile"
+    ],
+    "called_by": []
+  },
+  "shouldBlockByModerationLevel": {
+    "name": "shouldBlockByModerationLevel",
+    "file": "functions/moderation-utils.js",
+    "line": 25,
+    "calls": [],
+    "called_by": [
+      "moderateAudioInternal"
+    ]
+  },
+  "getParticipantsInfo": {
+    "name": "getParticipantsInfo",
+    "file": "functions/moderation-utils.js",
+    "line": 62,
+    "calls": [],
+    "called_by": []
+  },
+  "getMessagePreview": {
+    "name": "getMessagePreview",
+    "file": "functions/moderation-utils.js",
+    "line": 120,
+    "calls": [],
+    "called_by": []
+  },
+  "getModerationSettings": {
+    "name": "getModerationSettings",
+    "file": "functions/moderation-utils.js",
+    "line": 153,
+    "calls": [],
+    "called_by": []
+  },
+  "StickerSyncService.constructor": {
+    "name": "StickerSyncService.constructor",
+    "file": "functions/sticker-sync-service.js",
+    "line": 59,
+    "calls": [],
+    "called_by": []
+  },
+  "StickerSyncService.searchStickers": {
+    "name": "StickerSyncService.searchStickers",
+    "file": "functions/sticker-sync-service.js",
+    "line": 69,
+    "calls": [],
+    "called_by": [
+      "StickerSyncService.syncCategory"
+    ]
+  },
+  "StickerSyncService.downloadSticker": {
+    "name": "StickerSyncService.downloadSticker",
+    "file": "functions/sticker-sync-service.js",
+    "line": 99,
+    "calls": [],
+    "called_by": [
+      "StickerSyncService.processSticker"
+    ]
+  },
+  "StickerSyncService.uploadToStorage": {
+    "name": "StickerSyncService.uploadToStorage",
+    "file": "functions/sticker-sync-service.js",
+    "line": 115,
+    "calls": [],
+    "called_by": []
+  },
+  "StickerSyncService.saveStickerMetadata": {
+    "name": "StickerSyncService.saveStickerMetadata",
+    "file": "functions/sticker-sync-service.js",
+    "line": 144,
+    "calls": [],
+    "called_by": [
+      "StickerSyncService.processSticker"
+    ]
+  },
+  "StickerSyncService.stickerExists": {
+    "name": "StickerSyncService.stickerExists",
+    "file": "functions/sticker-sync-service.js",
+    "line": 164,
+    "calls": [],
+    "called_by": [
+      "StickerSyncService.processSticker",
+      "StickerSyncService.syncCategory"
+    ]
+  },
+  "StickerSyncService.processSticker": {
+    "name": "StickerSyncService.processSticker",
+    "file": "functions/sticker-sync-service.js",
+    "line": 181,
+    "calls": [
+      "StickerSyncService.stickerExists",
+      "StickerSyncService.downloadSticker",
+      "uploadToStorage",
+      "StickerSyncService.saveStickerMetadata"
+    ],
+    "called_by": [
+      "StickerSyncService.syncCategory"
+    ]
+  },
+  "StickerSyncService.syncCategory": {
+    "name": "StickerSyncService.syncCategory",
+    "file": "functions/sticker-sync-service.js",
+    "line": 251,
+    "calls": [
+      "StickerSyncService.searchStickers",
+      "StickerSyncService.processSticker",
+      "StickerSyncService.stickerExists"
+    ],
+    "called_by": [
+      "StickerSyncService.syncAllCategories"
+    ]
+  },
+  "StickerSyncService.syncAllCategories": {
+    "name": "StickerSyncService.syncAllCategories",
+    "file": "functions/sticker-sync-service.js",
+    "line": 304,
+    "calls": [
+      "StickerSyncService.syncCategory"
+    ],
+    "called_by": []
+  },
+  "StickerSyncService.cleanupOldStickers": {
+    "name": "StickerSyncService.cleanupOldStickers",
+    "file": "functions/sticker-sync-service.js",
+    "line": 341,
+    "calls": [],
+    "called_by": []
+  },
+  "getLinkedParents": {
+    "name": "getLinkedParents",
+    "file": "functions/scheduled-tasks.js",
+    "line": 531,
+    "calls": [],
+    "called_by": []
+  },
+  "getEffectiveRole": {
+    "name": "getEffectiveRole",
+    "file": "functions/contacts.js",
+    "line": 44,
+    "calls": [],
+    "called_by": [
+      "determineApprovalRequirements"
+    ]
+  },
+  "determineApprovalRequirements": {
+    "name": "determineApprovalRequirements",
+    "file": "functions/contacts.js",
+    "line": 70,
+    "calls": [
+      "getEffectiveRole"
+    ],
+    "called_by": []
+  },
+  "generateAgoraTokenHelper": {
+    "name": "generateAgoraTokenHelper",
+    "file": "functions/agora-token-helper.js",
+    "line": 14,
+    "calls": [],
+    "called_by": []
+  },
+  "hashPhone": {
+    "name": "hashPhone",
+    "file": "functions/phone-utils.js",
+    "line": 102,
+    "calls": [
+      "normalizePhone"
+    ],
+    "called_by": [
+      "hashPhoneVariations"
+    ]
+  },
+  "hashPhoneVariations": {
+    "name": "hashPhoneVariations",
+    "file": "functions/phone-utils.js",
+    "line": 113,
+    "calls": [
+      "generatePhoneVariations",
+      "hashPhone"
+    ],
+    "called_by": []
+  },
+  "generatePhoneVariations": {
+    "name": "generatePhoneVariations",
+    "file": "functions/phone-utils.js",
+    "line": 129,
+    "calls": [
+      "normalizePhone"
+    ],
+    "called_by": [
+      "hashPhoneVariations"
+    ]
+  },
+  "generateRandomCode": {
+    "name": "generateRandomCode",
+    "file": "functions/user-profile.js",
+    "line": 308,
+    "calls": [],
+    "called_by": []
+  },
+  "compareVersions": {
+    "name": "compareVersions",
+    "file": "functions/story-approval.js",
+    "line": 31,
+    "calls": [],
+    "called_by": [
+      "userHasFriendsFeature",
+      "filterUsersByMinVersion"
+    ]
+  },
+  "userHasFriendsFeature": {
+    "name": "userHasFriendsFeature",
+    "file": "functions/story-approval.js",
+    "line": 58,
+    "calls": [
+      "compareVersions"
+    ],
+    "called_by": []
+  },
+  "filterUsersByMinVersion": {
+    "name": "filterUsersByMinVersion",
+    "file": "functions/story-approval.js",
+    "line": 91,
+    "calls": [
+      "compareVersions"
+    ],
+    "called_by": []
+  },
+  "checkFomoRateLimits": {
+    "name": "checkFomoRateLimits",
+    "file": "functions/story-approval.js",
+    "line": 136,
+    "calls": [],
+    "called_by": []
+  },
+  "writeFomoNotificationsBatched": {
+    "name": "writeFomoNotificationsBatched",
+    "file": "functions/story-approval.js",
+    "line": 204,
+    "calls": [],
+    "called_by": []
+  },
+  "validateApprovalPermissions": {
+    "name": "validateApprovalPermissions",
+    "file": "functions/story-approval.js",
+    "line": 475,
+    "calls": [
+      "validateParentChildRelationship"
+    ],
+    "called_by": []
+  },
+  "validateParentChildRelationship": {
+    "name": "validateParentChildRelationship",
+    "file": "functions/story-approval.js",
+    "line": 520,
+    "calls": [],
+    "called_by": [
+      "validateApprovalPermissions"
+    ]
+  },
+  "createNotification": {
+    "name": "createNotification",
+    "file": "functions/story-approval.js",
+    "line": 563,
+    "calls": [],
+    "called_by": []
+  },
+  "createApprovalRequests": {
+    "name": "createApprovalRequests",
+    "file": "functions/story-approval.js",
+    "line": 908,
+    "calls": [],
+    "called_by": []
+  },
+  "sanitizeTextWithDOMPurify": {
+    "name": "sanitizeTextWithDOMPurify",
+    "file": "functions/story-approval.js",
+    "line": 941,
+    "calls": [],
+    "called_by": []
+  },
+  "removeUserFromStories": {
+    "name": "removeUserFromStories",
+    "file": "functions/story-approval.js",
+    "line": 1216,
+    "calls": [],
+    "called_by": []
+  },
+  "addUserToStories": {
+    "name": "addUserToStories",
+    "file": "functions/story-approval.js",
+    "line": 1254,
+    "calls": [],
+    "called_by": []
+  },
+  "checkApprovedContact": {
+    "name": "checkApprovedContact",
+    "file": "functions/story-approval.js",
+    "line": 1291,
+    "calls": [],
+    "called_by": [
+      "checkBidirectionalContact"
+    ]
+  },
+  "checkBidirectionalContact": {
+    "name": "checkBidirectionalContact",
+    "file": "functions/story-approval.js",
+    "line": 1317,
+    "calls": [
+      "checkApprovedContact"
+    ],
+    "called_by": []
+  },
+  "sendVoIPPush": {
+    "name": "sendVoIPPush",
+    "file": "functions/helpers.js",
+    "line": 52,
+    "calls": [],
+    "called_by": [
+      "notifyCallCancelled"
+    ]
+  },
+  "isValidString": {
+    "name": "isValidString",
+    "file": "functions/helpers.js",
+    "line": 167,
+    "calls": [],
+    "called_by": [
+      "validateAgoraTokenParams",
+      "validateReportParams",
+      "validateLinkParams"
+    ]
+  },
+  "isValidNumber": {
+    "name": "isValidNumber",
+    "file": "functions/helpers.js",
+    "line": 180,
+    "calls": [],
+    "called_by": [
+      "validateAgoraTokenParams",
+      "validateReportParams"
+    ]
+  },
+  "validateAgoraTokenParams": {
+    "name": "validateAgoraTokenParams",
+    "file": "functions/helpers.js",
+    "line": 192,
+    "calls": [
+      "isValidString",
+      "isValidNumber"
+    ],
+    "called_by": []
+  },
+  "validateReportParams": {
+    "name": "validateReportParams",
+    "file": "functions/helpers.js",
+    "line": 225,
+    "calls": [
+      "isValidString",
+      "isValidNumber"
+    ],
+    "called_by": []
+  },
+  "validateLinkParams": {
+    "name": "validateLinkParams",
+    "file": "functions/helpers.js",
+    "line": 252,
+    "calls": [
+      "isValidString"
+    ],
+    "called_by": []
+  },
+  "sendDirectPushNotification": {
+    "name": "sendDirectPushNotification",
+    "file": "functions/helpers.js",
+    "line": 424,
+    "calls": [],
+    "called_by": []
+  },
+  "sendPushNotification": {
+    "name": "sendPushNotification",
+    "file": "functions/helpers.js",
+    "line": 606,
+    "calls": [],
+    "called_by": []
+  },
+  "deleteChildAccount": {
+    "name": "deleteChildAccount",
+    "file": "functions/account-deletion.js",
+    "line": 106,
+    "calls": [
+      "unlinkFromParent",
+      "sendDeletionNotification",
+      "deleteCollection",
+      "removeFromChats",
+      "deleteUserMessages",
+      "deleteUserContacts",
+      "removeFromGroups",
+      "deleteUserStories",
+      "removeFromCalls",
+      "deleteUserLocations",
+      "deleteUserStorage"
+    ],
+    "called_by": []
+  },
+  "deleteParentAccount": {
+    "name": "deleteParentAccount",
+    "file": "functions/account-deletion.js",
+    "line": 182,
+    "calls": [
+      "unlinkFromChild",
+      "sendDeletionNotification",
+      "deleteCollection",
+      "removeParentFromContacts",
+      "removeParentFromChats",
+      "cleanParentFromStories",
+      "removeFromGroups",
+      "removeParentFromEmergencies",
+      "deleteUserStorage",
+      "deleteUserContacts"
+    ],
+    "called_by": []
+  },
+  "deleteAdultAccount": {
+    "name": "deleteAdultAccount",
+    "file": "functions/account-deletion.js",
+    "line": 250,
+    "calls": [
+      "removeFromChats",
+      "deleteUserMessages",
+      "deleteUserContacts",
+      "removeFromGroups",
+      "removeFromCalls",
+      "deleteCollection",
+      "deleteUserStorage"
+    ],
+    "called_by": []
+  },
+  "unlinkFromParent": {
+    "name": "unlinkFromParent",
+    "file": "functions/account-deletion.js",
+    "line": 296,
+    "calls": [],
+    "called_by": [
+      "deleteChildAccount"
+    ]
+  },
+  "unlinkFromChild": {
+    "name": "unlinkFromChild",
+    "file": "functions/account-deletion.js",
+    "line": 330,
+    "calls": [],
+    "called_by": [
+      "deleteParentAccount"
+    ]
+  },
+  "removeFromChats": {
+    "name": "removeFromChats",
+    "file": "functions/account-deletion.js",
+    "line": 398,
+    "calls": [],
+    "called_by": [
+      "deleteChildAccount",
+      "deleteAdultAccount"
+    ]
+  },
+  "deleteUserMessages": {
+    "name": "deleteUserMessages",
+    "file": "functions/account-deletion.js",
+    "line": 433,
+    "calls": [],
+    "called_by": [
+      "deleteChildAccount",
+      "deleteAdultAccount"
+    ]
+  },
+  "deleteUserContacts": {
+    "name": "deleteUserContacts",
+    "file": "functions/account-deletion.js",
+    "line": 464,
+    "calls": [],
+    "called_by": [
+      "deleteChildAccount",
+      "deleteParentAccount",
+      "deleteAdultAccount"
+    ]
+  },
+  "removeFromGroups": {
+    "name": "removeFromGroups",
+    "file": "functions/account-deletion.js",
+    "line": 485,
+    "calls": [],
+    "called_by": [
+      "deleteChildAccount",
+      "deleteParentAccount",
+      "deleteAdultAccount"
+    ]
+  },
+  "deleteUserStories": {
+    "name": "deleteUserStories",
+    "file": "functions/account-deletion.js",
+    "line": 545,
+    "calls": [
+      "extractStoragePath"
+    ],
+    "called_by": [
+      "deleteChildAccount"
+    ]
+  },
+  "removeFromCalls": {
+    "name": "removeFromCalls",
+    "file": "functions/account-deletion.js",
+    "line": 579,
+    "calls": [],
+    "called_by": [
+      "deleteChildAccount",
+      "deleteAdultAccount"
+    ]
+  },
+  "deleteUserLocations": {
+    "name": "deleteUserLocations",
+    "file": "functions/account-deletion.js",
+    "line": 608,
+    "calls": [
+      "deleteCollection"
+    ],
+    "called_by": [
+      "deleteChildAccount"
+    ]
+  },
+  "removeParentFromContacts": {
+    "name": "removeParentFromContacts",
+    "file": "functions/account-deletion.js",
+    "line": 625,
+    "calls": [],
+    "called_by": [
+      "deleteParentAccount"
+    ]
+  },
+  "removeParentFromChats": {
+    "name": "removeParentFromChats",
+    "file": "functions/account-deletion.js",
+    "line": 666,
+    "calls": [],
+    "called_by": [
+      "deleteParentAccount"
+    ]
+  },
+  "cleanParentFromStories": {
+    "name": "cleanParentFromStories",
+    "file": "functions/account-deletion.js",
+    "line": 688,
+    "calls": [],
+    "called_by": [
+      "deleteParentAccount"
+    ]
+  },
+  "removeParentFromEmergencies": {
+    "name": "removeParentFromEmergencies",
+    "file": "functions/account-deletion.js",
+    "line": 710,
+    "calls": [],
+    "called_by": [
+      "deleteParentAccount"
+    ]
+  },
+  "deleteUserStorage": {
+    "name": "deleteUserStorage",
+    "file": "functions/account-deletion.js",
+    "line": 732,
+    "calls": [],
+    "called_by": [
+      "deleteChildAccount",
+      "deleteParentAccount",
+      "deleteAdultAccount"
+    ]
+  },
+  "sendDeletionNotification": {
+    "name": "sendDeletionNotification",
+    "file": "functions/account-deletion.js",
+    "line": 763,
+    "calls": [],
+    "called_by": [
+      "deleteChildAccount",
+      "deleteParentAccount"
+    ]
+  },
+  "extractStoragePath": {
+    "name": "extractStoragePath",
+    "file": "functions/trivia.js",
+    "line": 515,
+    "calls": [],
+    "called_by": [
+      "deleteUserStories"
+    ]
+  },
+  "isUserSupervised": {
+    "name": "isUserSupervised",
+    "file": "functions/chats.js",
+    "line": 22,
+    "calls": [],
+    "called_by": [
+      "hasAnySupervisedParticipant"
+    ]
+  },
+  "hasAnySupervisedParticipant": {
+    "name": "hasAnySupervisedParticipant",
+    "file": "functions/chats.js",
+    "line": 40,
+    "calls": [
+      "isUserSupervised"
+    ],
+    "called_by": []
+  },
+  "calculateDeleteAt": {
+    "name": "calculateDeleteAt",
+    "file": "functions/chats.js",
+    "line": 62,
+    "calls": [],
+    "called_by": []
+  },
+  "downloadMultimediaForGemini": {
+    "name": "downloadMultimediaForGemini",
+    "file": "functions/reports.js",
+    "line": 23,
+    "calls": [],
+    "called_by": []
+  },
+  "analyzeBatchWithGemini": {
+    "name": "analyzeBatchWithGemini",
+    "file": "functions/reports.js",
+    "line": 81,
+    "calls": [],
+    "called_by": [
+      "analyzeMessagesWithGemini"
+    ]
+  },
+  "consolidateBatchResults": {
+    "name": "consolidateBatchResults",
+    "file": "functions/reports.js",
+    "line": 206,
+    "calls": [
+      "getDefaultAnalysis"
+    ],
+    "called_by": [
+      "analyzeMessagesWithGemini"
+    ]
+  },
+  "getDefaultAnalysis": {
+    "name": "getDefaultAnalysis",
+    "file": "functions/reports.js",
+    "line": 329,
+    "calls": [],
+    "called_by": [
+      "consolidateBatchResults",
+      "analyzeMessagesWithGemini"
+    ]
+  },
+  "analyzeMessagesWithGemini": {
+    "name": "analyzeMessagesWithGemini",
+    "file": "functions/reports.js",
+    "line": 375,
+    "calls": [
+      "getDefaultAnalysis",
+      "onProgressUpdate",
+      "analyzeBatchWithGemini",
+      "consolidateBatchResults"
+    ],
+    "called_by": []
+  },
+  "onProgressUpdate": {
+    "name": "onProgressUpdate",
+    "file": "functions/reports.js",
+    "line": 958,
+    "calls": [],
+    "called_by": [
+      "analyzeMessagesWithGemini"
+    ]
+  },
+  "analyzeSentiment": {
+    "name": "analyzeSentiment",
+    "file": "functions/reports.js",
+    "line": 1234,
+    "calls": [],
+    "called_by": []
+  },
+  "detectBullying": {
+    "name": "detectBullying",
+    "file": "functions/reports.js",
+    "line": 1321,
+    "calls": [],
+    "called_by": []
+  },
+  "calculateMoodPollStats": {
+    "name": "calculateMoodPollStats",
+    "file": "functions/reports.js",
+    "line": 1401,
+    "calls": [],
+    "called_by": []
+  },
+  "generateDefaultQuestions": {
+    "name": "generateDefaultQuestions",
+    "file": "functions/reports.js",
+    "line": 1457,
+    "calls": [],
+    "called_by": []
+  },
+  "generateConnectionMoment": {
+    "name": "generateConnectionMoment",
+    "file": "functions/reports.js",
+    "line": 1499,
+    "calls": [],
+    "called_by": []
+  },
+  "generateFallbackSuggestion": {
+    "name": "generateFallbackSuggestion",
+    "file": "functions/trivia.js",
+    "line": 534,
+    "calls": [],
+    "called_by": []
+  },
+  "generateWithGemini": {
+    "name": "generateWithGemini",
+    "file": "functions/trivia.js",
+    "line": 757,
+    "calls": [],
+    "called_by": []
+  },
+  "createChainableQuery": {
+    "name": "createChainableQuery",
+    "file": "functions/__tests__/chats.test.js",
+    "line": 51,
+    "calls": [
+      "createChainableQuery"
+    ],
+    "called_by": [
+      "createChainableQuery"
+    ]
+  },
+  "validateAuth": {
+    "name": "validateAuth",
+    "file": "functions/__tests__/cloud-functions-verification.test.js",
+    "line": 19,
+    "calls": [],
+    "called_by": []
+  },
+  "validateStoryInput": {
+    "name": "validateStoryInput",
+    "file": "functions/__tests__/cloud-functions-verification.test.js",
+    "line": 36,
+    "calls": [],
+    "called_by": []
+  },
+  "validateGroupPermission": {
+    "name": "validateGroupPermission",
+    "file": "functions/__tests__/cloud-functions-verification.test.js",
+    "line": 60,
+    "calls": [],
+    "called_by": []
+  },
+  "incrementAtomic": {
+    "name": "incrementAtomic",
+    "file": "functions/__tests__/cloud-functions-verification.test.js",
+    "line": 82,
+    "calls": [],
+    "called_by": []
+  },
+  "executeStoryApproval": {
+    "name": "executeStoryApproval",
+    "file": "functions/__tests__/cloud-functions-verification.test.js",
+    "line": 104,
+    "calls": [],
+    "called_by": []
+  },
+  "batchNotifications": {
+    "name": "batchNotifications",
+    "file": "functions/__tests__/cloud-functions-verification.test.js",
+    "line": 119,
+    "calls": [],
+    "called_by": []
+  },
+  "autoApprovalLogic": {
+    "name": "autoApprovalLogic",
+    "file": "functions/__tests__/cloud-functions-verification.test.js",
+    "line": 185,
+    "calls": [],
+    "called_by": []
+  },
+  "sanitizeText": {
+    "name": "sanitizeText",
+    "file": "functions/__tests__/cloud-functions-verification.test.js",
+    "line": 212,
+    "calls": [],
+    "called_by": []
+  },
+  "analyzeCorruption": {
+    "name": "analyzeCorruption",
+    "file": "functions/scripts/analyze-corruption.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "resetLimit": {
+    "name": "resetLimit",
+    "file": "functions/scripts/reset-transformations-limit.js",
+    "line": 38,
+    "calls": [],
+    "called_by": []
+  },
+  "createTaliaUser": {
+    "name": "createTaliaUser",
+    "file": "functions/scripts/setup-talia-assistant.js",
+    "line": 74,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "createTaliaChatsForExistingUsers": {
+    "name": "createTaliaChatsForExistingUsers",
+    "file": "functions/scripts/setup-talia-assistant.js",
+    "line": 137,
+    "calls": [],
+    "called_by": [
+      "main"
+    ]
+  },
+  "verifyMica": {
+    "name": "verifyMica",
+    "file": "functions/scripts/verify-mica.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "migrateCharacterAiModels": {
+    "name": "migrateCharacterAiModels",
+    "file": "functions/scripts/migrate-character-aimodel.js",
+    "line": 35,
+    "calls": [],
+    "called_by": []
+  },
+  "finalDiagnosis": {
+    "name": "finalDiagnosis",
+    "file": "functions/scripts/final-diagnosis.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "checkExactFields": {
+    "name": "checkExactFields",
+    "file": "functions/scripts/check-exact-fields.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "investigateWhitelist": {
+    "name": "investigateWhitelist",
+    "file": "functions/scripts/check-whitelist-source.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "cleanupParentChildContact": {
+    "name": "cleanupParentChildContact",
+    "file": "functions/scripts/cleanup-parent-child-contact.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "initAppConfig": {
+    "name": "initAppConfig",
+    "file": "functions/scripts/init-app-config.js",
+    "line": 15,
+    "calls": [],
+    "called_by": []
+  },
+  "checkParentView": {
+    "name": "checkParentView",
+    "file": "functions/scripts/check-parent-view.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "checkLinks": {
+    "name": "checkLinks",
+    "file": "functions/scripts/check-parent-view.js",
+    "line": 76,
+    "calls": [],
+    "called_by": []
+  },
+  "checkCorrectCollection": {
+    "name": "checkCorrectCollection",
+    "file": "functions/scripts/check-correct-collection.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "migrateContacts": {
+    "name": "migrateContacts",
+    "file": "functions/scripts/migrate-contacts-userdata.js",
+    "line": 18,
+    "calls": [],
+    "called_by": []
+  },
+  "diagnosePhone": {
+    "name": "diagnosePhone",
+    "file": "functions/scripts/diagnose-phone.js",
+    "line": 17,
+    "calls": [],
+    "called_by": []
+  },
+  "restoreAuthUid": {
+    "name": "restoreAuthUid",
+    "file": "functions/scripts/restore-auth-uid.js",
+    "line": 32,
+    "calls": [],
+    "called_by": []
+  },
+  "fixParentChildLink": {
+    "name": "fixParentChildLink",
+    "file": "functions/scripts/fix-parent-child-link.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "repairLinkedParentsData": {
+    "name": "repairLinkedParentsData",
+    "file": "functions/scripts/repair-linked-parents-data.js",
+    "line": 19,
+    "calls": [],
+    "called_by": []
+  },
+  "log": {
+    "name": "log",
+    "file": "functions/scripts/diagnose-contact.js",
+    "line": 33,
+    "calls": [],
+    "called_by": [
+      "logSection",
+      "diagnoseContact"
+    ]
+  },
+  "logSection": {
+    "name": "logSection",
+    "file": "functions/scripts/diagnose-contact.js",
+    "line": 37,
+    "calls": [
+      "log"
+    ],
+    "called_by": [
+      "diagnoseContact"
+    ]
+  },
+  "logField": {
+    "name": "logField",
+    "file": "functions/scripts/diagnose-contact.js",
+    "line": 43,
+    "calls": [],
+    "called_by": [
+      "diagnoseContact"
+    ]
+  },
+  "getUserInfo": {
+    "name": "getUserInfo",
+    "file": "functions/scripts/diagnose-contact.js",
+    "line": 47,
+    "calls": [],
+    "called_by": [
+      "diagnoseContact"
+    ]
+  },
+  "getContactInfo": {
+    "name": "getContactInfo",
+    "file": "functions/scripts/diagnose-contact.js",
+    "line": 69,
+    "calls": [],
+    "called_by": [
+      "diagnoseContact"
+    ]
+  },
+  "getChatInfo": {
+    "name": "getChatInfo",
+    "file": "functions/scripts/diagnose-contact.js",
+    "line": 87,
+    "calls": [],
+    "called_by": [
+      "diagnoseContact"
+    ]
+  },
+  "getParentChildLink": {
+    "name": "getParentChildLink",
+    "file": "functions/scripts/diagnose-contact.js",
+    "line": 103,
+    "calls": [],
+    "called_by": [
+      "diagnoseContact"
+    ]
+  },
+  "diagnoseContact": {
+    "name": "diagnoseContact",
+    "file": "functions/scripts/diagnose-contact.js",
+    "line": 111,
+    "calls": [
+      "log",
+      "logSection",
+      "getUserInfo",
+      "logField",
+      "getContactInfo",
+      "getChatInfo",
+      "getParentChildLink"
+    ],
+    "called_by": []
+  },
+  "checkTimestamps": {
+    "name": "checkTimestamps",
+    "file": "functions/scripts/check-link-timestamps.js",
+    "line": 11,
+    "calls": [],
+    "called_by": []
+  },
+  "trackCallMinutes": {
+    "name": "trackCallMinutes",
+    "file": "functions/calls_v2/onCallEnded.js",
+    "line": 29,
+    "calls": [],
+    "called_by": []
+  },
+  "notifyCallCancelled": {
+    "name": "notifyCallCancelled",
+    "file": "functions/calls_v2/onCallEnded.js",
+    "line": 62,
+    "calls": [
+      "sendVoIPPush"
+    ],
+    "called_by": []
+  },
+  "createCallMessageInChat": {
+    "name": "createCallMessageInChat",
+    "file": "functions/calls_v2/onCallEnded.js",
+    "line": 144,
+    "calls": [],
+    "called_by": []
+  },
+  "checkCallMinutesLimit": {
+    "name": "checkCallMinutesLimit",
+    "file": "functions/calls_v2/createAgoraCall.js",
+    "line": 33,
+    "calls": [],
+    "called_by": []
+  },
+  "hasApprovedContact": {
+    "name": "hasApprovedContact",
+    "file": "functions/calls_v2/addParticipantToCall.js",
+    "line": 34,
+    "calls": [],
+    "called_by": []
+  }
+}

@@ -1,5 +1,5 @@
-/// Watch Call Service - Single responsibility: Watch call updates in real-time
-/// Atomic service that ONLY provides a stream of call updates
+// Watch Call Service - Single responsibility: Watch call updates in real-time
+// Atomic service that ONLY provides a stream of call updates
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/call_v2.dart';

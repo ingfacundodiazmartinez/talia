@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../services/two_factor_auth_service.dart';
@@ -151,7 +152,7 @@ class _TwoFactorVerificationScreenState
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              Color(0xFF9D7FE8),
+              ThemeService.primaryColor,
               Color(0xFFB39DDB),
               Color(0xFFCE93D8)
             ],
@@ -188,7 +189,7 @@ class _TwoFactorVerificationScreenState
                       borderRadius: BorderRadius.circular(24),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
+                          color: Colors.black.withValues(alpha: 0.1),
                           blurRadius: 30,
                           offset: Offset(0, 10),
                         ),
@@ -380,7 +381,7 @@ class _TwoFactorVerificationScreenState
                   Container(
                     padding: EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
+                      color: Colors.white.withValues(alpha: 0.2),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Column(

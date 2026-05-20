@@ -1,0 +1,580 @@
+═══════════════════════════════════════════════════════════════
+CODEPREP - Registro de Query
+═══════════════════════════════════════════════════════════════
+
+Fecha: 2026-01-25 02:32:44
+Proyecto: /Users/olagg/Personal/talia
+
+─── MÉTRICAS REALES ───
+Input tokens:       5,619
+Output tokens:      2,489
+Cache creado:       0
+Cache leído:        0
+TOTAL:              8,108 tokens
+Costo:              $0.0015 USD
+Tiempo:             120.3s
+
+─── QUERY ───
+Este proyecto se genero con claude puro, sin codeprep. Necesito que identifiques donde hay queries a firestore que no sean nada performantes. Por ejemplo, loops de x usuarios donde por cada iteracion se haga una query (contexto adicional 1)
+
+─── CONTEXTO ENVIADO ───
+Aquí está el contexto adicional que pediste:
+
+## Contexto Adicional Solicitado
+*Búsqueda: "archivos de repositories como chat_repository.dart y message_repository.dart para ver los métodos existentes y no duplicar funcionalidad"*
+
+Se encontraron 12 archivos relevantes:
+
+### `/Users/olagg/Personal/talia/lib/services/chats/repositories/contact_repository.dart` (relevancia: 0.92)
+```dart
+File: /Users/olagg/Personal/talia/lib/services/chats/repositories/contact_repository.dart
+Imports: export '../../../services/contact_alias_service.dart';
+```
+
+### `/Users/olagg/Personal/talia/lib/services/chats/repositories/message_repository.dart` (relevancia: 0.90)
+```dart
+  final FirebaseFirestore _firestore;
+  final FirebaseAuth _auth;
+
+  MessageRepository({
+    required FirebaseFirestore firestore,
+    required FirebaseAuth auth,
+  }) : _firestore = firestore,
+       _auth = auth;
+
+  String? get currentUserId => _auth.currentUser?.uid;
+
+  /// Stream de mensajes de un chat
+  ///
+  /// ✅ FIX: Filtrar mensajes anteriores a clearedAt si está configurado
+  Stream<QuerySnapshot> watchMessages({
+    required String chatId,
+    bool isGroup = false,
+    int limit = 50,
+    Timestamp? clearedAt, // ✅ NEW: Timestamp desde cuando el usuario limpió el chat
+  }) {
+    // ✅ FIX: Usar groups_v2 para grupos (no 'groups' legacy)
+    final collection = isGroup ? 'groups_v2' : 'chats';
+
+    var query = _firestore
+        .collection(collection)
+        .doc(chatId)
+// ... código omitido ...
+    try {
+      final collection = isGroup ? 'groups_v2' : 'chats';
+
+      // ✅ FIX: Verificar si el chat document existe antes de intentar actualizarlo
+      // Solo Cloud Functions pueden crear chats, así que si no existe, solo creamos el mensaje
+      final chatRef = _firestore.collection(collection).doc(chatId);
+      final chatDoc = await chatRef.get();
+      final chatExists = chatDoc.exists;
+
+      // ✅ Usar batch write para operación atómica
+      final batch = _firestore.batch();
+
+      // 1. Crear mensaje en subcollection
+      final messageRef = _firestore
+          .collection(collection)
+          .doc(chatId)
+          .collection('messages')
+          .doc(); // Genera ID automáticamente
+
+      final messageId = messageRef.id;
+
+      // ✅ FIX: Usar serverTimestamp para ordenamiento correcto
+      // El timestamp local se ignora y el servidor genera el timestamp real
+      final messageData = message.toMap();
+      messageData['timestamp'] = FieldValue.serverTimestamp();
+
+      batch.set(messageRef, messageData);
+
+      // 2. Actualizar chat document con metadata del mensaje
+      // ✅ FIX: Solo actualizar si el documento existe (para evitar permission-denied en create)
+      if (chatExists) {
+        // Extraer texto preview (máximo 100 caracteres)
+        // ✅ FIX: Usar type como criterio principal para media, URL como fallback
+        String messagePreview = '';
+        final messageType = message.type ?? 'text';
+
+        if (message.text != null && message.text!.isNotEmpty) {
+          messagePreview = message.text!.length > 100
+              ? '${message.text!.substring(0, 97)}...'
+              : message.text!;
+        } else if (messageType == 'image' || message.imageUrl != null) {
+          messagePreview = '📷 Imagen';
+        } else if (messageType == 'video' || message.videoUrl != null) {
+          messagePreview = '🎥 Video';
+        } else if (messageType == 'audio' || message.audioUrl != null) {
+          messagePreview = '🎤 Audio';
+        } else if (messageType == 'missed_call') {
+          // ✅ FIX: Manejar llamadas perdidas
+          final isVideo = message.callType == 'video';
+          messagePreview = isVideo ? '📹 Videollamada perdida' : '📞 Llamada perdida';
+        } else if (messageType == 'answered_call') {
+          // ✅ FIX: Manejar llamadas contestadas
+          final isVideo = message.callType == 'video';
+          messagePreview = isVideo ? '📹 Videollamada' : '📞 Llamada';
+        }
+
+        final chatUpdateData = {
+          'lastMessage': messagePreview,
+          'lastMessageType': messageType, // ✅ NEW: Guardar tipo para notificaciones
+          'lastMessageAt': FieldValue.serverTimestamp(), // ✅ FIX: Usar serverTimestamp
+          'lastMessageTime': FieldValue.serverTimestamp(), // ✅ FIX: Usar serverTimestamp
+          'lastMessageSender': currentUserId,
+          'lastMessageId': messageId, // ✅ CRÍTICO: Para anti-duplicados Stream Detector vs FCM
+          'updatedAt': FieldValue.serverTimestamp(), // ✅ FIX: Usar serverTimestamp
+        };
+
+        batch.update(chatRef, chatUpdateData);
+      }
+
+      // 3. Commit batch (atómico)
+      await batch.commit();
+
+      if (!chatExists) {
+        ReleaseLogger.warning('Chat document no existía - mensaje creado sin actualizar metadata', tag: 'MessageRepository');
+      }
+
+      ReleaseLogger.log('✅ Mensaje creado${chatExists ? " Y chat actualizado" : ""} con ID: $messageId', tag: 'MessageRepository');
+
+      return messageId;
+    } catch (e) {
+      ReleaseLogger.error('Error creando mensaje optimista: $e', tag: 'MessageRepository');
+      throw Exception('Error creando mensaje optimista: $e');
+    }
+  }
+
+  /// Crear mensaje con ID específico
+  ///
+  /// Usado para crear mensajes aprobados después de moderación
+  Future<void> createMessageWithId({
+    required String chatId,
+    required String messageId,
+    required Map<String, dynamic> data,
+    bool isGroup = false,
+  }) async {
+    try {
+      final collection = isGroup ? 'groups_v2' : 'chats';
+
+      await _firestore
+          .collection(collection)
+          .doc(chatId)
+          .collection('messages')
+          .doc(messageId)
+          .set(data);
+    } catch (e) {
+      throw Exception('Error creando mensaje con ID: $e');
+    }
+  }
+
+  /// Actualizar mensaje (ej: URL de media después de upload)
+  Future<void> updateMessage({
+    required String chatId,
+    required String messageId,
+    required Map<String, dynamic> updates,
+    bool isGroup = false,
+  }) async {
+    try {
+      final collection = isGroup ? 'groups_v2' : 'chats';
+
+      await _firestore
+          .collection(collection)
+          .doc(chatId)
+          .collection('messages')
+          .doc(messageId)
+          .update(updates);
+    } catch (e) {
+      throw Exception('Error actualizando mensaje: $e');
+    }
+  }
+
+  /// Eliminar mensaje
+  Future<void> deleteMessage({
+    required String chatId,
+    required String messageId,
+    bool isGroup = false,
+  }) async {
+    try {
+      final collection = isGroup ? 'groups_v2' : 'chats';
+
+      await _firestore
+          .collection(collection)
+          .doc(chatId)
+```
+
+### `/Users/olagg/Personal/talia/lib/utils/release_logger.dart` (relevancia: 0.90)
+```dart
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+class ReleaseLogger {
+  static ReleaseLogger? _instance;
+  static ReleaseLogger get instance {
+    _instance ??= ReleaseLogger._();
+    return _instance!;
+  }
+
+  File? _logFile;
+
+  ReleaseLogger._() {
+    _initializeLogger();
+  }
+
+  Future<void> _initializeLogger() async {
+    try {
+      debugPrint('📝 [ReleaseLogger] Logs escribiendo a: ${_logFile!.path}');
+    } catch (e) {
+      debugPrint('❌ [ReleaseLogger] Error inicializando logger: $e');
+    }
+  }
+
+  static void log(String message, {String? tag}) {
+    var fullMessage = tag != null ? '[$tag] $message' : message;
+    final time = DateTime.now().toIso8601String();
+
+    final consoleMessage = '$time = $fullMessage';
+
+    // ✅ MÉTODO 2: stdout directo - más confiable en release
+    stdout.writeln('🔷 $consoleMessage');
+    debugPrint('🔷 $consoleMessage');
+  }
+
+  static void error(
+    String message, {
+    dynamic error,
+    StackTrace? stackTrace,
+    String? tag,
+  }) {
+    final fullMessage = tag != null ? '[$tag] $message' : message;
+    final time = DateTime.now().toIso8601String();
+
+    final consoleMessage = '❌ $fullMessage';
+    final consoleWithTime = '$time = $consoleMessage';
+
+    // ✅ MÉTODO 2: stderr directo - más confiable en releas...
+
+─── RESPUESTA DE CLAUDE ───
+Basándome en el contexto adicional proporcionado, puedo ver que ya existe un `MessageRepository` bien estructurado con funcionalidades completas para manejar mensajes. Ahora puedo continuar con el análisis y diseño del `ChatRepository` sin duplicar funcionalidades.
+
+## Análisis del MessageRepository Existente
+
+El `MessageRepository` actual tiene:
+
+1. **Métodos principales**:
+   - `watchMessages()` - Stream de mensajes con filtros
+   - `createMessage()` - Creación optimista con batch writes
+   - `createMessageWithId()` - Para mensajes aprobados
+   - `updateMessage()` - Actualización de mensajes
+   - `deleteMessage()` - Eliminación de mensajes
+
+2. **Características implementadas**:
+   - ✅ Manejo de grupos vs chats individuales
+   - ✅ Timestamps del servidor para ordenamiento
+   - ✅ Batch writes atómicos
+   - ✅ Preview de mensajes para metadata del chat
+   - ✅ Logging con ReleaseLogger
+
+## Diseño del ChatRepository
+
+Dado que el `MessageRepository` ya maneja operaciones de mensajes, el `ChatRepository` debería enfocarse en:
+
+### 1. **Operaciones de Chat (no duplicar con MessageRepository)**
+```dart
+class ChatRepository {
+  final FirebaseFirestore _firestore;
+  final FirebaseAuth _auth;
+
+  ChatRepository({
+    required FirebaseFirestore firestore,
+    required FirebaseAuth auth,
+  }) : _firestore = firestore,
+       _auth = auth;
+
+  String? get currentUserId => _auth.currentUser?.uid;
+
+  /// Obtener lista de chats del usuario
+  Stream<QuerySnapshot> watchUserChats({
+    int limit = 50,
+    bool includeGroups = true,
+  }) {
+    final userId = currentUserId;
+    if (userId == null) {
+      return const Stream.empty();
+    }
+
+    return _firestore
+        .collection('users')
+        .doc(userId)
+        .collection('chats')
+        .orderBy('lastMessageAt', descending: true)
+        .limit(limit)
+        .snapshots();
+  }
+
+  /// Crear chat 1:1 (solo Cloud Functions debería hacer esto)
+  Future<String> createDirectChat({
+    required String otherUserId,
+    Map<String, dynamic>? initialMetadata,
+  }) async {
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) throw Exception('Usuario no autenticado');
+
+      // Solo Cloud Functions puede crear chats
+      // Este método sería para casos especiales o testing
+      final chatData = {
+        'participants': [currentUser.uid, otherUserId],
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'type': 'direct',
+        'lastMessage': '',
+        'lastMessageAt': FieldValue.serverTimestamp(),
+        'createdBy': currentUser.uid,
+      };
+
+      if (initialMetadata != null) {
+        chatData.addAll(initialMetadata);
+      }
+
+      final chatRef = await _firestore.collection('chats').add(chatData);
+      
+      // Agregar referencia a ambos usuarios
+      final batch = _firestore.batch();
+      
+      batch.set(
+        _firestore.collection('users').doc(currentUser.uid).collection('chats').doc(chatRef.id),
+        {'chatId': chatRef.id, 'updatedAt': FieldValue.serverTimestamp()}
+      );
+      
+      batch.set(
+        _firestore.collection('users').doc(otherUserId).collection('chats').doc(chatRef.id),
+        {'chatId': chatRef.id, 'updatedAt': FieldValue.serverTimestamp()}
+      );
+      
+      await batch.commit();
+      
+      return chatRef.id;
+    } catch (e) {
+      ReleaseLogger.error('Error creando chat directo: $e', tag: 'ChatRepository');
+      throw Exception('Error creando chat: $e');
+    }
+  }
+
+  /// Obtener metadata específica de un chat
+  Future<DocumentSnapshot> getChatMetadata({
+    required String chatId,
+    bool isGroup = false,
+  }) async {
+    final collection = isGroup ? 'groups_v2' : 'chats';
+    return await _firestore.collection(collection).doc(chatId).get();
+  }
+
+  /// Actualizar preferencias del chat (mute, pin, etc.)
+  Future<void> updateChatPreferences({
+    required String chatId,
+    required Map<String, dynamic> preferences,
+    bool isGroup = false,
+  }) async {
+    try {
+      final userId = currentUserId;
+      if (userId == null) throw Exception('Usuario no autenticado');
+
+      final collection = isGroup ? 'groups_v2' : 'chats';
+      
+      await _firestore
+          .collection(collection)
+          .doc(chatId)
+          .update({
+            'preferences.$userId': preferences,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+    } catch (e) {
+      ReleaseLogger.error('Error actualizando preferencias: $e', tag: 'ChatRepository');
+      throw Exception('Error actualizando preferencias: $e');
+    }
+  }
+
+  /// Marcar chat como leído
+  Future<void> markChatAsRead({
+    required String chatId,
+    bool isGroup = false,
+  }) async {
+    try {
+      final userId = currentUserId;
+      if (userId == null) return;
+
+      final collection = isGroup ? 'groups_v2' : 'chats';
+      
+      await _firestore
+          .collection(collection)
+          .doc(chatId)
+          .update({
+            'readBy.$userId': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+    } catch (e) {
+      ReleaseLogger.error('Error marcando chat como leído: $e', tag: 'ChatRepository');
+      // No lanzar excepción, es una operación no crítica
+    }
+  }
+
+  /// Limpiar historial del chat (soft delete)
+  Future<void> clearChatHistory({
+    required String chatId,
+    bool isGroup = false,
+  }) async {
+    try {
+      final userId = currentUserId;
+      if (userId == null) throw Exception('Usuario no autenticado');
+
+      final collection = isGroup ? 'groups_v2' : 'chats';
+      
+      await _firestore
+          .collection(collection)
+          .doc(chatId)
+          .update({
+            'clearedAt.$userId': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+      
+      ReleaseLogger.log('✅ Historial limpiado para chat: $chatId', tag: 'ChatRepository');
+    } catch (e) {
+      ReleaseLogger.error('Error limpiando historial: $e', tag: 'ChatRepository');
+      throw Exception('Error limpiando historial: $e');
+    }
+  }
+
+  /// Verificar si existe un chat entre dos usuarios
+  Future<String?> findExistingChat(String otherUserId) async {
+    try {
+      final currentUser = _auth.currentUser;
+      if (currentUser == null) return null;
+
+      // Buscar en chats donde ambos sean participantes
+      final query = await _firestore
+          .collection('chats')
+          .where('participants', arrayContains: currentUser.uid)
+          .where('type', isEqualTo: 'direct')
+          .get();
+
+      for (final doc in query.docs) {
+        final participants = List<String>.from(doc.data()['participants'] ?? []);
+        if (participants.contains(otherUserId)) {
+          return doc.id;
+        }
+      }
+      
+      return null;
+    } catch (e) {
+      ReleaseLogger.error('Error buscando chat existente: $e', tag: 'ChatRepository');
+      return null;
+    }
+  }
+
+  /// Obtener participantes de un chat
+  Future<List<String>> getChatParticipants({
+    required String chatId,
+    bool isGroup = false,
+  }) async {
+    try {
+      final collection = isGroup ? 'groups_v2' : 'chats';
+      final doc = await _firestore.collection(collection).doc(chatId).get();
+      
+      if (!doc.exists) return [];
+      
+      final data = doc.data();
+      if (data == null) return [];
+      
+      return List<String>.from(data['participants'] ?? []);
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo participantes: $e', tag: 'ChatRepository');
+      return [];
+    }
+  }
+
+  /// Actualizar metadata del chat (sin tocar mensajes)
+  Future<void> updateChatMetadata({
+    required String chatId,
+    required Map<String, dynamic> metadata,
+    bool isGroup = false,
+  }) async {
+    try {
+      final collection = isGroup ? 'groups_v2' : 'chats';
+      
+      await _firestore
+          .collection(collection)
+          .doc(chatId)
+          .update({
+            ...metadata,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+    } catch (e) {
+      ReleaseLogger.error('Error actualizando metadata: $e', tag: 'ChatRepository');
+      throw Exception('Error actualizando metadata: $e');
+    }
+  }
+}
+```
+
+### 2. **Integración con Servicios Existentes**
+
+Basado en los archivos encontrados, el `ChatRepository` debería integrarse con:
+
+```dart
+// En el main.dart o donde se configuren las dependencias
+final chatRepository = ChatRepository(
+  firestore: FirebaseFirestore.instance,
+  auth: FirebaseAuth.instance,
+);
+
+final messageRepository = MessageRepository(
+  firestore: FirebaseFirestore.instance,
+  auth: FirebaseAuth.instance,
+);
+
+// Servicios que usan ambos repositorios
+final chatMessagingService = ChatMessagingService(
+  messageRepository: messageRepository,
+  uploadManager: MessageUploadManager(),
+  cacheManager: ChatCacheManager(),
+);
+
+final chatStreamManager = ChatStreamManager(
+  chatRepository: chatRepository,
+  messageRepository: messageRepository,
+  cacheManager: ChatCacheManager(),
+  unreadService: UnreadMessagesService(),
+);
+```
+
+### 3. **Consideraciones de Arquitectura**
+
+1. **Separación de responsabilidades**:
+   - `ChatRepository`: Operaciones de chat (metadata, participantes, preferencias)
+   - `MessageRepository`: Operaciones de mensajes (CRUD de mensajes)
+   - `ChatMessagingService`: Lógica de negocio para enviar mensajes
+
+2. **Evitar duplicación**:
+   - No recrear métodos de mensajes que ya existen
+   - Usar `MessageRepository` para todo lo relacionado con mensajes
+   - `ChatRepository` solo para metadata del chat
+
+3. **Consistencia con patrones existentes**:
+   - Usar `ReleaseLogger` para logging
+   - Implementar `FieldValue.serverTimestamp()` para timestamps
+   - Manejar errores de forma consistente
+
+### 4. **Próximos pasos recomendados**
+
+1. **Implementar `ChatRepository`** con los métodos definidos arriba
+2. **Actualizar `ChatStreamManager`** para usar el nuevo repositorio
+3. **Refactorizar servicios** que actualmente acceden directamente a Firestore
+4. **Agregar tests** para el nuevo repositorio
+5. **Documentar** la separación de responsabilidades para el equipo
+
+¿Te gustaría que profundice en algún aspecto específico del diseño o que comience con la implementación completa de alguno de estos componentes?
+
+═══════════════════════════════════════════════════════════════

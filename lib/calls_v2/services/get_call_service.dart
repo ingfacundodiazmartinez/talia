@@ -1,5 +1,5 @@
-/// Get Call Service - Single responsibility: Fetch a call from Firestore
-/// Atomic service that ONLY retrieves call data
+// Get Call Service - Single responsibility: Fetch a call from Firestore
+// Atomic service that ONLY retrieves call data
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/call_v2.dart';

@@ -339,13 +339,14 @@ class DataExportService {
     try {
       final file = File(filePath);
       if (await file.exists()) {
-        await Share.shareXFiles(
-          [XFile(filePath)],
-          subject: 'Talia Backup',
-          text: 'Backup encriptado de Talia - Guarda este archivo de forma segura',
-        );
+        await SharePlus.instance.share(ShareParams(
+          files: [XFile(filePath)],
+          subject: 'Tália Backup',
+          text: 'Backup encriptado de Tália - Guarda este archivo de forma segura',
+        ));
       }
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - sharing errors should not crash the app
     }
   }
 

@@ -1,8 +1,6 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../repositories/chat_repository.dart';
 import '../repositories/message_repository.dart';
@@ -82,14 +80,13 @@ class ChatStreamManager {
   int _activeStreamCount = 0;
   DateTime? _lastRefresh;
 
-  // Performance optimization: rate limiting
-  final Map<String, DateTime> _lastUpdateTimes = {};
-  static const Duration _rateLimitDuration = Duration(milliseconds: 500);
-
   // ✅ REMOVED: _previousReadByState - V2 usa lastOpenedAt del chat doc en lugar de readBy[]
 
   // ✅ FIX DUPLICATES: Track last emitted message IDs to prevent duplicate emissions
   final Map<String, Set<String>> _lastEmittedMessageIds = {};
+
+  // ✅ Track last update times for cache management
+  final Map<String, DateTime> _lastUpdateTimes = {};
 
   // ✅ FIX: Cache para clearedAt timestamps (evita queries redundantes)
   final Map<String, Timestamp?> _clearedAtCache = {};
@@ -235,15 +232,20 @@ class ChatStreamManager {
           final currentUserId = FirebaseAuth.instance.currentUser?.uid;
 
           // Convertir QuerySnapshot a List<ChatMessage>
-          // ✅ FIX: Filtrar mensajes pendientes de contactos - NO deben llegar al cache
+          // ✅ Filtro unificado por visibleTo:
+          // - Mensajes propios: siempre se ven (sender ve su mensaje aunque visibleTo
+          //   esté restringido a [senderId]).
+          // - Mensajes ajenos: solo si visibleTo es null (backwards compat) o me incluye.
+          // Esto reemplaza el filtro de moderationStatus pending: ahora el sender que
+          // tiene moderación marca visibleTo=[senderId] al escribir y la CF expande
+          // a ambos al aprobar. El destinatario simplemente filtra por presencia
+          // de su uid en visibleTo.
           var messages = snapshot.docs
               .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
               .where((msg) {
-                // Mensajes propios: siempre incluir
+                if (currentUserId == null) return true;
                 if (msg.senderId == currentUserId) return true;
-                // Mensajes de contactos: solo si están aprobados o bloqueados (no pending/null)
-                return msg.moderationStatus == ModerationStatus.approved ||
-                       msg.moderationStatus == ModerationStatus.blocked;
+                return msg.isVisibleTo(currentUserId);
               })
               .toList();
 
@@ -291,6 +293,12 @@ class ChatStreamManager {
 
           // ✅ V2 ARCHITECTURE: Confirmar recepción de mensajes para eliminación por CF
           // Solo para chats 1-1 (grupos usan TTL de 7 días)
+          //
+          // NOTA: `messages` ya está filtrada por visibleTo arriba. Mensajes que el
+          // usuario actual no debería ver (ej. enviados por un contacto al que él
+          // mismo bloqueó) están excluidos, por lo que `latestTimestamp` no avanza
+          // por culpa de esos mensajes → el sender se queda en 1 tilde porque
+          // `lastReceivedAt_{me}` nunca alcanza el timestamp de su mensaje.
           if (!isGroup && messages.isNotEmpty) {
             // Obtener el timestamp más reciente de los mensajes recibidos
             final latestTimestamp = messages
@@ -574,15 +582,6 @@ class ChatStreamManager {
     );
   }
 
-  /// Verificar si debemos aplicar rate limiting
-  bool _shouldRateLimit(String chatId) {
-    final lastUpdate = _lastUpdateTimes[chatId];
-    if (lastUpdate == null) return false;
-
-    final timeSinceLastUpdate = DateTime.now().difference(lastUpdate);
-    return timeSinceLastUpdate < _rateLimitDuration;
-  }
-
   // ✅ REMOVED: _hasReadByChanges - V2 usa listener del chat doc para detectar cambios en lastOpenedAt
 
   // ═══════════════════════════════════════════════════════════════
@@ -836,6 +835,33 @@ class ChatStreamManager {
 
         // Actualizar timestamp visto
         _lastSeenMessageTimestamps[chatId] = lastMessageTime;
+
+        // ✅ DELIVERY RECEIPT: si el último mensaje no es mío, marcar como
+        // recibido en el chat doc (lastReceivedAt_{me}). Esto permite que el
+        // sender vea ✓✓ gris (delivered) ANTES de que yo abra el chat. Sin
+        // esto, el sender pasaba directo de ✓ a ✓✓ azul porque
+        // lastReceivedAt solo se actualizaba al abrir el chat (mismo momento
+        // que lastOpenedAt).
+        //
+        // Solo aplica a chats 1-1 (grupos usan TTL, no read receipts globales).
+        if (!isGroup) {
+          final lastMessageSender = chatData['lastMessageSender'] as String?;
+          if (lastMessageSender != null && lastMessageSender != userId) {
+            // ✅ FIX: fire-and-forget para no bloquear el listener.
+            // Si falla (permisos, red), reintentará la próxima vez que llegue
+            // un mensaje nuevo o cuando se abra el chat.
+            ReadReceiptsService().confirmMessagesReceived(
+              chatId: chatId,
+              latestMessageTimestamp: lastMessageTime.toDate(),
+              isGroupChat: false,
+            ).catchError((e) {
+              ReleaseLogger.log(
+                '⚠️ [ChatDocsListener] Error marcando recibido en background: $e',
+                tag: 'ReadReceipts',
+              );
+            });
+          }
+        }
 
         // ✅ FILTRO DE EDAD ELIMINADO: Causaba falsos negativos por desfase de relojes (clock skew)
         // El FILTRO 1 (timestamp cambió) ya garantiza que solo procesamos mensajes nuevos
@@ -1580,6 +1606,12 @@ class ChatStreamManager {
       var messages = snapshot.docs
           .map((doc) => ChatMessage.fromFirestore(doc, currentUserId: currentUserId))
           .toList();
+
+      // ✅ Filtro por visibleTo (mismo criterio que el stream listener)
+      if (currentUserId != null) {
+        messages = messages.where((m) =>
+            m.senderId == currentUserId || m.isVisibleTo(currentUserId)).toList();
+      }
 
       // ✅ FIX: Doble filtrado de seguridad (por si Firestore no aplicó bien el filtro)
       if (clearedAt != null) {

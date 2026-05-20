@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../services/group_invitation_service.dart';
+import '../../services/user_cache_service.dart';
 
 /// Pantalla para que padres gestionen invitaciones a grupos
 ///
@@ -16,8 +17,9 @@ class GroupInvitationsScreen extends StatefulWidget {
 }
 
 class _GroupInvitationsScreenState extends State<GroupInvitationsScreen> {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final UserCacheService _userCacheService = UserCacheService();
   final GroupInvitationService _invitationService = GroupInvitationService();
 
   final Set<String> _processingInvitations = {};
@@ -602,8 +604,8 @@ class _GroupInvitationsScreenState extends State<GroupInvitationsScreen> {
 
     for (final userId in allIds) {
       try {
-        final doc = await _firestore.collection('users').doc(userId).get();
-        names[userId] = doc.data()?['name'] ?? 'Usuario';
+        final userData = await _userCacheService.getUserData(userId);
+        names[userId] = userData?['name'] ?? 'Usuario';
       } catch (e) {
         names[userId] = 'Usuario';
       }

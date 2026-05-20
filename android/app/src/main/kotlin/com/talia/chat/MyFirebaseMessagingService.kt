@@ -7,6 +7,9 @@ import android.content.Context
 import android.content.Intent
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -561,6 +564,31 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         Log.e(TAG, "   Es grupo: $isGroup")
         Log.e(TAG, "   ChatId: $chatId")
         Log.e(TAG, "   Type: $type")
+
+        // ✅ DELIVERY RECEIPT (server-confirmed): cuando llega un mensaje de chat
+        // 1-1 vía FCM al device, marcar `lastReceivedAt_{me}` en el chat doc.
+        // Esto le da el ✓✓ gris al sender. Se hace acá (nativo) porque cuando
+        // la app está totalmente cerrada, el handler de Dart no siempre corre
+        // pero este servicio nativo sí. Para grupos no aplica.
+        if (type == "chat_message" && !chatId.isNullOrEmpty() && !isGroup) {
+            try {
+                val uid = FirebaseAuth.getInstance().currentUser?.uid
+                if (uid != null) {
+                    FirebaseFirestore.getInstance()
+                        .collection("chats")
+                        .document(chatId)
+                        .update("lastReceivedAt_$uid", FieldValue.serverTimestamp())
+                        .addOnSuccessListener {
+                            Log.e(TAG, "📬 [DeliveryReceipt] lastReceivedAt_$uid actualizado para $chatId")
+                        }
+                        .addOnFailureListener { e ->
+                            Log.e(TAG, "⚠️ [DeliveryReceipt] Error (no crítico): ${e.message}")
+                        }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "⚠️ [DeliveryReceipt] Exception (no crítico): ${e.message}")
+            }
+        }
 
         // ✅ FILTRAR LLAMADAS: No mostrar notificación para llamadas
         // Las llamadas son manejadas por el background handler de Flutter que muestra CallKit

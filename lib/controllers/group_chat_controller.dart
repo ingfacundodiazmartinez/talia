@@ -10,7 +10,6 @@ import '../services/typing_indicator_service.dart';
 import '../services/media_service.dart';
 import '../services/media_compression_service.dart';
 import '../services/chats/repositories/message_repository.dart';
-import '../services/chats/managers/chat_cache_manager.dart';
 import '../services/user_settings_service.dart';
 import '../services/message_cache_service.dart';
 import '../services/favorite_service.dart';
@@ -44,9 +43,6 @@ class GroupChatController extends ChangeNotifier {
 
   // ✅ Repository para acceso a mensajes
   final MessageRepository _messageRepository;
-
-  // ✅ Cache manager para mensajes optimistas
-  final ChatCacheManager _cacheManager;
 
   // UUID generator para localIds
   static const _uuid = Uuid();
@@ -84,7 +80,6 @@ class GroupChatController extends ChangeNotifier {
     TypingIndicatorService? typingService,
     MediaService? mediaService,
     MessageRepository? messageRepository,
-    ChatCacheManager? cacheManager,
   })  : _firestore = firestore ?? FirebaseFirestore.instance,
         _auth = auth ?? FirebaseAuth.instance,
         _functions = functions ?? FirebaseFunctions.instanceFor(region: 'us-central1'),
@@ -93,8 +88,7 @@ class GroupChatController extends ChangeNotifier {
         _messageRepository = messageRepository ?? MessageRepository(
           firestore: firestore ?? FirebaseFirestore.instance,
           auth: auth ?? FirebaseAuth.instance,
-        ),
-        _cacheManager = cacheManager ?? ChatCacheManager();
+        );
 
   // Getters
   String get currentUserId => _auth.currentUser?.uid ?? '';

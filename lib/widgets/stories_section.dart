@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -10,7 +11,6 @@ import '../screens/story_camera_screen.dart';
 import '../screens/story_viewer_screen.dart';
 import '../models/trivia.dart';
 import '../models/trivia_response.dart';
-import '../theme_service.dart';
 import '../widgets/permission_dialog.dart';
 import '../widgets/synced_user_widgets.dart';
 
@@ -430,7 +430,7 @@ class _StoriesSectionState extends State<StoriesSection> {
           ? LinearGradient(
               begin: Alignment.topRight,
               end: Alignment.bottomLeft,
-              colors: [Color(0xFF9D7FE8), Color(0xFFFF6B9D), Color(0xFFFFA726)],
+              colors: [ThemeService.primaryColor, Color(0xFFFF6B9D), Color(0xFFFFA726)],
             )
           : null;
       borderColor = userStories.hasUnviewed ? null : Colors.grey[300];
@@ -493,7 +493,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                     child: Container(
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.black.withOpacity(0.6),
+                        color: Colors.black.withValues(alpha: 0.6),
                       ),
                       child: Center(
                         child: Column(
@@ -505,7 +505,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                               child: CircularProgressIndicator(
                                 value: progress,
                                 strokeWidth: 2.5,
-                                backgroundColor: Colors.white.withOpacity(0.3),
+                                backgroundColor: Colors.white.withValues(alpha: 0.3),
                                 valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                               ),
                             ),
@@ -530,7 +530,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                     child: Container(
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: Colors.black.withOpacity(0.6),
+                        color: Colors.black.withValues(alpha: 0.6),
                       ),
                       child: Center(
                         child: Icon(
@@ -586,7 +586,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                         width: 14,
                         height: 14,
                         decoration: BoxDecoration(
-                          color: Color(0xFF9D7FE8),
+                          color: ThemeService.primaryColor,
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white, width: 2),
                         ),
@@ -630,7 +630,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                       // ✅ Color adaptable a modo oscuro/claro
                       color: userStories.hasUnviewed
                           ? Theme.of(context).textTheme.bodyMedium?.color
-                          : Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.7),
+                          : Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.7),
                     ),
                     textAlign: TextAlign.center,
                     maxLines: 1,
@@ -648,7 +648,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                       // ✅ Color adaptable a modo oscuro/claro
                       color: userStories.hasUnviewed
                           ? Theme.of(context).textTheme.bodyMedium?.color
-                          : Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.7),
+                          : Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.7),
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -684,9 +684,7 @@ class _StoriesSectionState extends State<StoriesSection> {
                       latestStory.statusText,
                       style: TextStyle(
                         fontSize: 9,
-                        color: latestStory.status == StoryStatus.pending
-                            ? Colors.orange[700]
-                            : Colors.red[700],
+                        color: _statusTextColor(latestStory.status, context),
                         fontWeight: FontWeight.w500,
                       ),
                       textAlign: TextAlign.center,
@@ -700,6 +698,25 @@ class _StoriesSectionState extends State<StoriesSection> {
         ),
       ),
     );
+  }
+
+  /// Color del texto de estado en la lista de stories.
+  /// Reservamos rojo solo para estados de error (rejected). Uploading va en
+  /// azul (progreso, no error), pending en naranja (acción requerida), expired
+  /// en gris (info neutral).
+  Color? _statusTextColor(StoryStatus status, BuildContext context) {
+    switch (status) {
+      case StoryStatus.uploading:
+        return Colors.blue[700];
+      case StoryStatus.pending:
+        return Colors.orange[700];
+      case StoryStatus.rejected:
+        return Colors.red[700];
+      case StoryStatus.expired:
+        return Colors.grey[600];
+      case StoryStatus.approved:
+        return Theme.of(context).textTheme.bodySmall?.color;
+    }
   }
 }
 

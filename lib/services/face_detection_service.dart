@@ -77,14 +77,6 @@ class FaceDetectionService {
       // Re-codificar como JPEG para tener una imagen con la orientación correcta
       final correctedBytes = img.encodeJpg(decodedImage, quality: 90);
 
-      // Crear InputImage desde bytes con metadata correcta
-      final inputImageData = InputImageMetadata(
-        size: Size(decodedImage.width.toDouble(), decodedImage.height.toDouble()),
-        rotation: InputImageRotation.rotation0deg, // Ya está rotada correctamente
-        format: InputImageFormat.nv21, // Formato común
-        bytesPerRow: decodedImage.width,
-      );
-
       ReleaseLogger.log(
         'FaceDetection: Imagen procesada ${decodedImage.width}x${decodedImage.height}',
         tag: 'FaceDetectionService',
@@ -102,7 +94,7 @@ class FaceDetectionService {
 
         // Programar eliminación del archivo temporal
         Future.delayed(Duration(seconds: 5), () {
-          tempFile.delete().catchError((_) {});
+          tempFile.delete().then((_) {}).catchError((_) {});
         });
 
         return inputImage;

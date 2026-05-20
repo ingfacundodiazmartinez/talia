@@ -51,7 +51,7 @@ class _Enable2FADialogState extends State<Enable2FADialog> {
       final userIdentifier = _auth.currentUser?.email ??
                             _auth.currentUser?.phoneNumber ??
                             _auth.currentUser?.uid ??
-                            'Usuario Talia';
+                            'Usuario Tália';
 
       _qrCodeUri = _twoFactorService.generateQRCodeUri(
         secret: _secret!,

@@ -1,73 +1,85 @@
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 
-/// Widget que muestra el estado de un mensaje con un icono
+/// Widget que muestra el estado de un mensaje con íconos estilo WhatsApp.
 ///
 /// Estados de mensaje:
 /// - sending: Spinner animado
-/// - sent: Sobre cerrado (enviado al servidor)
-/// - delivered: Sobre con marca (recibido en dispositivo)
-/// - seen: Sobre abierto (visto/leído)
-/// - error: Icono de error
+/// - sent: 1 tilde (enviado al servidor)
+/// - delivered: 2 tildes (entregado al dispositivo del receptor)
+/// - seen: 2 tildes en azul WhatsApp (leído)
+/// - error: Icono de error en rojo
 ///
 /// Colores por moderación:
-/// - approved: Verde
-/// - blocked: Rojo
-/// - pending: Amarillo
-/// - null: Color por defecto (gris)
+/// - approved: NO se sobrescribe el color del estado (es el caso normal y
+///   queremos preservar el lenguaje WhatsApp: azul = leído, blanco/gris =
+///   enviado/entregado). El verde anterior chocaba con el bubble violeta y
+///   se perdía la información de "leído".
+/// - blocked: Rojo (problema real, requiere atención)
+/// - pending: Amarillo (problema temporal, requiere atención)
+/// - null: gris por defecto (sent/delivered) | azul WhatsApp (seen)
 class MessageStatusIndicator extends StatelessWidget {
+  /// Azul "leído" estilo WhatsApp. Se usa cuando el mensaje fue visto.
+  static const Color readBlue = Color(0xFF53BDEB);
+
   final MessageStatus status;
   final ModerationStatus? moderationStatus;
   final double size;
+  /// Color base para sent/delivered. Si null, usa el del tema.
+  /// Útil cuando el widget se renderiza sobre el bubble del propio mensaje
+  /// (fondo violeta) y queremos blanco con opacidad.
+  final Color? baseColor;
 
   const MessageStatusIndicator({
     super.key,
     required this.status,
     this.moderationStatus,
     this.size = 14,
+    this.baseColor,
   });
 
   @override
   Widget build(BuildContext context) {
-    // Determinar color basado en moderación
-    final color = _getColorByModeration(context);
-
-    // Determinar icono basado en estado
-    return _getIconByStatus(color);
+    final color = _resolveColor(context);
+    return _buildIcon(color);
   }
 
-  /// Obtiene el color basado en el estado de moderación
-  Color _getColorByModeration(BuildContext context) {
+  /// Resuelve el color del ícono. Prioridad:
+  ///   1. Moderación `blocked` → rojo (gana sobre todo, problema real)
+  ///   2. Moderación `pending` → amarillo (problema temporal)
+  ///   3. Estado `seen` → azul WhatsApp
+  ///   4. `baseColor` si fue provisto
+  ///   5. Color por defecto del tema
+  ///
+  /// Notar que `approved` NO se considera: es el estado normal y queremos
+  /// preservar las tildes blancas/azules de WhatsApp.
+  Color _resolveColor(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-    // Si hay moderación, usar colores específicos según el tema
-    if (moderationStatus != null) {
-      switch (moderationStatus!) {
-        case ModerationStatus.approved:
-          // Verde más oscuro en modo claro, verde normal en modo oscuro
-          return isDarkMode ? Colors.green : Colors.green.shade700;
-        case ModerationStatus.blocked:
-          // Rojo más oscuro en modo claro, rojo normal en modo oscuro
-          return isDarkMode ? Colors.red : Colors.red.shade700;
-        case ModerationStatus.pending:
-          // Amarillo más oscuro en modo claro, amarillo normal en modo oscuro
-          return isDarkMode ? Colors.amber : Colors.amber.shade800;
-      }
+    // Moderación: solo problemas reales sobreescriben el color.
+    if (moderationStatus == ModerationStatus.blocked) {
+      return isDarkMode ? Colors.red : Colors.red.shade700;
+    }
+    if (moderationStatus == ModerationStatus.pending) {
+      return isDarkMode ? Colors.amber : Colors.amber.shade800;
     }
 
-    // Color por defecto (sin moderación)
-    // Más oscuro en modo claro, más claro en modo oscuro
+    // "Leído" siempre azul WhatsApp (incluso si moderation == approved).
+    if (status == MessageStatus.seen) {
+      return readBlue;
+    }
+
+    if (baseColor != null) return baseColor!;
+
     return isDarkMode
         ? colorScheme.onSurfaceVariant.withValues(alpha: 0.6)
         : colorScheme.onSurfaceVariant.withValues(alpha: 0.8);
   }
 
-  /// Obtiene el icono basado en el estado del mensaje
-  Widget _getIconByStatus(Color color) {
+  Widget _buildIcon(Color color) {
     switch (status) {
       case MessageStatus.sending:
-        // Spinner animado
         return SizedBox(
           width: size,
           height: size,
@@ -78,36 +90,14 @@ class MessageStatusIndicator extends StatelessWidget {
         );
 
       case MessageStatus.sent:
-        // Sobre cerrado
-        return Icon(
-          Icons.mail_outline,
-          size: size,
-          color: color,
-        );
+        return Icon(Icons.check, size: size, color: color);
 
       case MessageStatus.delivered:
-        // Sobre con marca (recibido)
-        return Icon(
-          Icons.markunread,
-          size: size,
-          color: color,
-        );
-
       case MessageStatus.seen:
-        // Sobre abierto
-        return Icon(
-          Icons.drafts_outlined,
-          size: size,
-          color: color,
-        );
+        return Icon(Icons.done_all, size: size, color: color);
 
       case MessageStatus.error:
-        // Icono de error
-        return Icon(
-          Icons.error_outline,
-          size: size,
-          color: Colors.red,
-        );
+        return Icon(Icons.error_outline, size: size, color: Colors.red);
     }
   }
 }

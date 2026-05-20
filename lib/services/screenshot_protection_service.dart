@@ -36,6 +36,7 @@ class ScreenshotProtectionService {
       }
 
     } catch (e) {
+      // Silently ignore - screenshot protection is optional security feature
     }
   }
 
@@ -52,6 +53,7 @@ class ScreenshotProtectionService {
         _isProtectionEnabled = true;
       }
     } catch (e) {
+      // Silently ignore - screenshot protection is optional security feature
     }
   }
 
@@ -66,6 +68,7 @@ class ScreenshotProtectionService {
         _isProtectionEnabled = false;
       }
     } catch (e) {
+      // Silently ignore - screenshot protection is optional security feature
     }
   }
 

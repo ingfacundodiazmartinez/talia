@@ -212,7 +212,10 @@ class Child extends User {
 
       final childData = childDoc.data()!;
       final parentIds = List<String>.from(childData['linkedParentIds'] ?? []);
-      final linkedParentsData = childData['linkedParentsData'] as Map<String, dynamic>? ?? {};
+      // ✅ Defensive: handle corrupted data where field might be List instead of Map
+      final linkedParentsData = childData['linkedParentsData'] is Map
+          ? childData['linkedParentsData'] as Map<String, dynamic>
+          : <String, dynamic>{};
 
       ReleaseLogger.log('👨‍👩‍👧 [getParents] linkedParentIds: $parentIds', tag: 'Child');
       ReleaseLogger.log('👨‍👩‍👧 [getParents] linkedParentsData keys: ${linkedParentsData.keys.toList()}', tag: 'Child');

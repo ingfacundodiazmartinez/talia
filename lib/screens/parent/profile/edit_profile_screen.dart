@@ -105,6 +105,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
       ReleaseLogger.log('Iniciando selección y subida de imagen desde ${source == ImageSource.camera ? 'cámara' : 'galería'}...', tag: 'EditProfile');
 
+      if (!mounted) return;
       // Seleccionar imagen (pickAndUploadProfileImage maneja el loading dialog internamente)
       final String? imageUrl = await _imageService.pickAndUploadProfileImage(
         source: source,

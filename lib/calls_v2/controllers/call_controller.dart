@@ -1,5 +1,5 @@
-/// Call Controller - Public interface for UI to interact with call services
-/// RULE: UI components ONLY call methods from this controller, never services directly
+// Call Controller - Public interface for UI to interact with call services
+// RULE: UI components ONLY call methods from this controller, never services directly
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -8,7 +8,6 @@ import '../models/call_v2.dart';
 import '../models/service_response.dart';
 import '../orchestrators/call_orchestrator.dart';
 import '../services/get_call_service.dart';
-import '../services/call_status_service.dart';
 import '../services/watch_call_service.dart';
 import '../services/agora_engine_service.dart';
 import '../../utils/release_logger.dart';
@@ -19,7 +18,6 @@ class CallController extends ChangeNotifier {
   // Dependencies
   final CallOrchestrator _orchestrator = CallOrchestrator();
   final GetCallService _getCallService = GetCallService();
-  final CallStatusService _callStatusService = CallStatusService();
   final WatchCallService _watchCallService = WatchCallService();
   final AgoraEngineService _agoraEngineService = AgoraEngineService();
 

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../controllers/child_contacts_controller.dart';
 import '../../../models/contact.dart' as contact_model;
 import '../../../screens/add_contact_screen.dart';
@@ -731,6 +732,28 @@ class _ChildContactsScreenState extends State<ChildContactsScreen>
 
   void _showPendingOtherInfo(contact_model.Contact contact, String displayName) {
     final dateText = DateFormat('dd/MM/yyyy HH:mm').format(contact.createdAt);
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+    // Construir mensaje según quién está esperando aprobación
+    String pendingMsg;
+    final myApproval = currentUserId != null ? contact.approvals[currentUserId] : null;
+    final otherUserId = contact.users.firstWhere(
+      (u) => u != currentUserId,
+      orElse: () => '',
+    );
+    final otherApproval = otherUserId.isNotEmpty ? contact.approvals[otherUserId] : null;
+    final myDone = myApproval == null || myApproval.isApproved;
+    final otherPending = otherApproval != null && otherApproval.isPending;
+
+    if (myDone && otherPending) {
+      pendingMsg = 'Estamos esperando que el padre de $displayName apruebe la solicitud.';
+    } else if (!myDone && otherApproval == null) {
+      pendingMsg = 'Tu padre aún no aprobó la solicitud.';
+    } else if (!myDone && otherPending) {
+      pendingMsg = 'Tu padre y el padre de $displayName aún no aprobaron la solicitud.';
+    } else {
+      pendingMsg = 'Esperando aprobación de los padres involucrados.';
+    }
 
     showDialog(
       context: context,
@@ -751,12 +774,12 @@ class _ChildContactsScreenState extends State<ChildContactsScreen>
             Text('Solicitado: $dateText', style: TextStyle(color: Colors.grey)),
             SizedBox(height: 12),
             Text(
-              'Tu padre ya aprobó esta solicitud, pero el padre de $displayName aún no la ha aprobado.',
+              pendingMsg,
               style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
             ),
             SizedBox(height: 8),
             Text(
-              'Podrán chatear cuando ambos padres aprueben el contacto.',
+              'Podrán chatear cuando todos los padres requeridos aprueben el contacto.',
               style: TextStyle(fontSize: 14, color: Colors.blue.shade700, fontWeight: FontWeight.w500),
             ),
           ],

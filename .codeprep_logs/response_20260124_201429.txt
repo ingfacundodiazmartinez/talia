@@ -1,0 +1,659 @@
+═══════════════════════════════════════════════════════════════
+CODEPREP - Registro de Query
+═══════════════════════════════════════════════════════════════
+
+Fecha: 2026-01-24 20:14:29
+Proyecto: /Users/olagg/Personal/talia
+
+─── MÉTRICAS REALES ───
+Input tokens:       3,125
+Output tokens:      2,976
+Cache creado:       0
+Cache leído:        0
+TOTAL:              6,101 tokens
+Costo:              $0.0000 USD
+Tiempo:             0.0s
+
+─── QUERY ───
+Analiza el código del proyecto buscando violaciones de los principios DRY (Don't Repeat Yourself) y SST (Single Source of Truth). Identifica código duplicado, lógica repetida, y lugares donde la misma información se define en múltiples lugares. Prioriza los casos más críticos.
+
+─── CONTEXTO ENVIADO ───
+# Contexto Pre-procesado por Cliente Local
+
+*Este contexto fue compilado por un modelo local (7B) para optimizar tu razonamiento.*
+
+## 📋 Reglas del Proyecto (CLAUDE.md)
+*Estas reglas son OBLIGATORIAS. Violaciones = código rechazado.*
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Reglas por Capa:**
+- **Screen** - PROHIBIDO: `FirebaseFirestore.instance.collection(...)`, `FirebaseFunctions.instance.httpsCallable(...)`, Direct calls to Services
+
+**Prohibiciones Globales:**
+- ❌ print() - usar ReleaseLogger
+- ❌ debugPrint() - usar ReleaseLogger
+- ❌ Firestore directo en Screen - usar Controller
+- ❌ Functions directo en Screen - usar Controller
+- ❌ Llamadas directas a Services desde Screen
+
+**Servicios Documentados:**
+- `notificationService`: NotificationService(),
+- `videoCallService`: VideoCallService(),
+- `autoApprovalService`: AutoApprovalService(),
+
+## Proyecto
+Proyecto Flutter/Dart en /Users/olagg/Personal/talia
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Convenciones:**
+- Controllers usan ChangeNotifier
+- Modelos en lib/models/
+
+## Análisis Previo (modelo local)
+*Confianza del análisis: 70%*
+
+### Pensamiento inicial
+El usuario pide un análisis del código para identificar violaciones de los principios DRY (Don't Repeat Yourself) y SST (Single Source of Truth). El objetivo es encontrar casos donde se repite lógica o información en múltiples lugares, lo que puede hacer que el código sea menos mantenible y susceptible a errores. La implicación es mejorar la calidad del código al eliminar duplicidad y centralizar la definición de datos.
+
+### Módulos relevantes
+- `lib/utils/release_logger.dart`
+- `lib/screens/common/privacy_security_screen.dart`
+- `lib/services/two_factor_auth_service.dart`
+
+### Patrones observados en el proyecto
+- Uso de `stdout` y `stderr` para logs en diferentes métodos.
+- Definición de variables y estados repetidas en múltiples lugares.
+- Lógica de carga y actualización de configuraciones dispersa entre componentes.
+
+### Borrador de approach
+1. Identificar las áreas donde se repite lógica o información.                       2. Centralizar la definición de logs en un solo lugar.                       3. Crear un servicio central para gestionar la carga y actualización de configuraciones.
+
+### Puntos que requieren tu análisis
+- ¿Es preferible usar una clase singleton para el logger?
+- ¿Deberíamos crear un servicio centralizado para manejar todas las configuraciones del usuario?
+- ¿Qué patrón de diseño podría ayudar a evitar la duplicidad en la carga y actualización de configuraciones?
+
+## ⚠️ Anti-Frankenstein: NO DUPLIQUES
+*El modelo local analizó TODO el proyecto y encontró código reutilizable.*
+
+### Código que DEBES reutilizar (no crear de nuevo)
+- **`shouldBlockByModerationLevel`** en `/Users/olagg/Personal/talia/functions/moderation-utils.js`
+  - Propósito: util en moderation-utils.js
+  - Firma: `function shouldBlockByModerationLevel(analysis, moderationLevel)`
+  - Relevancia: 64%
+- **`calculateDeleteAt`** en `/Users/olagg/Personal/talia/functions/chats.js`
+  - Propósito: function en chats.js
+  - Firma: `function calculateDeleteAt(isSupervised, hasModerationActive = false)`
+  - Relevancia: 64%
+- **`downloadFromOpenmoji`** en `/Users/olagg/Personal/talia/scripts/upload_openmoji_stickers.js`
+  - Propósito: function en upload_openmoji_stickers.js
+  - Firma: `function downloadFromOpenmoji(unicodeCode)`
+  - Relevancia: 64%
+- **`initAppConfig`** en `/Users/olagg/Personal/talia/functions/scripts/init-app-config.js`
+  - Propósito: function en init-app-config.js
+  - Firma: `async function initAppConfig()`
+  - Relevancia: 63%
+- **`createNotification`** en `/Users/olagg/Personal/talia/functions/story-approval.js`
+  - Propósito: function en story-approval.js
+  - Firma: `function createNotification({ userId, type, title, message, data })`
+  - Relevancia: 63%
+
+### Patrones del Proyecto (DEBES seguir)
+- **Singletons:** Mixto o no detectado
+- **Clases base:** CustomPainter
+- **State management:** No detectado
+- **Naming:** Sufijos comunes: {'Widget': 3, 'Service': 2}
+
+### ⚠️ Advertencias
+- Ya existen helpers que podrían ser útiles: shouldBlockByModerationLevel
+- Clases base comunes: CustomPainter
+- State management: No detectado
+
+### 🧟 Código Duplicado EXISTENTE (Frankenstein actual)
+*El proyecto YA tiene este código duplicado. NO agregues otra copia.*
+
+**Manejo de errores de Firebase** (10 copias)
+  - `test/test_helpers.dart:41`
+  - `lib/main.dart:142`
+  - `lib/notification_service.dart:79`
+  - 💡 **Refactor sugerido:** Crear FirebaseErrorHandler centralizado
+
+**Validación de null con early return/throw** (386 copias)
+  - `lib/link_parent_child.dart:88`
+  - `lib/link_parent_child.dart:116`
+  - `lib/link_parent_child.dart:158`
+  - 💡 **Refactor sugerido:** Usar extensión o helper de validación
+
+**Validación de strings vacíos/null** (52 copias)
+  - `lib/link_parent_child.dart:73`
+  - `lib/gemini_ai_service.dart:57`
+  - `lib/models/child.dart:17`
+  - 💡 **Refactor sugerido:** Crear StringUtils.isNullOrEmpty()
+
+**Formateo de tiempo relativo (hace X minutos/horas/días)** (33 copias)
+  - `lib/reports_screen.dart:503`
+  - `lib/reports_screen.dart:505`
+  - `lib/reports_screen.dart:507`
+  - 💡 **Refactor sugerido:** Crear DateTimeUtils.formatRelative(DateTime) -> String
+
+**Formateo de fechas con DateFormat** (8 copias)
+  - `lib/screens/reported_messages_screen.dart:173`
+  - `lib/screens/message_info_screen.dart:315`
+  - `lib/screens/message_info_screen.dart:318`
+  - 💡 **Refactor sugerido:** Crear DateTimeUtils con formatos constantes
+
+**Manejo de estado de loading** (47 copias)
+  - `lib/screens/add_contact_screen.dart:284`
+  - `lib/screens/add_contact_screen.dart:343`
+  - `lib/screens/splash_wrapper.dart:40`
+  - 💡 **Refactor sugerido:** Usar mixin o helper de loading state
+
+## Código Relevante
+*5 archivos por relevancia semántica + 2 por grafo de dependencias*
+
+### `/Users/olagg/Personal/talia/lib/utils/release_logger.dart` 🔗 (relevancia: 0.90)
+```dart
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+class ReleaseLogger {
+  static ReleaseLogger? _instance;
+  static ReleaseLogger get instance {
+    _instance ??= ReleaseLogger._();
+    return _instance!;
+  }
+
+  File? _logFile;
+
+  ReleaseLogger._() {
+    _initializeLogger();
+  }
+
+  Future<void> _initializeLogger() async {
+    try {
+      debugPrint('📝 [ReleaseLogger] Logs escribiendo a: ${_logFile!.path}');
+    } catch (e) {
+      debugPrint('❌ [ReleaseLogger] Error inicializando logger: $e');
+    }
+  }
+
+  static void log(String message, {String? tag}) {
+    var fullMessage = tag != null ? '[$tag] $message' : message;
+    final time = DateTime.now().toIso8601String();
+
+    final consoleMessage = '$time = $fullMessage';
+
+    // ✅ MÉTODO 2: stdout directo - más confiable en release
+    stdout.writeln('🔷 $consoleMessage');
+    debugPrint('🔷 $consoleMessage');
+  }
+
+  static void error(
+    String message, {
+    dynamic error,
+    StackTrace? stackTrace,
+    String? tag,
+  }) {
+    final fullMessage = tag != null ? '[$tag] $message' : message;
+    final time = DateTime.now().toIso8601String();
+
+    final consoleMessage = '❌ $fullMessage';
+    final consoleWithTime = '$time = $consoleMessage';
+
+    // ✅ MÉTODO 2: stderr directo - más confiable en release para errores
+    stderr.writeln('🔴 $consoleWithTime');
+    if (error != null) {
+      stderr.writeln('🔴    Error: $error');
+    }
+  }
+
+  static void info(String message, {String? tag}) {
+    log('ℹ️ $message', tag: tag);
+  }
+
+  static void success(String message, {String? tag}) {
+    log('✅ $message', tag: tag);
+  }
+
+  static void warning(String message, {String? tag}) {
+    log('⚠️ $message', tag: tag);
+  }
+}
+```
+
+### `/Users/olagg/Personal/talia/lib/screens/common/privacy_security_screen.dart` 🔗 (relevancia: 0.90)
+```dart
+// 10 imports omitidos para brevedad
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+// ... y 7 más
+
+class PrivacySecurityS...
+
+─── RESPUESTA DE CLAUDE ───
+Ahora tengo información completa para el análisis. Permíteme compilar el reporte detallado de violaciones DRY/SST.
+
+---
+
+# 📊 Análisis de Violaciones DRY y SST - Proyecto Talia
+
+## Resumen Ejecutivo
+
+| Severidad | Violaciones | Archivos Afectados | Impacto |
+|-----------|-------------|-------------------|---------|
+| 🔴 CRÍTICA | 3 | 50+ | Alto riesgo de bugs |
+| 🟠 ALTA | 4 | 160+ | Mantenibilidad comprometida |
+| 🟡 MEDIA | 4 | 80+ | Deuda técnica |
+| 🟢 BAJA | 3 | 127+ | Inconsistencia menor |
+
+---
+
+## 🔴 VIOLACIONES CRÍTICAS (P0)
+
+### 1. DateTime Parsing Duplicado vs `TimestampUtils` Existente
+
+**Problema:** El archivo `lib/utils/timestamp_utils.dart` YA existe con `TimestampUtils.toDateTime()`, pero los modelos ignoran esta utilidad y re-implementan `_parseDateTime()` localmente.
+
+**Ubicaciones del código duplicado:**
+- `lib/models/chat.dart:111-117` - implementación local de `_parseDateTime()`
+
+```dart
+// ❌ DUPLICADO en chat.dart:111-117
+static DateTime? _parseDateTime(dynamic value) {
+  if (value == null) return null;
+  if (value is Timestamp) return value.toDate();
+  if (value is DateTime) return value;
+  if (value is String) return DateTime.tryParse(value);
+  return null;
+}
+```
+
+```dart
+// ✅ YA EXISTE en utils/timestamp_utils.dart:19-37
+static DateTime? toDateTime(dynamic value) {
+  if (value == null) return null;
+  if (value is DateTime) return value;
+  if (value is Timestamp) return value.toDate();
+  if (value is String) { ... }
+  if (value is int) { ... }
+  return null;
+}
+```
+
+**Diferencia:** `TimestampUtils.toDateTime()` también soporta `int` (milliseconds), es más completo.
+
+**Impacto:** ~50+ archivos de modelos potencialmente afectados.
+
+**Fix recomendado:**
+```dart
+// En todos los modelos, cambiar:
+createdAt: _parseDateTime(data['createdAt']) ?? DateTime.now(),
+
+// A:
+createdAt: TimestampUtils.toDateTime(data['createdAt']) ?? DateTime.now(),
+```
+
+---
+
+### 2. Dos Sanitizadores de Texto Casi Idénticos
+
+**Archivos duplicados:**
+- `lib/services/chats/utils/content_sanitizer.dart` (259 líneas)
+- `lib/services/stories/utils/text_sanitizer.dart` (182 líneas)
+
+**Comparación lado a lado:**
+
+| Aspecto | ContentSanitizer | TextSanitizer |
+|---------|------------------|---------------|
+| Métodos principales | `sanitizeMessage()`, `sanitizeGroupName()` | `sanitizeCaption()`, `sanitizeReply()` |
+| Método interno | `_sanitizeGeneral()` | `_sanitizeGeneral()` (idéntico) |
+| Escape HTML | Manual con `.replaceAll()` | Usa `HtmlEscape()` de dart:convert |
+| Patrones regex | 2 patrones de control chars | 2 patrones (muy similares) |
+| Validación sospechosa | `filterSuspiciousUrls()` | `_validateSuspiciousContent()` |
+
+**Lógica duplicada:**
+```dart
+// ContentSanitizer:70-77 - Remover caracteres de control
+static String _removeControlCharacters(String input) {
+  String result = input.replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'), '');
+  result = result.replaceAll(RegExp(r'[\x80-\x9F]'), '');
+  return result;
+}
+
+// TextSanitizer:42 - MISMO patrón
+var clean = input.replaceAll(RegExp(r'[\x00-\x08\x0B-\x1F\x7F]'), '');
+```
+
+**Fix recomendado:** Unificar en `lib/utils/string_sanitizer.dart`:
+```dart
+class StringSanitizer {
+  static String sanitize(String input, {required SanitizeType type}) { ... }
+  static String escapeHtml(String input) { ... }  // Usar HtmlEscape
+  static String removeControlChars(String input) { ... }  // Una sola vez
+}
+
+enum SanitizeType { message, groupName, caption, reply, reason }
+```
+
+---
+
+### 3. Excepciones Genéricas vs Excepciones Estructuradas
+
+**SST Violation:** Ya existe `lib/services/chats/utils/chat_exceptions.dart` con 15 clases de excepción bien estructuradas, pero otros servicios usan `throw Exception('...')`.
+
+**Excepciones estructuradas existentes (líneas 10-225):**
+- `UserBlockedException`
+- `UserNotFoundException`
+- `ContactNotApprovedException`
+- `ContentModerationException`
+- `RateLimitException`
+- + 10 más
+
+**Servicios que usan excepciones genéricas:**
+
+| Archivo | Línea | Excepción Genérica |
+|---------|-------|-------------------|
+| `data_management_service.dart` | 336 | `throw Exception('User not authenticated')` |
+| `image_service.dart` | 631 | `throw Exception('Usuario no autenticado')` |
+| `friend_service.dart` | 38 | `throw Exception('Usuario no autenticado')` |
+| `friend_service.dart` | 48 | `throw Exception('No existe el contacto')` |
+| `friend_service.dart` | 60 | `throw Exception('Ya son amigos')` |
+| `two_factor_auth_service.dart` | 165 | `throw Exception('Error al habilitar 2FA: $e')` |
+| `offline_queue_service.dart` | 59 | `throw Exception('OfflineQueueService no inicializado')` |
+
+**Total:** 50+ excepciones genéricas en servicios (ver grep completo arriba).
+
+**Fix recomendado:** Reutilizar excepciones existentes:
+```dart
+// ❌ ANTES
+throw Exception('Usuario no autenticado');
+
+// ✅ DESPUÉS
+throw UserNotFoundException(userId: userId);
+// O crear nuevas en chat_exceptions.dart si no existe
+```
+
+---
+
+## 🟠 VIOLACIONES DE ALTA SEVERIDAD (P1)
+
+### 4. Patrón `currentUserId` Repetido 140+ Veces
+
+**El getter `currentUserId` está implementado de forma casi idéntica en 140+ archivos:**
+
+```dart
+// Variante 1: Getter
+String? get currentUserId => _auth.currentUser?.uid;
+
+// Variante 2: Variable local
+final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+
+// Variante 3: Con validación
+if (currentUserId == null) throw Exception('Usuario no autenticado');
+```
+
+**Ubicaciones parciales (de 140+):**
+- `lib/controllers/group_profile_controller.dart:89`
+- `lib/controllers/contact_profile_controller.dart:100`
+- `lib/controllers/forward_messages_controller.dart:222`
+- `lib/services/whitelist/revoke_whitelist_contact_service.dart:28`
+- `lib/services/message_report_service.dart:20`
+- `lib/widgets/stories_section.dart:46`
+
+**Fix recomendado:** Crear `BaseAuthenticatedService`:
+```dart
+abstract class BaseAuthenticatedService {
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  
+  String? get currentUserId => _auth.currentUser?.uid;
+  
+  String get currentUserIdOrThrow {
+    final uid = currentUserId;
+    if (uid == null) throw UserNotFoundException();
+    return uid;
+  }
+}
+```
+
+---
+
+### 5. Formateo de Tiempo Duplicado
+
+**Existen MÚLTIPLES implementaciones de formateo de tiempo:**
+
+| Archivo | Método | Propósito |
+|---------|--------|-----------|
+| `lib/utils/chat_utils.dart:11` | `formatChatTime()` | Chat timestamps |
+| `lib/screens/story_viewer_screen.dart:1861` | `_formatStoryTime()` | Story timestamps |
+| `lib/controllers/child_notifications_controller.dart:597` | `_formatTime()` | Notifications |
+| `lib/controllers/base_chats_controller.dart:254` | `formatTime()` | Base chat |
+| `lib/screens/message_info_screen.dart:305` | `_formatTimestamp()` | Message info |
+| `lib/groups/screens/group_message_info_screen.dart:312` | `_formatTimestamp()` | Group message info |
+
+**Todos hacen variantes de:**
+```dart
+if (difference.inDays > 0) return '${difference.inDays}d';
+if (difference.inHours > 0) return '${difference.inHours}h';
+// etc.
+```
+
+**Fix recomendado:** Centralizar en `TimestampUtils`:
+```dart
+extension TimestampFormatting on DateTime {
+  String formatRelative() { ... }  // "Hace 5m", "Ayer", etc.
+  String formatChatTime() { ... }  // Para listas de chat
+  String formatStoryTime() { ... } // Para stories
+}
+```
+
+---
+
+### 6. Queries Firestore Duplicados
+
+**El patrón de query para participantes se repite 20+ veces:**
+
+```dart
+// Repetido en múltiples archivos:
+.collection('chats')
+.where('participants', arrayContains: userId)
+.orderBy('lastActivity', descending: true)
+```
+
+**Ubicaciones:**
+- `lib/models/chat.dart:287-290`
+- `lib/models/chat.dart:307-310`
+- `lib/services/chats/list_chats_service.dart`
+- `lib/controllers/base_chats_controller.dart`
+- + 16 más
+
+**Fix recomendado:** Query builder:
+```dart
+class FirestoreQueries {
+  static Query<Map<String, dynamic>> chatsByParticipant(String userId, {int limit = 50}) =>
+    FirebaseFirestore.instance
+      .collection('chats')
+      .where('participants', arrayContains: userId)
+      .orderBy('lastActivity', descending: true)
+      .limit(limit);
+}
+```
+
+---
+
+### 7. Validación de String Vacío Duplicada
+
+**52+ instancias de:**
+```dart
+if (input == null || input.trim().isEmpty) {
+  return '';
+}
+```
+
+**En ambos sanitizadores y múltiples servicios.**
+
+**Fix recomendado:** 
+```dart
+// En utils/validation_utils.dart
+class ValidationUtils {
+  static bool isEmpty(String? value) => value?.trim().isEmpty ?? true;
+  static String emptyIfNull(String? value) => value?.trim() ?? '';
+}
+```
+
+---
+
+## 🟡 VIOLACIONES DE SEVERIDAD MEDIA (P2)
+
+### 8. Conversión Enum ↔ String Boilerplate
+
+**Cada enum implementa manualmente `value` y `fromString()`:**
+
+```dart
+// lib/models/chat.dart:9-26
+enum ChatType {
+  individual, group;
+  
+  String get value {
+    switch (this) {
+      case ChatType.individual: return 'individual';
+      case ChatType.group: return 'group';
+    }
+  }
+  
+  static ChatType fromString(String? value) {
+    switch (value) {
+      case 'group': return ChatType.group;
+      default: return ChatType.individual;
+    }
+  }
+}
+```
+
+**Repetido en:** `ChatType`, `StoryType`, `TriviaResponseType`, y 22+ enums más.
+
+**Fix recomendado:** Extensión genérica:
+```dart
+extension EnumSerialization<T extends Enum> on T {
+  String get value => name;
+}
+
+T? enumFromString<T extends Enum>(List<T> values, String? value) =>
+  values.cast<T?>().firstWhere((e) => e?.name == value, orElse: () => null);
+```
+
+---
+
+### 9. Error Handling Pattern Repetido
+
+**113+ archivos con el mismo patrón try-catch:**
+```dart
+try {
+  // operation
+} catch (e) {
+  ReleaseLogger.error('❌ [Tag] Error: $e', tag: 'Tag');
+  // handle...
+}
+```
+
+**No hay wrapping consistente de errores.**
+
+---
+
+### 10. Server vs Client Timestamp Inconsistente
+
+**Algunos usan server timestamp:**
+```dart
+'createdAt': FieldValue.serverTimestamp()
+```
+
+**Otros usan client time:**
+```dart
+'createdAt': Timestamp.fromDate(DateTime.now())
+```
+
+**162+ ocurrencias mezcladas.**
+
+---
+
+### 11. Repository Boilerplate
+
+**Todos los repositories implementan el mismo patrón null-check:**
+```dart
+Future<T?> getById(String id) async {
+  final doc = await _firestore.collection(X).doc(id).get();
+  if (!doc.exists) return null;
+  return T.fromFirestore(doc);
+}
+```
+
+**Repetido en 4+ repositories.**
+
+---
+
+## 🟢 VIOLACIONES DE BAJA SEVERIDAD (P3)
+
+### 12. Magic Numbers para Spacing (458 ocurrencias)
+
+```dart
+SizedBox(height: 16)   // 127 archivos
+SizedBox(height: 8)    // 95 archivos
+SizedBox(width: 16)    // 87 archivos
+```
+
+**Fix:** `AppSpacing.md`, `AppSpacing.sm`, etc.
+
+---
+
+### 13. BorderRadius Magic Numbers (450 ocurrencias)
+
+```dart
+BorderRadius.circular(8)   // 213 archivos
+BorderRadius.circular(16)  // 87 archivos
+BorderRadius.circular(12)  // 150 archivos
+```
+
+**Fix:** `AppRadius.sm`, `AppRadius.md`, etc.
+
+---
+
+### 14. Loading State Pattern Repetido
+
+**40+ screens implementan:**
+```dart
+if (snapshot.hasError) return Center(child: Text('Error'));
+if (!snapshot.hasData) return CircularProgressIndicator();
+```
+
+**Fix:** `DataStreamBuilder<T>` widget genérico.
+
+---
+
+## 📋 Plan de Refactorización Recomendado
+
+| Semana | Tarea | Impacto | Archivos |
+|--------|-------|---------|----------|
+| 1 | Unificar ContentSanitizer + TextSanitizer | CRÍTICO | 2 → 1 |
+| 1 | Usar `TimestampUtils.toDateTime()` en modelos | CRÍTICO | 50+ |
+| 2 | Crear `BaseAuthenticatedService` | ALTO | 140+ |
+| 2 | Unificar excepciones en `chat_exceptions.dart` | CRÍTICO | 50+ |
+| 3 | Centralizar formateo de tiempo | ALTO | 20+ |
+| 3 | Crear `FirestoreQueries` builder | ALTO | 20+ |
+| 4 | Extraer constantes de spacing/radius | BAJO | 127+ |
+| 4 | Crear `DataStreamBuilder` widget | BAJO | 40+ |
+
+---
+
+## Métricas Estimadas
+
+- **Líneas de código reducidas:** ~2,000-3,000
+- **Archivos simplificados:** 200+
+- **Bugs potenciales evitados:** Inconsistencias de timestamp, sanitización incompleta
+- **Tiempo de mantenimiento reducido:** ~20-30%
+
+
+═══════════════════════════════════════════════════════════════

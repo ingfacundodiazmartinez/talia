@@ -141,7 +141,7 @@ class NotificationCacheService {
     }
   }
 
-  /// Convertir Map de Hive (_Map<dynamic, dynamic>) a Map<String, dynamic> recursivamente
+  /// Convertir Map de Hive (`_Map<dynamic, dynamic>`) a `Map<String, dynamic>` recursivamente
   Map<String, dynamic> _convertToStringDynamicMap(Map data) {
     final result = <String, dynamic>{};
     for (final entry in data.entries) {

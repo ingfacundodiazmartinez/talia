@@ -7,6 +7,7 @@ import 'package:gal/gal.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../services/video_cache_service.dart';
+import '../../../services/bottom_nav_visibility.dart';
 
 /// Pantalla para visualizar imágenes y videos en pantalla completa
 /// con navegación entre múltiples medios mediante swipe
@@ -45,6 +46,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
   @override
   void initState() {
     super.initState();
+    BottomNavVisibility.instance.registerFullScreen();
     _currentIndex = widget.initialIndex;
     _pageController = PageController(initialPage: widget.initialIndex);
 
@@ -54,6 +56,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
 
   @override
   void dispose() {
+    BottomNavVisibility.instance.unregisterFullScreen();
     _pageController.dispose();
     // Liberar todos los controladores de video
     for (var controller in _videoControllers.values) {
@@ -274,9 +277,9 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
 
       // Save to gallery using Gal
       if (item.type == 'video') {
-        await Gal.putVideo(filePath, album: 'Talia');
+        await Gal.putVideo(filePath, album: 'Tália');
       } else {
-        await Gal.putImage(filePath, album: 'Talia');
+        await Gal.putImage(filePath, album: 'Tália');
       }
 
       // Clean up temp file

@@ -1,0 +1,233 @@
+═══════════════════════════════════════════════════════════════
+CODEPREP - Registro de Query
+═══════════════════════════════════════════════════════════════
+
+Fecha: 2026-01-25 10:29:49
+Proyecto: /Users/olagg/Personal/talia
+
+─── MÉTRICAS REALES ───
+Input tokens:       3,341
+Output tokens:      109
+Cache creado:       0
+Cache leído:        0
+TOTAL:              3,450 tokens
+Costo:              $0.0000 USD
+Tiempo:             0.0s
+
+─── QUERY ───
+como te llamas?
+
+─── CONTEXTO ENVIADO ───
+# Contexto Pre-procesado por Cliente Local
+
+*Este contexto fue compilado por un modelo local (7B) para optimizar tu razonamiento.*
+
+## 📋 Reglas del Proyecto (CLAUDE.md)
+*Estas reglas son OBLIGATORIAS. Violaciones = código rechazado.*
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Reglas por Capa:**
+- **Screen** - PROHIBIDO: `FirebaseFirestore.instance.collection(...)`, `FirebaseFunctions.instance.httpsCallable(...)`, Direct calls to Services
+
+**Prohibiciones Globales:**
+- ❌ print() - usar ReleaseLogger
+- ❌ debugPrint() - usar ReleaseLogger
+- ❌ Firestore directo en Screen - usar Controller
+- ❌ Functions directo en Screen - usar Controller
+- ❌ Llamadas directas a Services desde Screen
+
+**Servicios Documentados:**
+- `notificationService`: NotificationService(),
+- `videoCallService`: VideoCallService(),
+- `autoApprovalService`: AutoApprovalService(),
+
+## 📊 Inventario del Proyecto
+
+**Archivos:** 596 | **Líneas:** 205,966
+**Lenguajes:** .dart: 504, .js: 84, .py: 7, .rb: 1
+
+### Services (203)
+- `GeminiAIService` → lib/gemini_ai_service.dart
+- `NotificationService` → lib/notification_service.dart
+- `ThemeService` → lib/theme_service.dart
+- `MessageReportService` → lib/services/message_report_service.dart
+- `GroupService` → lib/services/group_service.dart
+- `BlockService` → lib/services/block_service.dart
+- `DeepARService` → lib/services/deepar_service.dart
+- `CallKitService` → lib/services/callkit_service.dart
+- `StoryService` → lib/services/story_service_refactored.dart
+- `PermissionService` → lib/services/permission_service.dart
+- ... y 193 más
+
+### Controllers (44)
+- `GroupChatController` → lib/controllers/group_chat_controller.dart
+- `ChatsController` → lib/controllers/chats_controller.dart
+- `ChildContactsController` → lib/controllers/child_contacts_controller.dart
+- `ChildMainShellController` → lib/controllers/child_main_shell_controller.dart
+- `BaseChatsController` → lib/controllers/base_chats_controller.dart
+- `MessageInfoController` → lib/controllers/message_info_controller.dart
+- `ShareTargetController` → lib/controllers/share_target_controller.dart
+- `ChatAppBarController` → lib/controllers/chat_app_bar_controller.dart
+- `ChildHomeController` → lib/controllers/child_home_controller.dart
+- `StoryCameraController` → lib/controllers/story_camera_controller.dart
+- ... y 34 más
+
+### 🔄 Clases con Nombres Similares
+- ***CacheService** (13): UICacheService, UserCacheService, UserProfileCacheService, ShareExtensionCacheService, WaveformCacheService
+- ***ChatService** (9): GroupChatService, CreateChatService, ClearChatService, UnmuteChatService, ArchiveChatService
+- ***ContactService** (7): ContactService, RejectWhitelistContactService, ApproveWhitelistContactService, ReapproveWhitelistContactService, RevokeWhitelistContactService
+- ***GroupService** (6): GroupService, DeleteGroupService, LeaveGroupService, CreateGroupService, UpdateGroupService
+- ***ChatsController** (6): ChatsController, BaseChatsController, ParentChatsController, ParentArchivedChatsController, ChildChatsController
+
+## Proyecto
+Proyecto Flutter/Dart en /Users/olagg/Personal/talia
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Convenciones:**
+- Controllers usan ChangeNotifier
+- Modelos en lib/models/
+
+## Análisis Previo (modelo local)
+*Confianza del análisis: 50%*
+
+### Pensamiento inicial
+Tarea de modificación: como te llamas?
+
+### Módulos relevantes
+- `/Users/olagg/Personal/talia/functions/index.js`
+- `/Users/olagg/Personal/talia/functions/helpers.js`
+- `/Users/olagg/Personal/talia/functions/scripts/diagnose-contact.js`
+
+### Patrones observados en el proyecto
+- Screen → Controller → Service → Model
+
+### Borrador de approach
+Implementar modificación siguiendo la arquitectura del proyecto.
+
+### Puntos que requieren tu análisis
+- ¿Qué archivos específicos debo modificar?
+- ¿Hay widgets o servicios existentes que deba reutilizar?
+
+## ⚠️ Anti-Frankenstein: NO DUPLIQUES
+*El modelo local analizó TODO el proyecto y encontró código reutilizable.*
+
+### Código que DEBES reutilizar (no crear de nuevo)
+- **`CodePrepShell._show_help`** en `/Users/olagg/proyecto-inferencia/codeprep/shell.py`
+  - Propósito: function en shell.py
+  - Firma: `_show_help(self)`
+  - Relevancia: 71%
+- **`CodePrepShell._show_status_bar`** en `/Users/olagg/proyecto-inferencia/codeprep/shell.py`
+  - Propósito: function en shell.py
+  - Firma: `_show_status_bar(self)`
+  - Relevancia: 68%
+- **`FlowTracer.detect_query_domain`** en `/Users/olagg/proyecto-inferencia/codeprep/preprocess/flow_tracer.py`
+  - Propósito: function en flow_tracer.py
+  - Firma: `detect_query_domain(self, query: str)`
+  - Relevancia: 67%
+- **`CodePrepShell.update_display`** en `/Users/olagg/proyecto-inferencia/codeprep/shell.py`
+  - Propósito: function en shell.py
+  - Firma: `def update_display()`
+  - Relevancia: 66%
+- **`FlowTracer.detect_intent`** en `/Users/olagg/proyecto-inferencia/codeprep/preprocess/flow_tracer.py`
+  - Propósito: function en flow_tracer.py
+  - Firma: `detect_intent(self, query: str)`
+  - Relevancia: 66%
+
+### Patrones del Proyecto (DEBES seguir)
+- **Singletons:** Mixto o no detectado
+- **Clases base:** CustomPainter
+- **State management:** No detectado
+- **Naming:** Sufijos comunes: {'Widget': 3, 'Service': 2}
+
+### ⚠️ Advertencias
+- Clases base comunes: CustomPainter
+- State management: No detectado
+
+## Código Relevante
+*5 archivos por relevancia semántica + 2 por grafo de dependencias*
+
+### `/Users/olagg/Personal/talia/functions/index.js` 🔗 (relevancia: 0.90)
+```javascript
+const { initializeApp } = require("firebase-admin/app");
+require("dotenv").config();
+
+initializeApp();
+
+console.log("✅ Firebase Cloud Functions initialized (modular structure)");
+
+const notifications = require("./notifications");
+```
+
+### `/Users/olagg/Personal/talia/functions/helpers.js` 🔗 (relevancia: 0.90)
+```javascript
+const { onDocumentCreated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
+
+const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https");
+
+const { onSchedule } = require("firebase-functions/v2/scheduler");
+```
+
+### `/Users/olagg/Personal/talia/functions/scripts/diagnose-contact.js` (relevancia: 0.60)
+```javascript
+function log(message, color = 'reset') {
+  console.log(`${colors[color]}${message}${colors.reset}`);
+}
+// ... código omitido ...
+function logSection(title) {
+  console.log('\n' + '═'.repeat(60));
+  log(`  ${title}`, 'bold');
+  console.log('═'.repeat(60));
+}
+// ... código omitido ...
+function logField(label, value, color = 'reset') {
+  console.log(`  ${label}: ${colors[color]}${value}${colors.reset}`);
+}
+```
+
+### `/Users/olagg/Personal/talia/functions/__tests__/cloud-functions-verification.test.js` (relevancia: 0.57)
+```javascript
+          if (error.code === 'not-found') {
+            return { success: false, error: 'Recurso no encontrado' };
+          }
+          return { success: false, error: 'Error interno' };
+        }
+      };
+
+      const permissionError = errorHandler.createError('permission-denied', 'Access denied');
+      const result = errorHandler.handleFunctionError(permissionError, {});
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('No tienes permisos');
+
+      console.log('✅ P2 ADVANCED: Manejo de errores implementado');
+    });
+  });
+
+  describe('🏆 FINAL VERIFICATION - CLOUD FUNCTIONS', () => {
+    test('🎉 TODOS LOS PATRONES IMPLEMENTADOS: 15/15 (100%)', () => {
+      const implementedPatterns = [
+        '🔒 Validación de autenticación con Firebase Auth',
+        '🔒 Validación de input y sanitización',
+        '🔒 Validación de permisos de usuario',
+        '⚡ Operaciones atómicas en Firestore',
+        '⚡ Transacciones para consistencia',
+        '⚡ Batching para operaciones masivas',
+        '🚦 Rate limiting para prevenir abuso',
+        '🤖 Auto-approval workflow inteligente',
+        '🧹 Sanitización de contenido',
+        '🔄 Comunicación cross-service',
+        '🛡️ Manejo robusto de errores',
+        '📊 Métricas y monitoreo',
+    ...
+
+─── RESPUESTA DE CLAUDE ───
+Me llamo Claude, soy un asistente de IA creado por Anthropic. Específicamente, estoy usando el modelo Claude Opus 4.5.
+
+Veo que estás trabajando en un proyecto interesante de inferencia distribuida con memoria local. El sistema que construiste preprocesa contexto localmente antes de enviar queries a un modelo más potente, lo cual es una arquitectura inteligente para optimizar costos y latencia.
+
+¿En qué puedo ayudarte con tu proyecto?
+
+
+═══════════════════════════════════════════════════════════════

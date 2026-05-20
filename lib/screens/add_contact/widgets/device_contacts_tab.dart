@@ -19,7 +19,6 @@ class _DeviceContactsTabState extends State<DeviceContactsTab> {
   final ContactRequestService _contactRequestService = ContactRequestService();
 
   bool _isLoading = false;
-  bool _hasPermission = false;
   List<RegisteredContact> _registeredContacts = [];
   String? _errorMessage;
   ContactsImportResult? _result;
@@ -43,22 +42,15 @@ class _DeviceContactsTabState extends State<DeviceContactsTab> {
     final hasPermission = await _deviceContacts.hasPermission();
 
     if (hasPermission) {
-      setState(() {
-        _hasPermission = true;
-      });
       await _loadContacts();
     } else {
       // Solicitar permiso automáticamente usando el servicio nativo
       final granted = await _deviceContacts.requestPermission();
 
       if (granted) {
-        setState(() {
-          _hasPermission = true;
-        });
         await _loadContacts();
       } else {
         setState(() {
-          _hasPermission = false;
           _isLoading = false;
           _errorMessage = 'Permiso de contactos denegado';
         });
@@ -151,7 +143,7 @@ class _DeviceContactsTabState extends State<DeviceContactsTab> {
             SizedBox(height: 16),
             Text(
               isPermissionError
-                  ? 'Para ver tus contactos que usan Talia, necesitas habilitar el permiso de contactos en la configuración.'
+                  ? 'Para ver tus contactos que usan Tália, necesitas habilitar el permiso de contactos en la configuración.'
                   : _errorMessage!,
               style: TextStyle(color: Colors.grey[600]),
               textAlign: TextAlign.center,
@@ -190,14 +182,14 @@ class _DeviceContactsTabState extends State<DeviceContactsTab> {
             ),
             SizedBox(height: 24),
             Text(
-              'No hay contactos en Talia',
+              'No hay contactos en Tália',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
             SizedBox(height: 16),
             Text(
               _result != null
-                  ? 'Tienes ${_result!.contactsWithPhone} contactos con teléfono, pero ninguno está registrado en Talia aún.'
-                  : 'Ninguno de tus contactos está usando Talia todavía.',
+                  ? 'Tienes ${_result!.contactsWithPhone} contactos con teléfono, pero ninguno está registrado en Tália aún.'
+                  : 'Ninguno de tus contactos está usando Tália todavía.',
               style: TextStyle(color: Colors.grey[600]),
               textAlign: TextAlign.center,
             ),
@@ -234,7 +226,7 @@ class _DeviceContactsTabState extends State<DeviceContactsTab> {
                   Icons.phone,
                 ),
                 _buildStat(
-                  'En Talia',
+                  'En Tália',
                   _result!.registeredCount.toString(),
                   Icons.check_circle,
                   color: Colors.green,

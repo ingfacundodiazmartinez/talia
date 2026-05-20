@@ -17,7 +17,6 @@ class MoodPollQuestion {
   final String text;
   final MoodPollQuestionType type;
   final List<MoodPollOption> options;
-  final bool isAiGenerated;
   final String? contextHint; // Para preguntas generadas por IA basadas en contexto
   final DateTime createdAt;
   final bool isActive;
@@ -27,7 +26,6 @@ class MoodPollQuestion {
     required this.text,
     required this.type,
     required this.options,
-    this.isAiGenerated = false,
     this.contextHint,
     DateTime? createdAt,
     this.isActive = true,
@@ -38,7 +36,6 @@ class MoodPollQuestion {
       'text': text,
       'type': type.name,
       'options': options.map((o) => o.toFirestore()).toList(),
-      'isAiGenerated': isAiGenerated,
       'contextHint': contextHint,
       'createdAt': Timestamp.fromDate(createdAt),
       'isActive': isActive,
@@ -56,7 +53,6 @@ class MoodPollQuestion {
       options: (data['options'] as List<dynamic>)
           .map((o) => MoodPollOption.fromFirestore(o as Map<String, dynamic>))
           .toList(),
-      isAiGenerated: data['isAiGenerated'] as bool? ?? false,
       contextHint: data['contextHint'] as String?,
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       isActive: data['isActive'] as bool? ?? true,
@@ -68,7 +64,6 @@ class MoodPollQuestion {
     String? text,
     MoodPollQuestionType? type,
     List<MoodPollOption>? options,
-    bool? isAiGenerated,
     String? contextHint,
     DateTime? createdAt,
     bool? isActive,
@@ -78,7 +73,6 @@ class MoodPollQuestion {
       text: text ?? this.text,
       type: type ?? this.type,
       options: options ?? this.options,
-      isAiGenerated: isAiGenerated ?? this.isAiGenerated,
       contextHint: contextHint ?? this.contextHint,
       createdAt: createdAt ?? this.createdAt,
       isActive: isActive ?? this.isActive,

@@ -98,7 +98,7 @@ async function analyzeBatchWithGemini(messages, batchNumber, totalBatches, conve
 
   try {
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
+      model: "gemini-2.5-flash-lite",
     });
 
     // Construir prompt para análisis de batch
@@ -210,7 +210,7 @@ async function consolidateBatchResults(batchResults, totalMessages, days, moodPo
 
   try {
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
+      model: "gemini-2.5-flash-lite",
     });
 
     // Agregar resúmenes de batches al prompt
@@ -448,7 +448,7 @@ async function analyzeMessagesWithGemini(messages, days, periodStart, periodEnd,
 
   try {
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
+      model: "gemini-2.5-flash-lite",
     });
 
     const contentParts = [];
@@ -1111,7 +1111,7 @@ exports.onPendingReportCreated = onDocumentCreated(
 
         // Metadata
         aiGenerated: true,
-        aiModel: "gemini-pro",
+        aiModel: "gemini-2.5-flash-lite",
         generatedAt: new Date(),
         percentageChange: percentageChange,
         hasPreviousReport: previousReport !== null,

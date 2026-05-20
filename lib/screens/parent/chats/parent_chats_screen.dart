@@ -132,62 +132,54 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    Text(
+                      'Chats',
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(
-                          'Chats 💬',
-                          style: TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
+                        IconButton(
+                          icon: Icon(Icons.archive, color: Colors.white, size: 26),
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => ParentArchivedChatsScreen(),
+                              ),
+                            ).then((_) {
+                              // Refrescar lista al volver de chats archivados
+                              if (mounted) setState(() {});
+                            });
+                          },
+                          padding: EdgeInsets.all(8),
                         ),
-                        SizedBox(height: 4),
-                        Text(
-                          'Conversaciones con tus contactos',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.white.withValues(alpha: 0.9),
+                        IconButton(
+                          icon: Icon(
+                            Icons.group_add,
+                            color: Colors.white,
+                            size: 26,
                           ),
+                          onPressed: () async {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const CreateGroupScreenV2(),
+                              ),
+                            );
+
+                            // Refrescar grupos al volver
+                            if (mounted) {
+                              await _controller.refreshGroupsFromServer();
+                              if (mounted) setState(() {});
+                            }
+                          },
+                          padding: EdgeInsets.all(8),
                         ),
                       ],
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.archive, color: Colors.white, size: 26),
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => ParentArchivedChatsScreen(),
-                          ),
-                        ).then((_) {
-                          // Refrescar lista al volver de chats archivados
-                          if (mounted) setState(() {});
-                        });
-                      },
-                      padding: EdgeInsets.all(8),
-                    ),
-                    IconButton(
-                      icon: Icon(
-                        Icons.group_add,
-                        color: Colors.white,
-                        size: 26,
-                      ),
-                      onPressed: () async {
-                        await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => const CreateGroupScreenV2(),
-                          ),
-                        );
-
-                        // Refrescar grupos al volver
-                        if (mounted) {
-                          await _controller.refreshGroupsFromServer();
-                          if (mounted) setState(() {});
-                        }
-                      },
-                      padding: EdgeInsets.all(8),
                     ),
                   ],
                 ),
@@ -518,7 +510,6 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
       case GroupItem(:final groupId, :final groupData):
         final groupName = groupData['name'] ?? 'Grupo';
         final groupMembers = (groupData['members'] as List?)?.cast<String>() ?? <String>[];
-        final parentId = _controller.currentUserId;
 
         // Filter by search
         if (searchQuery.isNotEmpty &&
@@ -586,6 +577,7 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
               }
 
               // Usar calculateGroupV2Status - seen solo si TODOS los miembros leyeron
+              // ignore: deprecated_member_use_from_same_package
               lastMessageStatus = MessageStatusHelper.calculateGroupV2Status(
                 data: lastMessageData,
                 senderId: senderId,
@@ -676,10 +668,11 @@ class _ParentChatsScreenState extends State<ParentChatsScreen>
       builder: (context, aliasSnapshot) {
         final displayName = aliasSnapshot.data ?? realName;
 
-        // ✅ Verificar si el contacto está bloqueado
+        // ✅ Solo el bloqueador ve la marca "Contacto bloqueado" en su lista.
+        // El bloqueado nunca debe enterarse, pero su foto sí se oculta en ChatListItem.
         return StreamBuilder<bool>(
           key: ValueKey('blocked_$childId'),
-          stream: _blockService.isBlockedStream(childId),
+          stream: _blockService.iBlockedStream(childId),
           initialData: false,
           builder: (context, blockedSnapshot) {
             final isBlocked = blockedSnapshot.data ?? false;

@@ -80,7 +80,7 @@ class ChatPreferencesCache extends ChangeNotifier {
   /// ✅ MEJORADO: Ahora lanza excepción si box no está inicializado
   Future<void> archiveChat(String chatId) async {
     ReleaseLogger.log('📦 [archiveChat] Iniciando para chatId: $chatId', tag: 'ChatCache');
-    ReleaseLogger.log('📦 [archiveChat] Instance hashCode: ${identityHashCode(this)}, listeners: ${hasListeners}', tag: 'ChatCache');
+    ReleaseLogger.log('📦 [archiveChat] Instance hashCode: ${identityHashCode(this)}, listeners: $hasListeners', tag: 'ChatCache');
 
     await _ensureInitialized();
 

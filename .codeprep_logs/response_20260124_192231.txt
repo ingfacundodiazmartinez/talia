@@ -1,0 +1,445 @@
+═══════════════════════════════════════════════════════════════
+CODEPREP - Registro de Query
+═══════════════════════════════════════════════════════════════
+
+Fecha: 2026-01-24 19:22:31
+Proyecto: /Users/olagg/Personal/talia
+
+─── MÉTRICAS REALES ───
+Input tokens:       2,448
+Output tokens:      1,641
+Cache creado:       0
+Cache leído:        0
+TOTAL:              4,089 tokens
+Costo:              $0.0000 USD
+Tiempo:             0.0s
+
+─── QUERY ───
+Identifica falta a patrones DRY y SST.
+
+─── CONTEXTO ENVIADO ───
+# Contexto Pre-procesado por Cliente Local
+
+*Este contexto fue compilado por un modelo local (7B) para optimizar tu razonamiento.*
+
+## 📋 Reglas del Proyecto (CLAUDE.md)
+*Estas reglas son OBLIGATORIAS. Violaciones = código rechazado.*
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Reglas por Capa:**
+- **Screen** - PROHIBIDO: `FirebaseFirestore.instance.collection(...)`, `FirebaseFunctions.instance.httpsCallable(...)`, Direct calls to Services
+
+**Prohibiciones Globales:**
+- ❌ print() - usar ReleaseLogger
+- ❌ debugPrint() - usar ReleaseLogger
+- ❌ Firestore directo en Screen - usar Controller
+- ❌ Functions directo en Screen - usar Controller
+- ❌ Llamadas directas a Services desde Screen
+
+**Servicios Documentados:**
+- `notificationService`: NotificationService(),
+- `videoCallService`: VideoCallService(),
+- `autoApprovalService`: AutoApprovalService(),
+
+## Proyecto
+Proyecto Flutter/Dart en /Users/olagg/Personal/talia
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Convenciones:**
+- Controllers usan ChangeNotifier
+- Modelos en lib/models/
+
+## Análisis Previo (modelo local)
+*Confianza del análisis: 70%*
+
+### Pensamiento inicial
+El usuario está pidiendo identificar faltas de DRY (Don't Repeat Yourself) y SST (Single Source of Truth) en el proyecto. Esto implicará buscar duplicaciones de código y asegurarse de que la información esté centralizada en un solo lugar.
+
+### Módulos relevantes
+- `lib/models/`
+- `lib/controllers/`
+- `lib/services/`
+
+### Patrones observados en el proyecto
+- Screen → Controller → Service → Model
+- Duplicación de código
+- Falta de centralización de datos
+
+### Borrador de approach
+Realizar una revisión del proyecto para identificar bloques de código repetidos y verificar que la información crítica esté almacenada en un solo lugar.
+
+### Puntos que requieren tu análisis
+- ¿Qué métodos específicos puedo usar para detectar duplicaciones de código?
+- ¿Cómo puedo asegurarme de que la información esté centralizada en un solo lugar?
+- ¿Debería considerar refactorizar el proyecto para mejorar la DRY y SST?
+
+## ⚠️ Anti-Frankenstein: NO DUPLIQUES
+*El modelo local analizó TODO el proyecto y encontró código reutilizable.*
+
+### Código que DEBES reutilizar (no crear de nuevo)
+- **`CodePrepShell._show_help`** en `/Users/olagg/proyecto-inferencia/codeprep/shell.py`
+  - Propósito: function en shell.py
+  - Firma: `_show_help(self)`
+  - Relevancia: 69%
+- **`GameSeasonChallenge#active_for_user?`** en `/Users/olagg/Work/olagg/backend/api/app/models/game_season_challenge.rb`
+  - Propósito: function en game_season_challenge.rb
+  - Relevancia: 68%
+- **`Devices::Create#call`** en `/Users/olagg/Work/olagg/backend/api/app/services/devices/create.rb`
+  - Propósito: function en create.rb
+  - Firma: `por token (único globalmente)`
+  - Relevancia: 68%
+- **`Devices::Create#deactivate_old_devices_if_needed`** en `/Users/olagg/Work/olagg/backend/api/app/services/devices/create.rb`
+  - Propósito: function en create.rb
+  - Firma: `deactivate_old_devices_if_needed(current_device)`
+  - Relevancia: 68%
+- **`Admin::ClawMachinePrizeClaims::List#call`** en `/Users/olagg/Work/olagg/backend/api/app/services/admin/claw_machine_prize_claims/list.rb`
+  - Propósito: function en list.rb
+  - Firma: `joins(:user, :claw_machine_play)`
+  - Relevancia: 67%
+
+### Patrones del Proyecto (DEBES seguir)
+- **Singletons:** Mixto o no detectado
+- **State management:** No detectado
+- **Naming:** Sufijos comunes: {'Controller': 11}
+
+### ⚠️ Advertencias
+- State management: No detectado
+
+## Código Relevante
+*5 archivos seleccionados por relevancia semántica*
+
+### `/Users/olagg/proyecto-inferencia/codeprep/preprocess/duplication_detector.py` (relevancia: 0.96)
+```python
+method DuplicationDetector.find_relevant_duplications(self, query: str)
+
+        Encuentra duplicaciones relevantes a la query del usuario.
+
+        Esto ayuda a advertir: "Cuidado, ya hay código duplicado haciendo
+        esto - no agregues otra copia, mejor refactoriza
+```
+
+def find_relevant_duplications(self, query: str) -> list[DuplicatedPattern]:
+        """
+        Encuentra duplicaciones relevantes a la query del usuario.
+
+        Esto ayuda a advertir: "Cuidado, ya hay código duplicado haciendo
+        esto - no agregues otra copia, mejor refactoriza primero."
+        """
+        all_duplications = self.scan_project()
+
+        query_lower = query.lower()
+        keywords = set(re.findall(r'\w+', query_lower))
+
+        relevant = []
+        for dup in all_duplications:
+            desc_lower = dup.description.lower()
+            desc_keywords = set(re.findall(r'\w+', desc_lower))
+
+            if keywords & desc_keywords:  # Intersección no vacía
+                relevant.append(dup)
+
+        return relevant
+```
+```
+
+### `/Users/olagg/proyecto-inferencia/codeprep/preprocess/duplication_detector.py` (relevancia: 0.94)
+```python
+def get_duplication_warnings(self, query: str) -> list[str]:
+        """Genera advertencias sobre duplicación para incluir en el contexto."""
+        relevant = self.find_relevant_duplications(query)
+
+        warnings = []
+        for dup in relevant:
+            files = [f"{o['file']}:{o['line']}" for o in dup.occurrences[:3]]
+            warnings.append(
+                f"⚠️ DUPLICACIÓN EXISTENTE: {dup.description}\n"
+                f"   Ya existe en {dup.count} lugares: {', '.join(files)}\n"
+                f"   Sugerencia: {dup.suggested_refactor}\n"
+                f"   NO agregues otra copia - considera refactorizar primero."
+            )
+
+        return warnings
+```
+```
+
+### `/Users/olagg/proyecto-inferencia/codeprep/preprocess/context_compiler.py` (relevancia: 0.93)
+```python
+def _fallback_pre_reasoning(self, query: str, relevant_code: list[dict]) -> PreReasoning:
+        """Genera pre-razonamiento básico sin modelo local."""
+        # Extraer keywords de la query
+        keywords = set(query.lower().split())
+        stop_words = {'un', 'una', 'el', 'la', 'de', 'en', 'a', 'para', 'con', 'por'}
+        keywords = keywords - stop_words
+
+        # Identificar tipo de tarea
+        task_type = "modificación"
+        if any(w in query.lower() for w in ['agregar', 'añadir', 'crear', 'nuevo']):
+            task_type = "nueva funcionalidad"
+        elif any(w in query.lower() for w in ['arreglar', 'fix', 'bug', 'error']):
+            task_type = "corrección de bug"
+        elif any(w in query.lower() for w in ['refactor', 'mejorar', 'optimizar']):
+            task_type = "refactorización"
+
+        # Filtrar archivos relevantes (no tests)
+        relevant_files = [
+            item["file"] for item in relevant_code[:5]
+            if "/test/" not in item["file"] and "_test.dart" not in item["file"]
+        ]
+
+        return PreReasoning(
+            thinking=f"Tarea de {task_type}: {query}",
+            relevant_modules=relevant_files[:3] if relevant_files else [item["file"] for item in relevant_code[:3]],
+            patterns_observed=["Screen → Controller → Service → Model"],
+            draft_approach=f"Implementar {task_type} siguiendo la arquitectura del proyecto.",
+            questions_for_remote=[
+                "¿Qué archivos específicos debo modificar?",
+                "¿Hay widgets o servicios existentes que deba reutilizar?",
+            ],
+            confidence=0.5,
+        )
+```
+```
+
+### `/Users/olagg/proyecto-inferencia/codeprep/preprocess/duplication_detector.py` (relevancia: 0.85)
+```python
+class DuplicationDetector
+method DuplicationDetector.__init__(self, project_path: Path, verbose: bool = False)
+method DuplicationDetector._log(self, msg: str)
+method DuplicationDetector._scan_file(self, file_path: Path): Escanea un archivo buscando patrones duplicables.
+method DuplicationDetector.scan_project(self, extensions: list[str] = None): Escanea todo el proyecto buscando duplicaciones.
+method DuplicationDetector.find_relevant_duplications(self, query: str):
+        Encuentra duplicaciones relevantes a la query del usuario.
+
+        Esto ayuda a advertir:
+method Duplicati...
+
+─── RESPUESTA DE CLAUDE ───
+Ahora tengo un panorama completo. Déjame compilar el reporte final de violaciones DRY y SST:
+
+---
+
+# Análisis de Violaciones DRY y SST - Proyecto Talia
+
+## Resumen Ejecutivo
+
+El proyecto tiene **violaciones significativas** tanto de DRY (Don't Repeat Yourself) como de SST (Single Source of Truth). Las más críticas afectan la mantenibilidad y seguridad del código.
+
+---
+
+## 🔴 VIOLACIONES CRÍTICAS (Alta Severidad)
+
+### 1. **Dos AuthValidationHelper Duplicados - VIOLACIÓN SST**
+
+| Archivo | Líneas | Propósito |
+|---------|--------|-----------|
+| `lib/services/chats/utils/auth_validation_helper.dart` | 266 | Validaciones específicas de chat con 15+ métodos estáticos |
+| `lib/services/stories/utils/auth_validation_helper.dart` | 70 | Patrón genérico async/sync wrapper |
+
+**Problema:** Ambos sirven el mismo propósito (validar autenticación) pero con APIs completamente diferentes e incompatibles.
+
+**Impacto:** Confusión sobre cuál usar, inconsistencia en manejo de errores.
+
+---
+
+### 2. **`currentUserId` Definido en 24+ Lugares - VIOLACIÓN SST**
+
+```dart
+// Este patrón exacto aparece en 24 archivos diferentes:
+String? get currentUserId => _auth.currentUser?.uid;
+```
+
+**Archivos afectados:**
+- 18 controllers (`chat_app_bar_controller.dart`, `chats_controller.dart`, etc.)
+- 4 repositories (`user_repository.dart`, `chat_repository.dart`, etc.)
+- 2 services (`mood_poll_service.dart`, `story_repository.dart`)
+
+**Problema:** No existe un AuthService centralizado que provea el `currentUserId`.
+
+---
+
+### 3. **String `"Usuario no autenticado"` en 62+ Lugares - VIOLACIÓN DRY**
+
+```dart
+throw Exception('Usuario no autenticado');
+```
+
+**Archivos con más ocurrencias:**
+- `lib/services/chats/services/group_management_service.dart` (5)
+- `lib/services/friend_service.dart` (4)
+- `lib/services/data_management_service.dart` (4)
+- `lib/services/chats/repositories/chat_repository.dart` (4)
+
+**Problema:** Si cambia el mensaje, hay que modificar 28+ archivos.
+
+---
+
+### 4. **Patrón `isGroup ? 'groups_v2' : 'chats'` Repetido 53 Veces - VIOLACIÓN DRY**
+
+```dart
+final collection = isGroup ? 'groups_v2' : 'chats';
+```
+
+**Archivos más afectados:**
+- `lib/services/chats/repositories/message_repository.dart` (15 ocurrencias)
+- `lib/services/chats/list_messages_service.dart` (6 ocurrencias)
+- `lib/services/chats/delete_message_service.dart` (4 ocurrencias)
+
+**También hay inconsistencia:**
+```dart
+// ❌ En typing_indicator_service.dart líneas 195, 215:
+final collection = isGroup ? 'groups' : 'chats';  // 'groups' vs 'groups_v2'
+```
+
+---
+
+## 🟠 VIOLACIONES SIGNIFICATIVAS (Media Severidad)
+
+### 5. **Lógica de Validación de Bloqueo Duplicada - VIOLACIÓN DRY**
+
+| Archivo | Líneas | Método |
+|---------|--------|--------|
+| `chat_creation_service.dart` | 148-189 | `_validateBlockStatusForChatCreation()` |
+| `chat_messaging_service.dart` | 536-581 | `_validateBlockStatus()` |
+
+**Código casi idéntico:**
+```dart
+// Ambos archivos tienen ~45 líneas de lógica idéntica:
+final blockStatus = await _blockService.getChatBlockStatus(...);
+if (blockStatus.isBlocked) {
+  throw UserBlockedException(...);
+}
+final reverseBlockStatus = await _blockService.getChatBlockStatus(...);
+if (reverseBlockStatus.isBlocked) {
+  throw UserBlockedException(...);
+}
+```
+
+---
+
+### 6. **Acceso a Collection `'users'` en 81 Archivos (216 veces) - VIOLACIÓN DRY**
+
+```dart
+FirebaseFirestore.instance.collection('users')
+```
+
+**Problema:** El nombre de la colección está hardcodeado en todo el proyecto.
+
+---
+
+### 7. **Acceso a Collection `'chats'` en 31 Archivos (82 veces) - VIOLACIÓN DRY**
+
+```dart
+FirebaseFirestore.instance.collection('chats')
+```
+
+---
+
+## 🟡 VIOLACIONES MODERADAS (Baja-Media Severidad)
+
+### 8. **No Existe Archivo de Constantes**
+
+```bash
+# Búsqueda de archivos de constantes:
+ls lib/**/constants*.dart  # ❌ No existe
+ls lib/**/config*.dart     # ❌ No existe
+```
+
+**Consecuencia:** Strings mágicos dispersos por todo el proyecto.
+
+---
+
+### 9. **Excepciones Existen pero No Se Usan Consistentemente**
+
+El archivo `chat_exceptions.dart` define excepciones tipadas, pero muchos servicios aún usan:
+```dart
+throw Exception('Usuario no autenticado');  // ❌ Genérico
+// En vez de usar las excepciones existentes
+```
+
+---
+
+## 📊 Métricas de Duplicación
+
+| Patrón | Ocurrencias | Archivos | Severidad |
+|--------|-------------|----------|-----------|
+| `currentUserId` getter | 24 | 24 | 🔴 Alta |
+| `'Usuario no autenticado'` | 62 | 28 | 🔴 Alta |
+| `isGroup ? 'groups_v2' : 'chats'` | 53 | 12 | 🔴 Alta |
+| `collection('users')` | 216 | 81 | 🟠 Media |
+| `collection('chats')` | 82 | 31 | 🟠 Media |
+| AuthValidationHelper duplicado | 2 clases | 2 | 🔴 Alta |
+| Block validation logic | 2 métodos | 2 | 🟠 Media |
+
+---
+
+## 🔧 Recomendaciones de Refactorización (Prioridad)
+
+### **P0 - Crear Inmediatamente:**
+
+1. **`lib/core/auth_service.dart`** - Single Source of Truth para autenticación
+```dart
+class AuthService {
+  static AuthService? _instance;
+  static AuthService get instance => _instance ??= AuthService._();
+  
+  String? get currentUserId => FirebaseAuth.instance.currentUser?.uid;
+  bool get isAuthenticated => currentUserId != null;
+  
+  String requireUserId() {
+    final uid = currentUserId;
+    if (uid == null) throw AuthenticationException();
+    return uid;
+  }
+}
+```
+
+2. **`lib/core/constants/error_messages.dart`** - Mensajes de error centralizados
+```dart
+class ErrorMessages {
+  static const userNotAuthenticated = 'Usuario no autenticado';
+  static const userBlocked = 'Usuario bloqueado';
+  // etc.
+}
+```
+
+3. **`lib/core/constants/collections.dart`** - Nombres de colecciones
+```dart
+class FirestoreCollections {
+  static const users = 'users';
+  static const chats = 'chats';
+  static const groups = 'groups_v2';
+  
+  static String messagesCollection(String chatId, {required bool isGroup}) =>
+    isGroup ? 'groups_v2' : 'chats';
+}
+```
+
+### **P1 - Unificar:**
+
+4. **Consolidar `AuthValidationHelper`** - Mantener uno solo con API completa
+5. **Extraer `BlockValidationService`** - Centralizar lógica de validación de bloqueos
+
+### **P2 - Refactorizar Gradualmente:**
+
+6. **Reemplazar accesos directos a Firestore** con métodos de repository
+7. **Usar excepciones tipadas** de `chat_exceptions.dart` consistentemente
+
+---
+
+## ⚠️ Inconsistencia Detectada
+
+En `typing_indicator_service.dart`:
+```dart
+// Líneas 55, 91: usa 'groups_v2' ✅
+final collection = isGroup ? 'groups_v2' : 'chats';
+
+// Líneas 195, 215: usa 'groups' ❌
+final collection = isGroup ? 'groups' : 'chats';
+```
+
+Esto podría ser un **bug** si `groups` y `groups_v2` son colecciones diferentes.
+
+
+═══════════════════════════════════════════════════════════════

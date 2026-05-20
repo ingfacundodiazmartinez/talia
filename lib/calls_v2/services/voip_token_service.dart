@@ -1,13 +1,13 @@
-/// VoIP Token Service
-///
-/// Centralized service for managing VoIP push notification tokens:
-/// - Token validation and refresh
-/// - Token expiration checking
-/// - Automatic token renewal
-/// - Token cleanup for device transfers
-///
-/// This service ensures reliable VoIP push delivery by maintaining
-/// valid tokens and handling edge cases like token invalidation.
+// VoIP Token Service
+//
+// Centralized service for managing VoIP push notification tokens:
+// - Token validation and refresh
+// - Token expiration checking
+// - Automatic token renewal
+// - Token cleanup for device transfers
+//
+// This service ensures reliable VoIP push delivery by maintaining
+// valid tokens and handling edge cases like token invalidation.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';

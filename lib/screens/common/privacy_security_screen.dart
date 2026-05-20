@@ -35,10 +35,12 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
   Future<void> _loadSettings() async {
     try {
       final data = await _settingsService.loadSettings();
+      // Default privacy más restrictivo para menores
+      final isChild = data['role'] == 'child';
       setState(() {
         _twoFactorEnabled = data['twoFactorEnabled'] ?? false;
-        _showOnlineStatus = data['showOnlineStatus'] ?? true;
-        _hideLastSeen = data['hideLastSeen'] ?? false;
+        _showOnlineStatus = data['showOnlineStatus'] ?? !isChild;
+        _hideLastSeen = data['hideLastSeen'] ?? isChild;
         _sendReadReceipts = data['sendReadReceipts'] ?? true;
         _allowScreenshots = data['allowScreenshots'] ?? false;
       });
@@ -120,12 +122,8 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
               setState(() => _showOnlineStatus = value);
               await _updateSetting('showOnlineStatus', value);
 
-              // Forzar actualización inmediata del estado online
-              if (value) {
-                await OnlineStatusService().setOnline();
-              } else {
-                await OnlineStatusService().setOffline();
-              }
+              // Re-correr el setup; con showOnlineStatus=false limpia lastSeen también.
+              await OnlineStatusService().setOnline();
             },
           ),
 
@@ -400,20 +398,21 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                     },
                   );
 
+                  if (!mounted) return;
+                  // ignore: use_build_context_synchronously
                   Navigator.pop(context);
 
                   if (filePath != null) {
                     // Mostrar opciones para compartir
                     _showExportSuccessDialog(filePath);
                   } else {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
+                    // ignore: use_build_context_synchronously
+                    ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text('Error al exportar cache'),
                           backgroundColor: Colors.red,
                         ),
                       );
-                    }
                   }
                 },
                 style: ElevatedButton.styleFrom(
@@ -430,12 +429,11 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
   }
 
   void _showExportSuccessDialog(String filePath) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final exportService = DataExportService();
-
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) {
+        final colorScheme = Theme.of(context).colorScheme;
+        return AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
@@ -506,7 +504,8 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
             child: Text('Cerrar'),
           ),
         ],
-      ),
+      );
+      },
     );
   }
 
@@ -732,17 +731,18 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                     },
                   );
 
+                  if (!mounted) return;
+                  // ignore: use_build_context_synchronously
                   Navigator.pop(context);
 
                   if (!success) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Error: Contraseña incorrecta o archivo corrupto'),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
-                    }
+                    // ignore: use_build_context_synchronously
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Error: Contraseña incorrecta o archivo corrupto'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
                   }
                 },
                 style: ElevatedButton.styleFrom(
@@ -753,20 +753,6 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
               ),
             ],
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFeatureItem(String text) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: EdgeInsets.only(bottom: 4),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 12,
-          color: colorScheme.onSurfaceVariant,
         ),
       ),
     );
@@ -908,17 +894,18 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
               // Obtener el secreto del usuario
               final secret = await twoFactorService.get2FASecret(_auth.currentUser!.uid);
 
+              if (!mounted) return;
+              // ignore: use_build_context_synchronously
               Navigator.pop(context); // Cerrar loading
 
               if (secret == null) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Error: No se encontró configuración de 2FA'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                }
+                // ignore: use_build_context_synchronously
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Error: No se encontró configuración de 2FA'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
                 return;
               }
 
@@ -932,11 +919,14 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                 try {
                   await twoFactorService.disable2FA(_auth.currentUser!.uid);
 
+                  if (!mounted) return;
+                  // ignore: use_build_context_synchronously
                   Navigator.pop(context); // Cerrar diálogo
 
                   setState(() => _twoFactorEnabled = false);
                 } catch (e) {
                   if (mounted) {
+                    // ignore: use_build_context_synchronously
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text('Error al deshabilitar 2FA: $e'),
@@ -946,14 +936,13 @@ class _PrivacySecurityScreenState extends State<PrivacySecurityScreen> {
                   }
                 }
               } else {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Código incorrecto. Verifica en tu app de autenticación.'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                }
+                // ignore: use_build_context_synchronously
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Código incorrecto. Verifica en tu app de autenticación.'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
               }
             },
             style: ElevatedButton.styleFrom(

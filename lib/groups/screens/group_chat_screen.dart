@@ -16,10 +16,11 @@ import 'group_message_info_screen.dart';
 import '../../screens/chat/widgets/chat_input_bar.dart';
 import '../../screens/chat/widgets/message_bubble.dart';
 import '../../screens/chat/widgets/reply_bar.dart';
+import '../../screens/chat/widgets/attachment_options.dart';
 import '../../models/chat_message.dart';
 // ReactionService imported via ReactionPickerMixin
 import '../../services/favorite_service.dart';
-import '../../services/media_compression_service.dart';
+import '../../services/bottom_nav_visibility.dart';
 import '../../notification_service.dart';
 // ReactionPicker imported via ReactionPickerMixin
 import '../../utils/release_logger.dart';
@@ -85,6 +86,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
   @override
   void initState() {
     super.initState();
+    BottomNavVisibility.instance.registerFullScreen();
     WidgetsBinding.instance.addObserver(this);
     _messageController.addListener(_onMessageTextChanged);
     // Set current chat to suppress notifications while viewing this group
@@ -198,6 +200,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
 
   @override
   void dispose() {
+    BottomNavVisibility.instance.unregisterFullScreen();
     WidgetsBinding.instance.removeObserver(this);
     _messageController.removeListener(_onMessageTextChanged);
     _favoritesSubscription?.cancel();
@@ -305,102 +308,6 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
     }
   }
 
-  Future<void> _handleSendImage(ImageSource source) async {
-    Navigator.pop(context);
-
-    final picker = ImagePicker();
-    final XFile? image = await picker.pickImage(
-      source: source,
-      maxWidth: 1080,
-      maxHeight: 1080,
-      imageQuality: 85,
-    );
-
-    if (image == null) return;
-
-    // Get current user info first
-    final currentUser = FirebaseAuth.instance.currentUser;
-    final userDoc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(currentUser?.uid)
-        .get();
-    final userData = userDoc.data();
-    final senderName = userData?['name'] ?? currentUser?.displayName ?? 'Usuario';
-    final senderPhotoURL = userData?['photoURL'] ?? currentUser?.photoURL;
-
-    // Create optimistic message with local path
-    final tempId = 'temp_${DateTime.now().millisecondsSinceEpoch}';
-    final optimisticMessage = GroupMessage(
-      id: tempId,
-      senderId: currentUser?.uid ?? '',
-      senderName: senderName,
-      senderPhotoURL: senderPhotoURL,
-      localImagePath: image.path,
-      isOptimistic: true,
-      timestamp: DateTime.now(),
-      isDeleted: false,
-      reactions: {},
-      readBy: [],
-    );
-
-    // Add optimistic message immediately
-    _controller.addOptimisticMessage(optimisticMessage);
-
-    try {
-      // Compress image in background
-      final compressedFile = await MediaCompressionService().compressImage(
-        File(image.path),
-      );
-
-      final fileToUpload = compressedFile ?? File(image.path);
-
-      // Upload to Firebase Storage (path includes userId for security rules)
-      final userId = FirebaseAuth.instance.currentUser?.uid ?? '';
-      final fileName = 'img_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final storageRef = FirebaseStorage.instance
-          .ref()
-          .child('groups_v2/${widget.groupId}/$userId/images/$fileName');
-
-      final uploadTask = await storageRef.putFile(
-        fileToUpload,
-        SettableMetadata(contentType: 'image/jpeg'),
-      );
-
-      final imageUrl = await uploadTask.ref.getDownloadURL();
-
-      // Send message with image - pass localId for optimistic UI matching
-      // The optimistic message will be replaced when Firestore returns the real message
-      final success = await _controller.sendMediaMessage(
-        imageUrl: imageUrl,
-        senderName: senderName,
-        senderPhotoURL: senderPhotoURL,
-        localId: tempId, // For optimistic UI matching
-      );
-
-      if (!success && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error enviando imagen'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-
-      ReleaseLogger.log('Image sent to group ${widget.groupId}', tag: 'GroupChat');
-    } catch (e) {
-      // Remove optimistic message on error
-      _controller.removeOptimisticMessage(tempId);
-      ReleaseLogger.error('Error sending image: $e', tag: 'GroupChat');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error enviando imagen'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
 
   Future<void> _startRecording() async {
     try {
@@ -502,7 +409,9 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
           // Clean up temp file
           try {
             await audioFile.delete();
-          } catch (_) {}
+          } catch (_) {
+            // Silently ignore - temp file cleanup failure is non-critical
+          }
 
           ReleaseLogger.log('Audio sent to group ${widget.groupId}', tag: 'GroupChat');
         } catch (e) {
@@ -526,24 +435,20 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
   }
 
   void _showAttachmentOptions() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.camera_alt),
-              title: const Text('Camara'),
-              onTap: () => _handleSendImage(ImageSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library),
-              title: const Text('Galeria'),
-              onTap: () => _handleSendImage(ImageSource.gallery),
-            ),
-          ],
-        ),
-      ),
+    AttachmentOptions.show(
+      context,
+      onCameraTap: () {
+        Navigator.pop(context);
+        _controller.sendImageFromPicker(ImageSource.camera);
+      },
+      onGalleryTap: () {
+        Navigator.pop(context);
+        _controller.sendImageFromPicker(ImageSource.gallery);
+      },
+      onVideoTap: () {
+        Navigator.pop(context);
+        _controller.sendVideoFromPicker();
+      },
     );
   }
 

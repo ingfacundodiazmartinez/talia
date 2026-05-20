@@ -235,6 +235,7 @@ class _TriviaResultsScreenState extends State<TriviaResultsScreen> {
               Navigator.pop(context);
               final success = await _controller.deleteTrivia();
               if (success && mounted) {
+                // ignore: use_build_context_synchronously
                 Navigator.pop(context);
               }
             },
@@ -417,7 +418,7 @@ class _TriviaResultsScreenState extends State<TriviaResultsScreen> {
               ),
             ],
           ),
-          if (trivia.isActive && trivia.timeRemaining != null) ...[
+          if (trivia.isActive && trivia.timeRemaining > Duration.zero) ...[
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -429,7 +430,7 @@ class _TriviaResultsScreenState extends State<TriviaResultsScreen> {
                 ),
                 const SizedBox(width: 4),
                 Text(
-                  'Expira en ${_formatDuration(trivia.timeRemaining!)}',
+                  'Expira en ${_formatDuration(trivia.timeRemaining)}',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.8),
                   ),

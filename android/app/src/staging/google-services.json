@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1092721435813",
+    "project_id": "talia-staging",
+    "storage_bucket": "talia-staging.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1092721435813:android:e37dde89b87350a876194c",
+        "android_client_info": {
+          "package_name": "com.talia.chat.staging"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC7UwZDgvbbjDNfIokW5nXdRAWFfQ5SQb8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

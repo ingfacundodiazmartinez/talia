@@ -301,7 +301,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           Icon(
             Icons.assignment,
             size: 80,
-            color: isDarkMode ? colorScheme.outlineVariant : colorScheme.outlineVariant.withOpacity(0.5),
+            color: isDarkMode ? colorScheme.outlineVariant : colorScheme.outlineVariant.withValues(alpha: 0.5),
           ),
           SizedBox(height: 16),
           Text(
@@ -326,7 +326,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             Icon(
               Icons.insert_chart_outlined,
               size: 80,
-              color: isDarkMode ? colorScheme.primary.withOpacity(0.5) : colorScheme.primary.withOpacity(0.3),
+              color: isDarkMode ? colorScheme.primary.withValues(alpha: 0.5) : colorScheme.primary.withValues(alpha: 0.3),
             ),
             SizedBox(height: 24),
             Text(
@@ -360,12 +360,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final linkedChildrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
 
     if (linkedChildrenIds.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No tienes hijos vinculados'),
-          backgroundColor: Colors.orange,
-        ),
-      );
+      if (mounted) {
+        // ignore: use_build_context_synchronously
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No tienes hijos vinculados'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
       return;
     }
 
@@ -383,6 +386,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     if (!mounted) return;
 
     showDialog(
+      // ignore: use_build_context_synchronously
       context: context,
       builder: (dialogContext) {
         final dialogColorScheme = Theme.of(dialogContext).colorScheme;
@@ -979,6 +983,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     // ✅ PASO 3: Si no es Premium, mostrar dialog de Rewarded Video con opción Premium
     if (needsRewardedAd && mounted) {
       ReleaseLogger.log('Usuario FREE, mostrando dialog de Rewarded Ad...', tag: 'ReportsScreen');
+      // ignore: use_build_context_synchronously
       final shouldProceed = await _showRewardedAdDialog(scaffoldContext, childName);
       ReleaseLogger.log('_showRewardedAdDialog retornó: $shouldProceed', tag: 'ReportsScreen');
       if (!shouldProceed) {
@@ -989,7 +994,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     // ✅ PASO 3: Mostrar dialog de "en proceso" (después de ver el video)
     if (mounted) {
+      // ignore: use_build_context_synchronously
       showDialog(
+        // ignore: use_build_context_synchronously
         context: scaffoldContext,
         barrierDismissible: false,
         builder: (dialogContext) => AlertDialog(
@@ -1035,6 +1042,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
 
     // Llamar a la Cloud Function en background (no bloquea la UI)
+    // ignore: use_build_context_synchronously
     _callGenerateReportInBackground(childId, childName, scaffoldContext);
   }
 
@@ -1377,7 +1385,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
       if (mounted) {
         // Cerrar el diálogo de "en proceso" si está abierto
+        // ignore: use_build_context_synchronously
         Navigator.of(scaffoldContext, rootNavigator: true).pop();
+        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(scaffoldContext).showSnackBar(
           SnackBar(
             content: Text('Error generando reporte: ${e.toString()}'),
@@ -1458,7 +1468,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             Container(
               padding: EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
+                color: Colors.blue.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
@@ -1484,6 +1494,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           ElevatedButton(
             onPressed: () async {
               await _markAlertAsRead(alertData['messageId'] ?? '');
+              // ignore: use_build_context_synchronously
               Navigator.pop(context);
             },
             style: ElevatedButton.styleFrom(backgroundColor: colorScheme.primary),
@@ -1534,9 +1545,9 @@ class DetailedReportScreen extends StatelessWidget {
             Container(
               padding: EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.orange.withOpacity(0.15),
+                color: Colors.orange.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.orange.withOpacity(0.3)),
+                border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
               ),
               child: Row(
                 children: [
@@ -1664,9 +1675,9 @@ class DetailedReportScreen extends StatelessWidget {
             Container(
               padding: EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.1),
+                color: Colors.red.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.red.withOpacity(0.3)),
+                border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
               ),
               child: Row(
                 children: [
@@ -1715,7 +1726,7 @@ class DetailedReportScreen extends StatelessWidget {
           Container(
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.blue.withOpacity(0.1),
+              color: Colors.blue.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
@@ -1791,7 +1802,7 @@ class DetailedReportScreen extends StatelessWidget {
           Container(
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.grey.withOpacity(0.1),
+              color: Colors.grey.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
@@ -1824,7 +1835,7 @@ class DetailedReportScreen extends StatelessWidget {
       margin: EdgeInsets.only(bottom: 12),
       padding: EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.grey.withOpacity(0.05),
+        color: Colors.grey.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -1884,7 +1895,7 @@ class DetailedReportScreen extends StatelessWidget {
     return Container(
       padding: EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -2081,9 +2092,9 @@ class DetailedReportScreen extends StatelessWidget {
         Container(
           padding: EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: Colors.blue.withOpacity(0.1),
+            color: Colors.blue.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.blue.withOpacity(0.3)),
+            border: Border.all(color: Colors.blue.withValues(alpha: 0.3)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2101,7 +2112,7 @@ class DetailedReportScreen extends StatelessWidget {
               Container(
                 padding: EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.5),
+                  color: Colors.white.withValues(alpha: 0.5),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Row(

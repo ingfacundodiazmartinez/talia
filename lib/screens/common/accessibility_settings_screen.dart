@@ -119,7 +119,7 @@ class _AccessibilitySettingsScreenState
           // Header con información
           Container(
             padding: const EdgeInsets.all(16),
-            color: Theme.of(context).primaryColor.withOpacity(0.1),
+            color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
             child: Row(
               children: [
                 const Icon(Icons.accessibility, size: 32),

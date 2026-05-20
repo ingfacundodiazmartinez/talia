@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../models/story.dart';
+import '../../../services/user_cache_service.dart';
 import '../../../models/viewer_item.dart';
 import '../../../controllers/story_viewer_controller.dart';
 import 'story_progress_indicators.dart';
@@ -788,13 +788,13 @@ class _StackedAvatarsWidget extends StatelessWidget {
 
   Future<List<Map<String, dynamic>>> _fetchUsers() async {
     try {
-      final firestore = FirebaseFirestore.instance;
       final users = <Map<String, dynamic>>[];
+      final userCacheService = UserCacheService();
 
       for (final userId in userIds.take(3)) {
-        final doc = await firestore.collection('users').doc(userId).get();
-        if (doc.exists) {
-          users.add({'id': doc.id, ...doc.data() ?? {}});
+        final userData = await userCacheService.getUserData(userId);
+        if (userData != null) {
+          users.add({'id': userId, ...userData});
         }
       }
 
@@ -921,22 +921,13 @@ class _LikesListWidget extends StatelessWidget {
 
   Future<List<Map<String, dynamic>>> _fetchUsers() async {
     try {
-      final firestore = FirebaseFirestore.instance;
       final users = <Map<String, dynamic>>[];
+      final userCacheService = UserCacheService();
 
-      // Fetch users in chunks of 10 (Firestore whereIn limit)
-      for (int i = 0; i < likedByIds.length; i += 10) {
-        final chunk = likedByIds.skip(i).take(10).toList();
-        final snapshot = await firestore
-            .collection('users')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .get();
-
-        for (final doc in snapshot.docs) {
-          users.add({
-            'id': doc.id,
-            ...doc.data(),
-          });
+      for (final userId in likedByIds) {
+        final userData = await userCacheService.getUserData(userId);
+        if (userData != null) {
+          users.add({'id': userId, ...userData});
         }
       }
 
@@ -1043,21 +1034,13 @@ class _ViewedByListWidget extends StatelessWidget {
 
   Future<List<Map<String, dynamic>>> _fetchUsers() async {
     try {
-      final firestore = FirebaseFirestore.instance;
       final users = <Map<String, dynamic>>[];
+      final userCacheService = UserCacheService();
 
-      for (int i = 0; i < viewedByIds.length; i += 10) {
-        final chunk = viewedByIds.skip(i).take(10).toList();
-        final snapshot = await firestore
-            .collection('users')
-            .where(FieldPath.documentId, whereIn: chunk)
-            .get();
-
-        for (final doc in snapshot.docs) {
-          users.add({
-            'id': doc.id,
-            ...doc.data(),
-          });
+      for (final userId in viewedByIds) {
+        final userData = await userCacheService.getUserData(userId);
+        if (userData != null) {
+          users.add({'id': userId, ...userData});
         }
       }
 

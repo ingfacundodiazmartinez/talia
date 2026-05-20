@@ -1,0 +1,503 @@
+═══════════════════════════════════════════════════════════════
+CODEPREP - Registro de Query
+═══════════════════════════════════════════════════════════════
+
+Fecha: 2026-01-24 23:36:39
+Proyecto: /Users/olagg/Personal/talia
+
+─── MÉTRICAS REALES ───
+Input tokens:       21,359
+Output tokens:      2,132
+Cache creado:       0
+Cache leído:        0
+TOTAL:              23,491 tokens
+Costo:              $0.0036 USD
+Tiempo:             118.5s
+
+─── QUERY ───
+Este proyecto se genero con claude puro, sin codeprep. Necesito que identifiques donde hay queries a firestore que no sean nada performantes. Por ejemplo, loops de x usuarios donde por cada iteracion se haga una query (contexto adicional 1)
+
+─── CONTEXTO ENVIADO ───
+Aquí está el contexto adicional que pediste:
+
+## Contexto Adicional Solicitado
+*Búsqueda: "archivos que contengan patrones de consulta a Firestore en loops, especialmente en servicios de chat, contactos y grupos"*
+
+Se encontraron 12 archivos relevantes:
+
+### `/Users/olagg/Personal/talia/lib/utils/release_logger.dart` (relevancia: 0.90)
+```dart
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+
+class ReleaseLogger {
+  static ReleaseLogger? _instance;
+  static ReleaseLogger get instance {
+    _instance ??= ReleaseLogger._();
+    return _instance!;
+  }
+
+  File? _logFile;
+
+  ReleaseLogger._() {
+    _initializeLogger();
+  }
+
+  Future<void> _initializeLogger() async {
+    try {
+      debugPrint('📝 [ReleaseLogger] Logs escribiendo a: ${_logFile!.path}');
+    } catch (e) {
+      debugPrint('❌ [ReleaseLogger] Error inicializando logger: $e');
+    }
+  }
+
+  static void log(String message, {String? tag}) {
+    var fullMessage = tag != null ? '[$tag] $message' : message;
+    final time = DateTime.now().toIso8601String();
+
+    final consoleMessage = '$time = $fullMessage';
+
+    // ✅ MÉTODO 2: stdout directo - más confiable en release
+    stdout.writeln('🔷 $consoleMessage');
+    debugPrint('🔷 $consoleMessage');
+  }
+
+  static void error(
+    String message, {
+    dynamic error,
+    StackTrace? stackTrace,
+    String? tag,
+  }) {
+    final fullMessage = tag != null ? '[$tag] $message' : message;
+    final time = DateTime.now().toIso8601String();
+
+    final consoleMessage = '❌ $fullMessage';
+    final consoleWithTime = '$time = $consoleMessage';
+
+    // ✅ MÉTODO 2: stderr directo - más confiable en release para errores
+    stderr.writeln('🔴 $consoleWithTime');
+    if (error != null) {
+      stderr.writeln('🔴    Error: $error');
+    }
+  }
+
+  static void info(String message, {String? tag}) {
+    log('ℹ️ $message', tag: tag);
+  }
+
+  static void success(String message, {String? tag}) {
+    log('✅ $message', tag: tag);
+  }
+
+  static void warning(String message, {String? tag}) {
+    log('⚠️ $message', tag: tag);
+  }
+}
+```
+
+### `/Users/olagg/Personal/talia/lib/main.dart` (relevancia: 0.90)
+```dart
+// 12 imports omitidos para brevedad
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+// ... y 9 más
+
+import 'auth_screen.dart';
+import 'screens/parent/parent_main_shell.dart';
+import 'screens/child/child_main_shell.dart';
+import 'screens/common/profile_completion_screen.dart';
+import 'screens/auth/two_factor_verification_screen.dart';
+import 'package:flutter_native_splash/flutter_native_splash.dart';
+import 'notification_service.dart';
+import 'theme_service.dart';
+import 'services/two_factor_session_service.dart';
+import 'services/app_config_service.dart';
+import 'services/message_cache_service.dart';
+import 'services/dashboard_cache_service.dart';
+import 'services/notification_cache_service.dart';
+import 'services/device_session_service.dart';
+import 'services/online_status_service.dart';
+import 'services/screenshot_protection_service.dart';
+import 'services/voip_service.dart';
+import 'services/call_service_wrapper.dart';
+import 'services/local_unread_count_service.dart';
+import 'services/app_state_service.dart';
+import 'services/analytics_service.dart';
+import 'services/performance_service.dart';
+import 'services/snackbar_service.dart';
+import 'services/network_status_service.dart';
+import 'services/permission_sync_service.dart';
+import 'services/offline_queue_service.dart';
+import 'services/accessibility_service.dart';
+import 'services/stickers_service.dart';
+import 'services/character_service.dart';
+import 'services/unread_messages_service.dart';
+import 'services/ad_service.dart';
+import 'services/story_service_refactored.dart';
+import 'services/contact_photo_cache_service.dart';
+import 'services/deep_link_service.dart';
+import 'services/share_target_service.dart';
+import 'services/shared_keychain_service.dart';
+import 'screens/share_target_selection_screen.dart';
+import 'models/shared_content.dart';
+import 'services/chats/chat_orchestrator.dart';
+import 'services/chats/services/chat_messaging_service.dart';
+import 'services/chats/chat_preferences_cache.dart';
+import 'calls_v2/services/agora_engine_service.dart';
+import 'calls_v2/config/agora_config.dart';
+import 'dart:async';
+import 'utils/release_logger.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
+import 'services/device_contact_name_cache.dart';
+import 'services/nudge_service.dart';
+import 'models/nudge.dart';
+import 'widgets/nudge/nudge_receiver_overlay.dart';
+
+import 'config/app_config.dart
+```
+
+### `/Users/olagg/Personal/talia/lib/services/chats/services/chat_retrieval_service.dart` (relevancia: 0.76)
+```dart
+  Future<List<ChatMessage>> loadNewerMessages({
+    required String chatId,
+    ChatMessage? sinceMessage,
+    int limit = 20,
+  }) async {
+    try {
+      // Por ahora retornar vacío - método placeholder
+      ReleaseLogger.info('loadNewerMessages no implementado aún', tag: 'ChatRetrieval');
+      return [];
+
+    } catch (e) {
+      ReleaseLogger.error('Error cargando mensajes nuevos: $e', tag: 'ChatRetrieval');
+      return [];
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // ACCESO A CACHE Y DATOS OFFLINE
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Obtener mensajes del cache (datos offline)
+  List<ChatMessage> getCachedMessages(String chatId) {
+    try {
+      return _cacheManager.getCachedMessages(chatId);
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo mensajes del cache: $e', tag: 'ChatRetrieval');
+      return [];
+    }
+  }
+
+  /// Verificar si el cache es válido para un chat
+  bool isCacheValidForChat(String chatId) {
+    return _cacheManager.isCacheValidForChat(chatId);
+  }
+
+  /// Obtener información de un chat específico
+  /// TODO: Adaptar cuando getChatById retorne Chat en lugar de DocumentSnapshot
+  Future<Chat?> getChatInfo(String chatId) async {
+    try {
+      final doc = await _chatRepository.getChatById(chatId);
+      if (doc != null && doc.exists) {
+        final data = doc.data() as Map<String, dynamic>;
+        return Chat(
+          id: doc.id,
+          type: data['type'] ?? 'individual',
+          name: data['name'] ?? '',
+          participants: List<String>.from(data['participants'] ?? []),
+          lastActivity: (data['lastActivity'] as Timestamp?)?.toDate() ?? DateTime.now(),
+          unreadCount: data['unreadCount'] ?? 0,
+        );
+      }
+      return null;
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo info del chat: $e', tag: 'ChatRetrieval');
+      return null;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // FILTROS Y ORDENAMIENTO
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Filtrar mensajes por rango de fechas
+  /// TODO: Implementar cuando tengamos el método en repository
+  Future<List<ChatMessage>> getMessagesByDateRange({
+    required String chatId,
+    required DateTime startDate,
+    required DateTime endDate,
+    int limit = 100,
+  }) async {
+    try {
+      // Por ahora filtrar del cache local
+      final cachedMessages = _cacheManager.getCachedMessages(chatId);
+      final filteredMessages = cachedMessages.where((message) {
+        final messageTime = message.localTimestamp ?? message.timestamp?.toDate();
+        if (messageTime == null) return false;
+        return messageTime.isAfter(startDate) && messageTime.isBefore(endDate);
+      }).take(limit).toList();
+
+      return filteredMessages;
+    } catch (e) {
+      ReleaseLogger.error('Error obteniendo mensajes por fecha: $e', tag: 'ChatRetrieval');
+      return [];
+    }
+  }
+
+  /// Obtener mensajes no leídos de un chat
+  /// TODO: Implementar con método específico
+  Future<List<ChatMessage>> getUnreadMessages(String chatId) async {
+    try {
+      // Por ahora filtrar del cache
+      final cachedMessages = _cacheManager.getCachedMess...
+
+─── RESPUESTA DE CLAUDE ───
+Basándome en el análisis anterior y el contexto adicional proporcionado, puedo identificar **patrones de consulta a Firestore en loops** en los archivos de chat, contactos y grupos:
+
+## 🔍 **Patrones de Consulta a Firestore en Loops Identificados**
+
+### **1. Patrón Crítico: N+1 Queries en Listas de Chats**
+**Archivo:** `/lib/screens/child/chats/child_chats_screen.dart` y `/lib/screens/parent/chats/parent_chats_screen.dart`
+
+```dart
+// PROBLEMA: Consulta individual por cada usuario en la lista
+Widget _buildItemWidget(...) {
+  return StreamBuilder<DocumentSnapshot>(
+    key: ValueKey('user_stream_$userId'),
+    stream: _chatsController.getUserDataStream(userId), // ← CONSULTA INDIVIDUAL
+    builder: (context, userSnapshot) {
+      // Para cada chat, se hace una consulta separada
+    }
+  );
+}
+```
+
+**Impacto:** Si hay 50 chats en la lista → 50 consultas individuales a Firestore.
+
+### **2. Patrón de Consultas Anidadas en StreamBuilders**
+**Archivo:** Ambos archivos de chats screen
+
+```dart
+// PROBLEMA: StreamBuilders anidados que crean múltiples suscripciones
+StreamBuilder<QuerySnapshot>( // ← Stream principal de chats
+  builder: (context, snapshot) {
+    return StreamBuilder<QuerySnapshot>( // ← Stream de grupos
+      builder: (context, groupsSnapshot) {
+        return StreamBuilder<QuerySnapshot>( // ← Stream de grupos pendientes
+          // Múltiples suscripciones simultáneas
+        );
+      }
+    );
+  }
+);
+```
+
+### **3. Consultas por Estado de Mensaje (Last Message Status)**
+**Archivo:** Ambos archivos de chats screen
+
+```dart
+// PROBLEMA: Consulta adicional para estado del último mensaje
+return StreamBuilder<QuerySnapshot>(
+  key: ValueKey('last_msg_${chatDoc.id}'),
+  stream: _chatsController.getChatLastMessageStream(chatDoc.id), // ← CONSULTA EXTRA
+  builder: (context, messageSnapshot) {
+    // Para cada chat con mensaje propio, consulta adicional
+  }
+);
+```
+
+### **4. Consultas de Bloqueo por Contacto**
+**Archivo:** Ambos archivos de chats screen
+
+```dart
+// PROBLEMA: Consulta de bloqueo por cada contacto
+return StreamBuilder<bool>(
+  key: ValueKey('blocked_$childId'),
+  stream: _blockService.isBlockedStream(childId), // ← CONSULTA POR CADA CONTACTO
+  initialData: false,
+  builder: (context, blockedSnapshot) {
+    // ...
+  }
+);
+```
+
+## 📊 **Análisis de Costos y Rendimiento**
+
+### **Escenario Típico:**
+- **50 chats** en la lista
+- **10 grupos** activos
+- **5 chats** con últimos mensajes propios
+
+**Consultas estimadas:**
+```
+1. 50 consultas individuales de usuarios
+2. 50 consultas de bloqueo por contacto
+3. 5 consultas de último mensaje
+4. 1 consulta de lista de chats
+5. 1 consulta de lista de grupos
+6. 1 consulta de grupos pendientes
+---
+TOTAL: ~108 consultas por pantalla
+```
+
+## 🚨 **Problemas Identificados**
+
+### **A. Problemas de Rendimiento:**
+1. **N+1 Query Problem**: Consulta individual por cada item en lugar de batch
+2. **Stream Overload**: Múltiples StreamBuilders anidados crean muchas suscripciones
+3. **Cold Start Penalty**: Cada consulta individual tiene latency overhead
+
+### **B. Problemas de Costo:**
+1. **Firestore Read Costs**: Cada consulta individual cuenta como un read
+2. **Connection Overhead**: Múltiples conexiones simultáneas
+3. **Battery Drain**: Múltiples listeners activos
+
+### **C. Problemas de Experiencia de Usuario:**
+1. **Loading Times**: Múltiples spinners y estados de carga
+2. **UI Jank**: Rebuilds constantes por streams individuales
+3. **Inconsistencias**: Diferentes tiempos de carga por item
+
+## 💡 **Recomendaciones de Optimización**
+
+### **1. Implementar Batch Queries**
+```dart
+// ANTES: Consultas individuales
+Stream<DocumentSnapshot> getUserDataStream(String userId) {
+  return _firestore.collection('users').doc(userId).snapshots();
+}
+
+// DESPUÉS: Batch query
+Stream<List<DocumentSnapshot>> getUsersBatchStream(List<String> userIds) {
+  return _firestore
+      .collection('users')
+      .where(FieldPath.documentId, whereIn: userIds)
+      .snapshots()
+      .map((snapshot) => snapshot.docs);
+}
+```
+
+### **2. Cache de Usuarios con Prefetching**
+```dart
+// Usar UserCacheService para precargar datos
+Future<void> preloadUserData(List<String> userIds) async {
+  await _userCacheService.prefetchUsers(userIds);
+}
+
+// En la UI, usar cache en lugar de streams individuales
+Widget _buildChatItem(...) {
+  final userData = _userCacheService.getCachedUser(userId);
+  if (userData != null) {
+    // Usar datos cacheados
+  }
+}
+```
+
+### **3. Consolidar Streams**
+```dart
+// Crear ViewModel consolidado
+class ChatListViewModel {
+  final Stream<List<ChatItem>> chatsStream;
+  final Stream<Map<String, UserData>> usersStream;
+  final Stream<Map<String, bool>> blockedStatusStream;
+  
+  // Un solo stream que combine todo
+  Stream<ChatListViewState> get consolidatedStream => ...
+}
+```
+
+### **4. Implementar Paginación y Lazy Loading**
+```dart
+// Cargar en chunks en lugar de todo a la vez
+Future<void> loadNextPage() async {
+  final nextBatch = await _chatRepository.getChatsPage(
+    limit: 20,
+    lastDocument: _lastDocument
+  );
+  // Agregar a lista existente
+}
+```
+
+### **5. Usar Denormalización para Datos Frecuentes**
+```dart
+// Almacenar datos necesarios en el documento del chat
+{
+  "chatId": "abc123",
+  "participants": ["user1", "user2"],
+  "participantNames": {  // ← Datos denormalizados
+    "user1": "Juan Pérez",
+    "user2": "María García"
+  },
+  "participantPhotos": {
+    "user1": "url1",
+    "user2": "url2"
+  },
+  "isBlockedByUser1": false,
+  "isBlockedByUser2": false
+}
+```
+
+## 🛠 **Plan de Acción Priorizado**
+
+### **Fase 1: Quick Wins (1-2 días)**
+1. **Implementar UserCacheService** con prefetching
+2. **Limitar número de StreamBuilders** anidados
+3. **Añadir debouncing** a búsquedas
+
+### **Fase 2: Optimizaciones Medias (3-5 días)**
+1. **Batch queries** para usuarios y estados de bloqueo
+2. **Consolidar streams** en ViewModels
+3. **Implementar paginación** básica
+
+### **Fase 3: Refactor Profundo (1-2 semanas)**
+1. **Rediseñar estructura de datos** con denormalización
+2. **Implementar offline-first** con cache inteligente
+3. **Crear sistema de preloading** predictivo
+
+## 📈 **Métricas de Mejora Esperadas**
+
+| Métrica | Antes | Después | Mejora |
+|---------|-------|---------|---------|
+| Consultas por pantalla | ~108 | ~5-10 | 90-95% |
+| Tiempo de carga inicial | 3-5s | <1s | 80% |
+| Uso de memoria | Alto | Moderado | 50% |
+| Costo Firestore | Alto | Bajo | 70-80% |
+
+## 🔧 **Código de Ejemplo para Batch Query**
+
+```dart
+class OptimizedChatsController {
+  final FirebaseFirestore _firestore;
+  final UserCacheService _userCache;
+  
+  Stream<Map<String, UserData>> getUsersBatchStream(List<String> userIds) {
+    if (userIds.isEmpty) return Stream.value({});
+    
+    return _firestore
+        .collection('users')
+        .where(FieldPath.documentId, whereIn: userIds)
+        .snapshots()
+        .map((snapshot) {
+          final Map<String, UserData> users = {};
+          for (final doc in snapshot.docs) {
+            users[doc.id] = UserData.fromMap(doc.data());
+          }
+          return users;
+        });
+  }
+  
+  Future<void> preloadEssentialData(List<String> chatIds) async {
+    // Preload users, blocked status, last messages in batch
+    final userIds = await _extractUserIdsFromChats(chatIds);
+    await _userCache.prefetchUsers(userIds);
+    await _preloadBlockedStatus(userIds);
+  }
+}
+```
+
+**Conclusión:** Los patrones actuales de consulta a Firestore son ineficientes y costosos. Se recomienda implementar urgentemente batch queries, caching y consolidación de streams para mejorar rendimiento y reducir costos.
+
+═══════════════════════════════════════════════════════════════

@@ -65,14 +65,28 @@ class _ChatAppBarState extends State<ChatAppBar> {
       ),
       title: InkWell(
         onTap: widget.onTap,
-        child: StreamBuilder<DocumentSnapshot>(
+        child: StreamBuilder<bool>(
+          // Si el contacto bloqueó al usuario, ocultamos foto + estado online
+          // + última conexión. El bloqueado no debe saber el motivo: ve el
+          // chat normal pero sin información del contacto.
+          stream: _blockService.shouldHidePhotoOfStream(widget.contactId),
+          initialData: false,
+          builder: (context, hideStateSnap) {
+            final hideContactState = hideStateSnap.data ?? false;
+            return StreamBuilder<DocumentSnapshot>(
           stream: _controller.getContactDataStream(widget.contactId),
           builder: (context, snapshot) {
             final contactData = _controller.extractContactData(snapshot.data);
             final photoURL = contactData['photoURL'] as String;
-            final isOnline = contactData['isOnline'] as bool;
-            final lastSeen = contactData['lastSeen'] as Timestamp?;
-            final hideLastSeen = contactData['hideLastSeen'] as bool;
+            final isOnline = hideContactState
+                ? false
+                : (contactData['isOnline'] as bool);
+            final lastSeen = hideContactState
+                ? null
+                : (contactData['lastSeen'] as Timestamp?);
+            final hideLastSeen = hideContactState
+                ? true
+                : (contactData['hideLastSeen'] as bool);
 
             // Escuchar el estado de actividad (typing o recording)
             return StreamBuilder<UserActivityState>(
@@ -110,11 +124,19 @@ class _ChatAppBarState extends State<ChatAppBar> {
 
                 return Row(
                   children: [
-                    // Avatar del contacto (clickeable para ver ampliado)
-                    ClickableAvatar(
-                      photoUrl: photoURL.isNotEmpty ? photoURL : null,
-                      name: widget.contactName,
-                      radius: 18,
+                    // Avatar del contacto. Si el contacto bloqueó al usuario actual,
+                    // se oculta la foto (avatar por defecto) sin avisarle el motivo.
+                    StreamBuilder<bool>(
+                      stream: _blockService.shouldHidePhotoOfStream(widget.contactId),
+                      initialData: false,
+                      builder: (context, hideSnap) {
+                        final hide = hideSnap.data ?? false;
+                        return ClickableAvatar(
+                          photoUrl: (!hide && photoURL.isNotEmpty) ? photoURL : null,
+                          name: widget.contactName,
+                          radius: 18,
+                        );
+                      },
                     ),
                     const SizedBox(width: 12),
                     // Nombre y estado
@@ -159,6 +181,8 @@ class _ChatAppBarState extends State<ChatAppBar> {
               },
             );
           },
+        );
+          },
         ),
       ),
       backgroundColor: isDarkMode ? colorScheme.surface : colorScheme.primary,
@@ -202,7 +226,8 @@ class _ChatAppBarState extends State<ChatAppBar> {
         ),
 
         StreamBuilder<bool>(
-          stream: _blockService.isBlockedStream(widget.contactId),
+          // Solo el bloqueador ve el estado bloqueado en el menú.
+          stream: _blockService.iBlockedStream(widget.contactId),
           initialData: false,
           builder: (context, blockedSnapshot) {
             final isBlocked = blockedSnapshot.data ?? false;

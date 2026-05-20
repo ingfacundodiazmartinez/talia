@@ -36,6 +36,8 @@ class StoryApprovalService {
       throw Exception('Usuario no autenticado');
     }
 
+    // Optimistic: actualizar cache local YA para UI instantánea.
+    _cacheManager.updateStoryStatus(storyId, StoryStatus.approved);
     try {
       // Llamar Cloud Function segura
       final result = await _functions.httpsCallable('approveStory').call({
@@ -43,17 +45,19 @@ class StoryApprovalService {
         'message': message,
       });
 
-      final response = result.data as Map<String, dynamic>;
-
-      if (response['success'] == true) {
-        // Actualizar cache local después de éxito server-side
-        _cacheManager.updateStoryStatus(storyId, StoryStatus.approved);
-      } else {
+      final raw = result.data;
+      if (raw is! Map) {
+        throw Exception('Respuesta inválida (type=${raw.runtimeType})');
+      }
+      if (raw['success'] != true) {
+        // Revertir si la CF falló (asumimos que era rejected antes)
+        _cacheManager.updateStoryStatus(storyId, StoryStatus.rejected);
         throw Exception(
-          'Cloud Function falló: ${response['message'] ?? 'Error desconocido'}',
+          'Cloud Function falló: ${raw['message'] ?? 'Error desconocido'}',
         );
       }
     } catch (e) {
+      _cacheManager.updateStoryStatus(storyId, StoryStatus.rejected);
       ReleaseLogger.error(
         'Error llamando Cloud Function approveStory: $e',
         tag: 'StoryApproval',
@@ -76,14 +80,16 @@ class StoryApprovalService {
         'reason': reason,
       });
 
-      final response = result.data as Map<String, dynamic>;
-
-      if (response['success'] == true) {
+      final raw = result.data;
+      if (raw is! Map) {
+        throw Exception('Respuesta inválida (type=${raw.runtimeType})');
+      }
+      if (raw['success'] == true) {
         // Actualizar cache local después de éxito server-side
         _cacheManager.updateStoryStatus(storyId, StoryStatus.rejected);
       } else {
         throw Exception(
-          'Cloud Function returned failure: ${response['message'] ?? 'Unknown error'}',
+          'Cloud Function returned failure: ${raw['message'] ?? 'Unknown error'}',
         );
       }
     } catch (e) {
@@ -92,6 +98,38 @@ class StoryApprovalService {
         tag: 'StoryApproval',
       );
       throw Exception('Error rechazando historia: $e');
+    }
+  }
+
+  /// Restaurar una historia rechazada a pending (undo de reject desde Pendientes)
+  Future<void> restoreStoryToPending(String storyId) async {
+    final currentUserId = _storyRepository.currentUserId;
+    if (currentUserId == null) {
+      throw Exception('Usuario no autenticado');
+    }
+    // Optimistic: actualizar cache local YA para que el UI reaccione sin esperar la CF.
+    _cacheManager.updateStoryStatus(storyId, StoryStatus.pending);
+    try {
+      final result = await _functions.httpsCallable('restoreStoryToPending').call({
+        'storyId': storyId,
+      });
+      final raw = result.data;
+      if (raw is! Map) {
+        throw Exception('Respuesta inválida (type=${raw.runtimeType})');
+      }
+      if (raw['success'] != true) {
+        // Revertir si la CF falló
+        _cacheManager.updateStoryStatus(storyId, StoryStatus.rejected);
+        throw Exception('Cloud Function falló: ${raw['message'] ?? 'Error desconocido'}');
+      }
+    } catch (e) {
+      // Revertir si hubo error
+      _cacheManager.updateStoryStatus(storyId, StoryStatus.rejected);
+      ReleaseLogger.error(
+        'Error llamando Cloud Function restoreStoryToPending: $e',
+        tag: 'StoryApproval',
+      );
+      throw Exception('Error restaurando historia: $e');
     }
   }
 

@@ -1,36 +1,25 @@
 import 'package:flutter/material.dart';
 
-/// Barra que muestra cuando hay un bloqueo activo
+/// Barra que se muestra al usuario que bloqueó al contacto.
 ///
-/// Responsabilidades:
-/// - Mostrar mensaje cuando el usuario ha bloqueado al contacto
-/// - Mostrar mensaje cuando el contacto ha bloqueado al usuario
-/// - Estilo visual consistente con indicador de error/advertencia
+/// Esta barra SOLO se muestra al bloqueador. El bloqueado nunca debe enterarse
+/// de que fue bloqueado, así que esta barra no se renderiza desde su lado.
 class BlockedMessageBar extends StatelessWidget {
-  final bool isBlocked;
-  final bool isBlockedBy;
-
-  const BlockedMessageBar({
-    super.key,
-    required this.isBlocked,
-    required this.isBlockedBy,
-  });
+  const BlockedMessageBar({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       color: Colors.red.withValues(alpha: 0.1),
-      child: Row(
+      child: const Row(
         children: [
-          const Icon(Icons.block, color: Colors.red, size: 20),
-          const SizedBox(width: 12),
+          Icon(Icons.block, color: Colors.red, size: 20),
+          SizedBox(width: 12),
           Expanded(
             child: Text(
-              isBlocked
-                  ? 'Has bloqueado a este contacto. No puedes enviar ni recibir mensajes.'
-                  : 'Este contacto te ha bloqueado.',
-              style: const TextStyle(color: Colors.red, fontSize: 13),
+              'Has bloqueado a este contacto. No puedes enviar ni recibir mensajes.',
+              style: TextStyle(color: Colors.red, fontSize: 13),
             ),
           ),
         ],

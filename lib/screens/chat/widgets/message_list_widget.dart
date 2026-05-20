@@ -312,7 +312,7 @@ class MessageListWidget extends StatelessWidget {
           ),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
-            color: colorScheme.surfaceContainerHighest.withOpacity(0.5),
+            color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
             borderRadius: BorderRadius.circular(16),
           ),
           child: Row(
@@ -321,7 +321,7 @@ class MessageListWidget extends StatelessWidget {
               Icon(
                 Icons.block,
                 size: 16,
-                color: colorScheme.onSurfaceVariant.withOpacity(0.6),
+                color: colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
               ),
               const SizedBox(width: 8),
               Flexible(
@@ -329,7 +329,7 @@ class MessageListWidget extends StatelessWidget {
                   'Este mensaje fue eliminado',
                   style: TextStyle(
                     fontStyle: FontStyle.italic,
-                    color: colorScheme.onSurfaceVariant.withOpacity(0.6),
+                    color: colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
                     fontSize: 14,
                   ),
                 ),
@@ -339,7 +339,7 @@ class MessageListWidget extends StatelessWidget {
                 timeString,
                 style: TextStyle(
                   fontSize: 11,
-                  color: colorScheme.onSurfaceVariant.withOpacity(0.5),
+                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
                 ),
               ),
             ],

@@ -465,6 +465,85 @@ exports.rejectStory = onCall({
   }
 });
 
+/**
+ * Cloud Function para restaurar una historia rechazada a pending
+ * (undo del reject desde el tab "Pendientes")
+ */
+exports.restoreStoryToPending = onCall({
+  region: 'us-central1',
+  cors: true,
+}, async (request) => {
+  const { data, auth } = request;
+  const { storyId } = data;
+
+  console.log(`🔐 [RestoreStory] Iniciando restauración a pending: ${storyId} por ${auth?.uid}`);
+
+  if (!auth?.uid) {
+    throw new HttpsError('unauthenticated', 'Usuario no autenticado');
+  }
+  if (!storyId) {
+    throw new HttpsError('invalid-argument', 'storyId es requerido');
+  }
+
+  try {
+    const storyRef = db.collection('stories').doc(storyId);
+    const storyDoc = await storyRef.get();
+    if (!storyDoc.exists) {
+      throw new HttpsError('not-found', 'Historia no encontrada');
+    }
+    const storyData = storyDoc.data();
+    // Solo permitir restaurar desde rejected
+    if (storyData.status !== 'rejected') {
+      throw new HttpsError(
+        'failed-precondition',
+        `La historia no está rechazada (status=${storyData.status})`
+      );
+    }
+
+    // Validar permisos
+    await validateApprovalPermissions(storyId, auth.uid, storyData.userId);
+
+    await db.runTransaction(async (transaction) => {
+      transaction.update(storyRef, {
+        status: 'pending',
+        rejectedAt: FieldValue.delete(),
+        rejectedBy: FieldValue.delete(),
+        rejectionReason: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
+      // Restaurar approval_requests resueltas por este padre a pending
+      const requestsQuery = await db
+        .collection('story_approval_requests')
+        .where('storyId', '==', storyId)
+        .where('status', '==', 'rejected')
+        .get();
+
+      for (const requestDoc of requestsQuery.docs) {
+        if (requestDoc.data().parentId === auth.uid) {
+          transaction.update(requestDoc.ref, {
+            status: 'pending',
+            resolvedAt: FieldValue.delete(),
+            resolvedBy: FieldValue.delete(),
+          });
+        }
+      }
+    });
+
+    console.log(`✅ [RestoreStory] Historia restaurada a pending: ${storyId}`);
+    return {
+      success: true,
+      storyId,
+      status: 'pending',
+      message: 'Historia restaurada a pendiente',
+    };
+  } catch (error) {
+    console.error('❌ [RestoreStory] Error:', error);
+    if (error instanceof HttpsError) throw error;
+    throw new HttpsError('internal', `Error interno: ${error.message}`);
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // FUNCIONES AUXILIARES
 // ═══════════════════════════════════════════════════════════════

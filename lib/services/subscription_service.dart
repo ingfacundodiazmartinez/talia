@@ -115,46 +115,6 @@ class SubscriptionService {
     }
   }
 
-  /// Crear sesión de checkout para pago web (Stripe/MercadoPago)
-  Future<CheckoutSession> createCheckoutSession({
-    required SubscriptionTier tier,
-    String provider = 'stripe',
-    String? email,
-  }) async {
-    try {
-      final user = _auth.currentUser;
-      if (user == null) {
-        throw Exception('Usuario no autenticado');
-      }
-
-      final params = {
-        'tier': tier.name,
-        'provider': provider,
-      };
-
-      // Agregar email si se proporciona
-      if (email != null && email.isNotEmpty) {
-        params['email'] = email;
-      }
-
-      final result = await _functions
-          .httpsCallable('createCheckoutSession')
-          .call(params);
-
-      final data = result.data as Map<String, dynamic>;
-
-      return CheckoutSession(
-        sessionId: data['sessionId'] as String,
-        checkoutUrl: data['checkoutUrl'] as String,
-        expiresIn: data['expiresIn'] as int,
-        hasTrial: data['hasTrial'] as bool? ?? false,
-        trialDays: data['trialDays'] as int?,
-      );
-    } catch (e) {
-      rethrow;
-    }
-  }
-
   /// Cancelar suscripción premium actual
   Future<CancellationResult> cancelSubscription() async {
     try {
@@ -265,9 +225,9 @@ class SubscriptionService {
   // ============================================================================
 
   /// Límites de hijos por tier
-  static const int _freeChildLimit = 0;  // Free no puede vincular hijos (debe ser Premium+)
-  static const int _premiumChildLimit = 0;  // Premium no puede vincular hijos (debe ser Premium+)
-  static const int _premiumPlusChildLimit = 3;  // Premium+ puede hasta 3 hijos
+  static const int _freeChildLimit = 3;  // Free puede vincular hasta 3 hijos
+  static const int _premiumChildLimit = 3;  // Premium puede hasta 3 hijos
+  static const int _premiumPlusChildLimit = 3;  // Premium+ puede hasta 3 hijos (con beneficios premium)
 
   /// Obtiene el número actual de hijos vinculados
   Future<int> getLinkedChildrenCount() async {
@@ -662,23 +622,6 @@ class PremiumFeature {
         return [maxFaceSwaps, allCharacters, noAds, maxReports, familyPlan, prioritySupport];
     }
   }
-}
-
-/// Sesión de checkout para pago web
-class CheckoutSession {
-  final String sessionId;
-  final String checkoutUrl;
-  final int expiresIn; // segundos
-  final bool hasTrial;
-  final int? trialDays;
-
-  CheckoutSession({
-    required this.sessionId,
-    required this.checkoutUrl,
-    required this.expiresIn,
-    this.hasTrial = false,
-    this.trialDays,
-  });
 }
 
 /// Resultado de cancelación de suscripción

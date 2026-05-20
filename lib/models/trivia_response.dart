@@ -183,7 +183,7 @@ class TriviaResponse {
   int get averageResponseTimeMs {
     if (answers.isEmpty) return 0;
     final totalTime =
-        answers.fold<int>(0, (sum, a) => sum + a.responseTimeMs);
+        answers.fold<int>(0, (total, a) => total + a.responseTimeMs);
     return totalTime ~/ answers.length;
   }
 

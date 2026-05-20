@@ -9,6 +9,7 @@ class MoodPollStoryWidget extends StatefulWidget {
   final MoodPollQuestion question;
   final VoidCallback onSkip;
   final Function(MoodPollResponse response) onAnswered;
+  final VoidCallback? onClose;
   final VoidCallback? onShareAsStory;
 
   const MoodPollStoryWidget({
@@ -16,6 +17,7 @@ class MoodPollStoryWidget extends StatefulWidget {
     required this.question,
     required this.onSkip,
     required this.onAnswered,
+    this.onClose,
     this.onShareAsStory,
   });
 
@@ -27,7 +29,6 @@ class _MoodPollStoryWidgetState extends State<MoodPollStoryWidget>
     with SingleTickerProviderStateMixin {
   final MoodPollService _pollService = MoodPollService();
   MoodPollOption? _selectedOption;
-  MoodPollResponse? _response;
   bool _isSubmitting = false;
   bool _showShareOption = false;
 
@@ -79,7 +80,6 @@ class _MoodPollStoryWidgetState extends State<MoodPollStoryWidget>
       );
 
       setState(() {
-        _response = response;
         _isSubmitting = false;
         _showShareOption = true;
       });
@@ -411,9 +411,7 @@ class _MoodPollStoryWidgetState extends State<MoodPollStoryWidget>
             Expanded(
               child: OutlinedButton(
                 onPressed: () {
-                  if (_response != null) {
-                    widget.onAnswered(_response!);
-                  }
+                  widget.onClose?.call();
                 },
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
@@ -512,6 +510,10 @@ class MoodPollDialog extends StatelessWidget {
           },
           onAnswered: (r) {
             response = r;
+          },
+          onClose: () {
+            Navigator.of(context).pop();
+            onComplete?.call(response, false);
           },
           onShareAsStory: () {
             Navigator.of(context).pop();

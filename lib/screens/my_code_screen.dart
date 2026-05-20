@@ -4,9 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/user_code_service.dart';
 import '../services/user_role_service.dart';
+import '../services/user_cache_service.dart';
 
 class MyCodeScreen extends StatefulWidget {
   const MyCodeScreen({super.key});
@@ -88,7 +88,8 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
     return Colors.green;
   }
 
-  bool get _isExpired => _timeRemaining.inSeconds <= 0;
+  // Sólo "expirado" si el código tiene expiración y ya transcurrió.
+  bool get _isExpired => _expiresAt != null && _timeRemaining.inSeconds <= 0;
 
   Future<void> _loadUserCode() async {
     try {
@@ -127,11 +128,8 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
 
   Future<String?> _loadUserRole(String userId) async {
     try {
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
-          .get();
-      return userDoc.data()?['role'] as String?;
+      final userData = await UserCacheService().getUserData(userId);
+      return userData?['role'] as String?;
     } catch (e) {
       return null;
     }
@@ -201,12 +199,14 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
 
   void _shareCode() {
     if (_userCode != null) {
-      Share.share(
-        '¡Agrégame en Talia!\n\n'
-        'Haz clic en este enlace para agregarme como contacto:\n'
-        '$_deepLink\n\n'
-        'O usa mi código: $_userCode',
-        subject: 'Agrégame en Talia',
+      SharePlus.instance.share(
+        ShareParams(
+          text: '¡Agrégame en Tália!\n\n'
+              'Haz clic en este enlace para agregarme como contacto:\n'
+              '$_deepLink\n\n'
+              'O usa mi código: $_userCode',
+          subject: 'Agrégame en Tália',
+        ),
       );
     }
   }
@@ -341,47 +341,50 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
 
           SizedBox(height: 16),
 
-          // Countdown banner
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: _getExpirationColor().withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: _getExpirationColor().withValues(alpha: 0.5)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  _isExpired ? Icons.timer_off : Icons.timer,
-                  color: _getExpirationColor(),
-                  size: 20,
-                ),
-                SizedBox(width: 8),
-                Text(
-                  _isExpired ? 'Codigo expirado' : 'Expira en: ${_formatTimeRemaining()}',
-                  style: TextStyle(
+          // Countdown banner — solo aparece si el código tiene expiración (legacy).
+          // Códigos nuevos son permanentes; el usuario puede regenerar manualmente
+          // desde el menú "Regenerar".
+          if (_expiresAt != null) ...[
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: _getExpirationColor().withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: _getExpirationColor().withValues(alpha: 0.5)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    _isExpired ? Icons.timer_off : Icons.timer,
                     color: _getExpirationColor(),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
+                    size: 20,
                   ),
-                ),
-                if (_isExpired) ...[
-                  SizedBox(width: 12),
-                  TextButton(
-                    onPressed: _regenerateCode,
-                    style: TextButton.styleFrom(
-                      foregroundColor: _getExpirationColor(),
-                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  SizedBox(width: 8),
+                  Text(
+                    _isExpired ? 'Codigo expirado' : 'Expira en: ${_formatTimeRemaining()}',
+                    style: TextStyle(
+                      color: _getExpirationColor(),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
                     ),
-                    child: Text('Regenerar'),
                   ),
+                  if (_isExpired) ...[
+                    SizedBox(width: 12),
+                    TextButton(
+                      onPressed: _regenerateCode,
+                      style: TextButton.styleFrom(
+                        foregroundColor: _getExpirationColor(),
+                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      ),
+                      child: Text('Regenerar'),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
-
-          SizedBox(height: 24),
+            SizedBox(height: 24),
+          ],
 
           // Código QR
           Container(
@@ -425,7 +428,8 @@ class _MyCodeScreenState extends State<MyCodeScreen> {
                           version: QrVersions.auto,
                           size: 200.0,
                           backgroundColor: Colors.white,
-                          foregroundColor: Colors.black,
+                          eyeStyle: const QrEyeStyle(color: Colors.black),
+                          dataModuleStyle: const QrDataModuleStyle(color: Colors.black),
                         ),
                       ),
                     ),

@@ -117,6 +117,9 @@ const friendsMigration = require("./migrations/migrate-contacts-to-friends");
 // Talia Assistant (Chat con IA para todos los usuarios)
 const taliaAssistant = require("./talia-assistant");
 
+// Wallet de créditos familiar (Fase 1: modo sombra)
+const wallet = require("./wallet");
+
 // ❌ Voice Changer (ElevenLabs) - ELIMINADO
 // ❌ Replicate Voice (TTS) - ELIMINADO
 
@@ -270,6 +273,7 @@ exports.getStoryPreview = stories.getStoryPreview;
 exports.createStory = storyApproval.createStory;
 exports.approveStory = storyApproval.approveStory;
 exports.rejectStory = storyApproval.rejectStory;
+exports.restoreStoryToPending = storyApproval.restoreStoryToPending;
 
 // Story availableFor Sync Triggers (mantener sincronizado con contactos/bloqueos)
 exports.onBlockCreated = storyApproval.onBlockCreated;
@@ -329,7 +333,7 @@ exports.onUserCreatedCreateTaliaChat = taliaAssistant.onUserCreatedCreateTaliaCh
 exports.onMessageToTalia = taliaAssistant.onMessageToTalia;
 exports.onStoryCreatedTaliaReaction = taliaAssistant.onStoryCreatedTaliaReaction;
 exports.processTaliaPendingReactions = taliaAssistant.processTaliaPendingReactions;
-exports.taliaDailyProactiveMessages = taliaAssistant.taliaDailyProactiveMessages;
+// exports.taliaDailyProactiveMessages = taliaAssistant.taliaDailyProactiveMessages; // ⏸️ PAUSADO - Mensajes proactivos desactivados
 
 // ═══════════════════════════════════════════════════════════════
 // MIGRATIONS (Scripts de migración de datos - ejecutar una vez)
@@ -339,4 +343,17 @@ exports.taliaDailyProactiveMessages = taliaAssistant.taliaDailyProactiveMessages
 exports.migrateContactsToFriends = friendsMigration.migrateContactsToFriends;
 exports.checkMigrationStatus = friendsMigration.checkMigrationStatus;
 
-console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2, Trivia, Talia Assistant, Migrations)");
+// ═══════════════════════════════════════════════════════════════
+// WALLET DE CRÉDITOS FAMILIAR (Fase 1: modo sombra)
+// ═══════════════════════════════════════════════════════════════
+// Documentación: WALLET_SPEC.md
+// Estado: los créditos se acumulan, pero la app cliente todavía no los consume.
+// Cuando el feature flag wallet_enabled se active, los usuarios ya tendrán saldo.
+
+exports.getWalletStatus = wallet.getWalletStatus;
+exports.claimWelcomeBonus = wallet.claimWelcomeBonus;
+exports.claimDailyBonus = wallet.claimDailyBonus;
+exports.earnCreditsFromAd = wallet.earnCreditsFromAd;
+exports.grantPremiumMonthlyToAll = wallet.grantPremiumMonthlyToAll;
+
+console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2, Trivia, Talia Assistant, Migrations, Wallet)");

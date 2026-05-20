@@ -43,10 +43,24 @@ class OnlineStatusService with WidgetsBindingObserver {
       if (!userDoc.exists) return;
 
       final userData = userDoc.data();
-      final showOnlineStatus = userData?['showOnlineStatus'] ?? true;
+      // Default: visible para padres/adultos, OCULTO para menores (privacidad).
+      // El usuario puede cambiarlo en privacy settings.
+      final isChild = userData?['role'] == 'child';
+      final showOnlineStatus = userData?['showOnlineStatus'] ?? !isChild;
 
       if (!showOnlineStatus) {
-        // Si el usuario no quiere mostrar estado online, no configurar presence
+        // El usuario no quiere mostrar estado online.
+        // Marcar offline y limpiar lastSeen para que tampoco se muestre la última conexión.
+        try {
+          await _rtdb.ref('status/${user.uid}').set({
+            'isOnline': false,
+            'lastSeen': null,
+          });
+        } catch (_) {}
+        await _firestore.collection('users').doc(user.uid).update({
+          'isOnline': false,
+          'lastSeen': FieldValue.delete(),
+        });
         return;
       }
 
@@ -113,10 +127,16 @@ class OnlineStatusService with WidgetsBindingObserver {
     if (user == null) return;
 
     try {
+      // RTDB
       final statusRef = _rtdb.ref('status/${user.uid}');
       await statusRef.set({
         'isOnline': false,
         'lastSeen': ServerValue.timestamp,
+      });
+      // Firestore (los widgets leen isOnline de aquí)
+      await _firestore.collection('users').doc(user.uid).update({
+        'isOnline': false,
+        'lastSeen': FieldValue.serverTimestamp(),
       });
     } catch (e) {
       // Silenciar errores

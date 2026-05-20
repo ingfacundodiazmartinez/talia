@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
@@ -7,7 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:app_tracking_transparency/app_tracking_transparency.dart';
 import 'subscription_service.dart';
-import 'app_config_service.dart';
+import 'credit_wallet_service.dart';
 import '../utils/release_logger.dart';
 
 /// Servicio para gestionar anuncios con cumplimiento COPPA y Premium
@@ -34,33 +35,18 @@ class AdService {
   // Test Ad Unit IDs (usar en desarrollo/testing)
   static const String _testAndroidInterstitialAdUnitId =
       'ca-app-pub-3940256099942544/1033173712';
-  static const String _testIosInterstitialAdUnitId =
-      'ca-app-pub-3940256099942544/4411468910';
   static const String _testAndroidNativeAdUnitId =
       'ca-app-pub-3940256099942544/2247696110';
-  static const String _testIosNativeAdUnitId =
-      'ca-app-pub-3940256099942544/3986624511';
 
   // Test Rewarded Video Ad Unit IDs
   static const String _testAndroidRewardedAdUnitId =
       'ca-app-pub-3940256099942544/5224354917';
-  static const String _testIosRewardedAdUnitId =
-      'ca-app-pub-3940256099942544/1712485313';
 
   // Production Ad Unit IDs (IDs reales de AdMob de Talia)
   static const String _prodAndroidInterstitialAdUnitId =
       'ca-app-pub-5189779496074211/3915483871';
   static const String _prodIosInterstitialAdUnitId =
       'ca-app-pub-5189779496074211/8559745396';
-
-  // Production Native Ad Unit IDs
-  static const String _prodAndroidNativeAdUnitId =
-      'ca-app-pub-5189779496074211/8120568482';
-  static const String _prodIosNativeAdUnitId =
-      'ca-app-pub-5189779496074211/1690891506';
-
-  // Rewarded Ad Unit IDs se obtienen desde AppConfigService (Remote Config)
-  final AppConfigService _appConfigService = AppConfigService();
 
   InterstitialAd? _interstitialAd;
   bool _isAdLoaded = false;
@@ -70,6 +56,9 @@ class AdService {
   RewardedAd? _rewardedAd;
   bool _isRewardedAdLoaded = false;
   bool _isRewardedAdShowing = false;
+
+  /// Indica si hay un rewarded ad pre-cargado listo para mostrar.
+  bool get isRewardedAdLoaded => _isRewardedAdLoaded;
 
   // Pre-cached Native Ad para stories (se carga al iniciar sesión)
   NativeAd? _cachedNativeAd;
@@ -652,7 +641,7 @@ class AdService {
     _nativeAdRetryAttempts++;
 
     ReleaseLogger.log(
-      '🔄 [AdService] Programando reintento ${_nativeAdRetryAttempts}/$_maxNativeAdRetries de Native Ad en $delaySeconds segundos...',
+      '🔄 [AdService] Programando reintento $_nativeAdRetryAttempts/$_maxNativeAdRetries de Native Ad en $delaySeconds segundos...',
       tag: 'AdService',
     );
 
@@ -1013,6 +1002,19 @@ class AdService {
           ad.dispose();
           _rewardedAd = null;
           _isRewardedAdLoaded = false;
+
+          // 💰 Wallet Fase 1 (modo sombra): acreditar 1 crédito al padre.
+          // Fire-and-forget — no bloqueamos el flujo del rewarded ad.
+          // El adId combina timestamp + random para unicidad por impresión.
+          if (userEarnedReward) {
+            final userId = FirebaseAuth.instance.currentUser?.uid ?? 'anon';
+            final adId = 'rewarded_${userId}_'
+                '${DateTime.now().millisecondsSinceEpoch}_'
+                '${Random().nextInt(999999)}';
+            unawaited(
+              CreditWalletService().earnCreditsFromAd(adId: adId),
+            );
+          }
 
           if (!completer.isCompleted) {
             completer.complete(userEarnedReward);

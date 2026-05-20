@@ -10,6 +10,7 @@ import '../managers/story_upload_manager.dart';
 import '../utils/media_validation_helper.dart';
 import '../../../models/story.dart';
 import '../../../services/media_compression_service.dart';
+import '../../../services/optimistic_story_media_cache.dart';
 import '../../../utils/release_logger.dart';
 
 /// Servicio especializado para creación y eliminación de historias
@@ -92,6 +93,11 @@ class StoryCreationService {
       // 3. Agregar a cache optimista (aparece inmediatamente en UI)
       _cacheManager.addOptimisticStory(currentUserId, optimisticStory);
 
+      // 3b. Registrar el path local en el cache para que el viewer pueda
+      // mostrar la imagen mientras se sube, aunque el stream re-emita
+      // la story desde Firestore (donde localMediaPath no se persiste).
+      OptimisticStoryMediaCache().set(tempStoryId, mediaPath);
+
       // 4. Hacer upload síncronamente (errores se propagan correctamente)
       await _uploadStoryAndCreateInDatabase(
         tempStoryId: tempStoryId,
@@ -100,10 +106,14 @@ class StoryCreationService {
         onProgressUpdate: onProgressUpdate,
       );
 
+      // Upload completado con éxito → mediaUrl ya está en Firestore.
+      OptimisticStoryMediaCache().clear(tempStoryId);
+
       return tempStoryId;
     } catch (e) {
       // Si el proceso falló después de crear la historia optimista, limpiarla
       _cacheManager.removeOptimisticStory(currentUserId, tempStoryId);
+      OptimisticStoryMediaCache().clear(tempStoryId);
 
       // Re-lanzar el error original para que el UI pueda manejarlo
       rethrow;

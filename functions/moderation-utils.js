@@ -180,9 +180,64 @@ function getModerationSettings(chatData, contactData, receiverId) {
   };
 }
 
+/**
+ * Actualiza lastMessage en el chat doc solo si el mensaje es más nuevo
+ * que el lastMessageTime actual.
+ *
+ * Resuelve la race condition cuando múltiples mensajes se envían en rápida
+ * sucesión y los triggers (que corren en paralelo) podrían escribir el
+ * lastMessage en orden inverso al de los mensajes.
+ *
+ * Compara el `messageTimestamp` (timestamp real del mensaje, escrito al
+ * crearlo) contra el `lastMessageTime` actual del chat. Si el mensaje es
+ * más viejo, no actualiza (otro mensaje más nuevo ya pasó).
+ *
+ * Usa `messageTimestamp` para escribir `lastMessageTime` (no serverTimestamp)
+ * para que ambos campos siempre sean consistentes con el mensaje real.
+ *
+ * @param {FirebaseFirestore.Firestore} db - Instancia de Firestore
+ * @param {string} chatId - ID del chat
+ * @param {FirebaseFirestore.Timestamp|undefined} messageTimestamp - Timestamp del mensaje
+ * @param {Object} updates - Campos a escribir { lastMessage, lastMessageSender, lastMessageId, lastMessageType }
+ * @returns {Promise<boolean>} - true si actualizó, false si saltó por race
+ */
+async function updateChatLastMessageIfNewer(db, chatId, messageTimestamp, updates) {
+  const chatRef = db.collection("chats").doc(chatId);
+  return await db.runTransaction(async (tx) => {
+    const snap = await tx.get(chatRef);
+    if (!snap.exists) {
+      console.log(`⚠️ [updateChatLastMessageIfNewer] Chat ${chatId} no existe`);
+      return false;
+    }
+
+    const currentLastMessageTime = snap.data().lastMessageTime;
+
+    // Si hay un lastMessageTime más nuevo, otro mensaje ya pasó. Skip.
+    if (currentLastMessageTime && messageTimestamp &&
+        currentLastMessageTime.toMillis() > messageTimestamp.toMillis()) {
+      console.log(`⏭️ [updateChatLastMessageIfNewer] Skipping - newer message already exists in chat ${chatId}`);
+      return false;
+    }
+
+    // Usar el timestamp del mensaje si está disponible para mantener consistencia.
+    // Fallback a serverTimestamp solo si no tenemos timestamp del mensaje (caso edge).
+    const { FieldValue } = require("firebase-admin/firestore");
+    const lastMessageTime = messageTimestamp || FieldValue.serverTimestamp();
+
+    tx.update(chatRef, {
+      ...updates,
+      lastMessageTime,
+      lastMessageAt: lastMessageTime,
+    });
+
+    return true;
+  });
+}
+
 module.exports = {
   shouldBlockByModerationLevel,
   getParticipantsInfo,
   getMessagePreview,
   getModerationSettings,
+  updateChatLastMessageIfNewer,
 };

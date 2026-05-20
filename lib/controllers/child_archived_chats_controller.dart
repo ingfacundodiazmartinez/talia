@@ -88,9 +88,10 @@ class ChildArchivedChatsController {
     return _aliasService.watchDisplayName(userId, realName);
   }
 
-  /// Stream para verificar si un usuario está bloqueado
+  /// Stream para verificar si el usuario actual bloqueó al contacto.
+  /// El bloqueado no debe ver indicadores de bloqueo en su lista de chats.
   Stream<bool> isBlockedStream(String userId) {
-    return _blockService.isBlockedStream(userId);
+    return _blockService.iBlockedStream(userId);
   }
 
   /// Verificar si un chat/grupo fue limpiado

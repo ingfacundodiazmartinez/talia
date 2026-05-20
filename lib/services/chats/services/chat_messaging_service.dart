@@ -21,6 +21,28 @@ class ModerationBlockedException implements Exception {
   String toString() => reason;
 }
 
+/// Contexto resuelto para enviar un mensaje, computado en una sola pasada
+/// a partir del estado del chat doc.
+class _SendContext {
+  /// Lista de UIDs que pueden ver el mensaje (campo `visibleTo` del doc).
+  final List<String> visibleTo;
+
+  /// Estado de moderación inicial del mensaje.
+  /// - pending: chat con moderación, CF lo resolverá y expandirá visibleTo.
+  /// - approved: chat normal, mensaje visible inmediato.
+  final ModerationStatus moderationStatus;
+
+  /// true cuando el chat tiene moderación activa. Se usa para decidir si pasar
+  /// videoFrames extraídos y otros datos auxiliares a la CF de moderación.
+  final bool hasModeration;
+
+  const _SendContext({
+    required this.visibleTo,
+    required this.moderationStatus,
+    required this.hasModeration,
+  });
+}
+
 // Tipo temporal para compatibilidad hasta adaptar al modelo existente
 enum MessageType { text, image, audio, video }
 
@@ -35,19 +57,21 @@ class ChatMessagingService {
   final MessageRepository _messageRepository;
   final MessageUploadManager _uploadManager;
   final ChatCacheManager _cacheManager;
-  final ChatBlockService _blockService;
   final RateLimitingService _rateLimitingService;
 
   ChatMessagingService({
     required MessageRepository messageRepository,
     required MessageUploadManager uploadManager,
     required ChatCacheManager cacheManager,
-    ChatBlockService? blockService,
+    // [blockService] se acepta por compatibilidad con callers existentes pero ya
+    // no se usa: la validación de bloqueo se hace en `_resolveSendContext`
+    // leyendo `chat.isBlocked`/`blockedBy` directamente.
+    @Deprecated('No longer used — _resolveSendContext handles block state')
+        ChatBlockService? blockService,
     RateLimitingService? rateLimitingService,
   }) : _messageRepository = messageRepository,
        _uploadManager = uploadManager,
        _cacheManager = cacheManager,
-       _blockService = blockService ?? ChatBlockService(),
        _rateLimitingService = rateLimitingService ?? RateLimitingService();
 
   // ═══════════════════════════════════════════════════════════════
@@ -124,8 +148,18 @@ class ChatMessagingService {
       throw Exception('Usuario no autenticado');
     }
 
-    // 🔒 VALIDACIÓN DE SEGURIDAD P0: Verificar usuarios bloqueados
-    await _validateBlockStatus(chatId, currentUserId);
+    // 🔒 Resolver contexto de envío (bloqueo + moderación) en una sola lectura.
+    // Esto reemplaza al validador antiguo y al check de moderación: ambos quedaban
+    // duplicados. Si yo soy el bloqueador, esto lanza UserBlockedException. Si soy
+    // el bloqueado, el envío continúa con visibleTo restringido (el otro no lo verá).
+    final isOneOnOne = !chatId.startsWith('group_') && !isGroup;
+    _SendContext? sendContext;
+    if (isOneOnOne) {
+      sendContext = await _resolveSendContext(
+        chatId: chatId,
+        currentUserId: currentUserId,
+      );
+    }
 
     // 🚦 VALIDACIÓN DE RATE LIMITING P2: Verificar throttling y rate limits
     await _rateLimitingService.validateMessageSending(currentUserId);
@@ -164,6 +198,7 @@ class ChatMessagingService {
         isGroup: isGroup,
         metadata: metadata,
         onProgressUpdate: onProgressUpdate,
+        sendContext: sendContext,
       );
 
       return realMessageId;
@@ -335,7 +370,16 @@ class ChatMessagingService {
   // MESSAGE SENDING PROCESS
   // ═══════════════════════════════════════════════════════════════
 
-  /// Procesar envío de mensaje (síncronamente)
+  /// Procesar envío de mensaje (síncronamente).
+  ///
+  /// Flujo nuevo (siempre client-side):
+  /// 1. Optimistic update del chat doc.
+  /// 2. Upload de media (si aplica).
+  /// 3. Construir mensaje final con `visibleTo` y `moderationStatus` del contexto.
+  /// 4. Write directo a Firestore.
+  /// 5. La CF trigger `moderateMessage` se encarga de expandir `visibleTo` para
+  ///    moderación. Bloqueos no requieren CF (el cliente ya seteó `visibleTo`
+  ///    apropiadamente). Push notifications respetan `visibleTo`.
   Future<String> _processMessageSending({
     required String tempMessageId,
     required String chatId,
@@ -343,6 +387,7 @@ class ChatMessagingService {
     required bool isGroup,
     Map<String, dynamic>? metadata,
     Function(String messageId, double progress)? onProgressUpdate,
+    _SendContext? sendContext,
   }) async {
     try {
       String? mediaUrl;
@@ -388,17 +433,19 @@ class ChatMessagingService {
         );
       }
 
-      // 🔒 2. PRE-MODERACIÓN: Verificar si el mensaje debe ser moderado
-      // ✅ FIX: Capturar si hay moderación activa para usar Cloud Function
-      final hasModeration = await _checkModeration(
-        chatId: chatId,
-        content: optimisticMessage.text ?? '',
-        type: optimisticMessage.type ?? 'text',
-        mediaUrl: mediaUrl,
-      );
+      // 🧮 Resolver visibleTo + moderationStatus. Si no hay contexto (caso edge
+      // de grupos o chat con formato no estándar), usar defaults seguros.
+      final List<String>? visibleTo = sendContext?.visibleTo;
+      final ModerationStatus moderationStatus =
+          sendContext?.moderationStatus ?? ModerationStatus.approved;
+      final bool hasModeration = sendContext?.hasModeration ?? false;
 
-      // 3. Crear mensaje final en Firestore - usar constructor adaptor
-      // ✅ FIX: Incluir localId para deduplicación con mensaje optimista
+      // ✅ Extraer transcripción y frames del metadata para el trigger de moderación.
+      // Se incluyen en el doc del mensaje para que la CF los pueda leer en lugar
+      // de tener que pasarlos por el call.
+      final transcription = metadata?['transcription'] as String?;
+
+      // Construir mensaje final
       final finalMessage = ChatMessage(
         id: optimisticMessage.id,
         senderId: optimisticMessage.senderId,
@@ -413,60 +460,37 @@ class ChatMessagingService {
         type: optimisticMessage.type,
         status: MessageStatus.sent,
         localTimestamp: optimisticMessage.localTimestamp,
-        localPath: null, // Limpiar path local después del upload
-        localId: tempMessageId, // ✅ NEW: Guardar ID temporal para deduplicación
+        localPath: null,
+        localId: tempMessageId,
+        moderationStatus: moderationStatus,
+        transcription: transcription,
+        visibleTo: visibleTo,
       );
 
-      String realMessageId;
-
-      // ✅ FIX: Si hay moderación activa, usar Cloud Function en lugar de escritura directa
-      // Firestore rules bloquean escritura directa cuando chatHasModeration() == true
+      // ✅ Write directo a Firestore (siempre, sin Cloud Function intermedia).
+      // - Con moderación: el trigger moderateMessage analizará y expandirá visibleTo.
+      // - Bloqueo unidireccional: visibleTo ya restringe al sender, sin más trabajo.
+      // - hasModeration se loggea para auditoría pero ya no determina el path.
       if (hasModeration) {
-        ReleaseLogger.log('🔒 Usando Cloud Function sendChatMessage (moderación activa)', tag: 'ChatMessaging');
-
-        // ✅ IMPORTANTE: Eliminar mensaje optimista ANTES de enviar via Cloud Function
-        // para evitar duplicados cuando el stream detecte el mensaje real
-        _cacheManager.removeOptimisticMessage(chatId, tempMessageId);
-
-        final functions = FirebaseFunctions.instance;
-
-        // ✅ Extraer transcripción del metadata si está disponible (STT local gratis)
-        final transcription = metadata?['transcription'] as String?;
-        final isAiGenerated = metadata?['isAiGenerated'] as bool? ?? false;
-
-        final result = await functions.httpsCallable('sendChatMessage').call({
-          'chatId': chatId,
-          'text': finalMessage.text ?? '',
-          'type': finalMessage.type ?? 'text',
-          'localId': tempMessageId, // ✅ FIX: Enviar localId para deduplicación
-          'requiresModeration': true, // ✅ OPTIMIZACIÓN: Indica que el mensaje debe guardarse con status pending
-          if (finalMessage.imageUrl != null) 'imageUrl': finalMessage.imageUrl,
-          if (finalMessage.videoUrl != null) 'videoUrl': finalMessage.videoUrl,
-          if (finalMessage.audioUrl != null) 'audioUrl': finalMessage.audioUrl,
-          if (finalMessage.replyTo != null) 'replyTo': finalMessage.replyTo,
-          if (transcription != null && transcription.isNotEmpty) 'transcription': transcription,
-          if (videoFrames != null && videoFrames.isNotEmpty) 'videoFrames': videoFrames,
-          if (isAiGenerated) 'isAiGenerated': true,
-        });
-
-        final data = Map<String, dynamic>.from(result.data as Map);
-        realMessageId = data['messageId'] as String;
-        ReleaseLogger.log('✅ Mensaje enviado via Cloud Function: $realMessageId', tag: 'ChatMessaging');
-
-        // No actualizar caché aquí - el mensaje llegará via stream
-        return realMessageId;
-      } else {
-        // Sin moderación: escribir directamente a Firestore (más rápido)
-        // ✅ FIX: Agregar moderationStatus: 'approved' para que el receptor lo vea inmediatamente
-        final messageWithApproved = finalMessage.copyWith(
-          moderationStatus: ModerationStatus.approved,
-        );
-        realMessageId = await _messageRepository.createOptimisticMessage(
-          chatId: chatId,
-          message: messageWithApproved,
-          isGroup: isGroup,
+        ReleaseLogger.log(
+          '🔒 Mensaje con moderación pendiente — trigger moderateMessage resolverá',
+          tag: 'ChatMessaging',
         );
       }
+
+      // Para mensajes con multimedia + moderación, también se incluyen frames como
+      // campo del doc para el trigger. Si videoFrames está vacío no se escribe nada.
+      final extraFields = <String, dynamic>{};
+      if (hasModeration && videoFrames != null && videoFrames.isNotEmpty) {
+        extraFields['videoFrames'] = videoFrames;
+      }
+
+      final realMessageId = await _messageRepository.createOptimisticMessage(
+        chatId: chatId,
+        message: finalMessage,
+        isGroup: isGroup,
+        extraFields: extraFields.isEmpty ? null : extraFields,
+      );
 
       // 4. Actualizar mensaje optimista con ID real (sin eliminarlo para evitar flash en UI)
       // ✅ FIX: UPDATE en vez de REMOVE para UX suave
@@ -532,52 +556,92 @@ class ChatMessagingService {
   // SECURITY VALIDATION METHODS (P0)
   // ═══════════════════════════════════════════════════════════════
 
-  /// 🔒 P0 CRÍTICO: Validar que el usuario no esté bloqueado antes de envío
-  Future<void> _validateBlockStatus(String chatId, String currentUserId) async {
-    try {
-      // Extraer IDs de usuarios del chatId
-      final userIds = _extractUserIdsFromChatId(chatId);
-      final otherUserId = userIds.firstWhere((id) => id != currentUserId, orElse: () => '');
+  /// Resuelve `visibleTo` + `moderationStatus` para un mensaje saliente en una
+  /// sola lectura del chat doc. Además rechaza el envío si el usuario actual
+  /// es el bloqueador (única dirección que aborta).
+  ///
+  /// Reglas:
+  /// - Si yo soy `blockedBy` del chat → throw [UserBlockedException].
+  /// - Si el chat tiene `isBlocked == true` y NO soy el bloqueador
+  ///   → `visibleTo = [me]`. El destinatario nunca lo verá; queda en 1 tilde.
+  /// - Si el chat tiene moderación activa → `visibleTo = [me]`. La CF de
+  ///   moderación expandirá la lista cuando apruebe el mensaje.
+  /// - Caso normal → `visibleTo = [me, other]`. Mensaje visible para ambos.
+  Future<_SendContext> _resolveSendContext({
+    required String chatId,
+    required String currentUserId,
+  }) async {
+    final userIds = _extractUserIdsFromChatId(chatId);
+    final otherUserId =
+        userIds.firstWhere((id) => id != currentUserId, orElse: () => '');
 
-      if (otherUserId.isEmpty) {
-        // Es un grupo - validación más compleja requerida
-        ReleaseLogger.warning('Validación de grupo pendiente de implementar', tag: 'ChatSecurity');
-        return;
-      }
-
-      // Verificar si current user está bloqueado por el otro usuario
-      final blockStatus = await _blockService.getChatBlockStatus(
-        childId: currentUserId,
-        contactId: otherUserId,
-      );
-
-      if (blockStatus.isBlocked) {
-        throw UserBlockedException(
-          'No puedes enviar mensajes a este usuario. ${blockStatus.reason ?? "Usuario bloqueado"}'
-        );
-      }
-
-      // Verificar si el otro usuario está bloqueado por current user
-      final reverseBlockStatus = await _blockService.getChatBlockStatus(
-        childId: otherUserId,
-        contactId: currentUserId,
-      );
-
-      if (reverseBlockStatus.isBlocked) {
-        throw UserBlockedException(
-          'Has bloqueado a este usuario. No puedes enviar mensajes.'
-        );
-      }
-
-      ReleaseLogger.info('✅ Validación de bloqueo pasada para chat $chatId', tag: 'ChatSecurity');
-
-    } catch (e) {
-      if (e is UserBlockedException) {
-        rethrow;
-      }
-      ReleaseLogger.error('Error en validación de bloqueo: $e', tag: 'ChatSecurity');
-      // En caso de error, permitir envío - el backend lo validará
+    if (otherUserId.isEmpty) {
+      // Defensa: chatId no tiene formato 1-1. Esta función es solo para 1-1.
+      // Los grupos usan otro flujo (group_repository.sendMessage).
+      throw UserBlockedException('chatId inválido para chat 1-1: $chatId');
     }
+
+    bool isBlocked = false;
+    String? blockedBy;
+    String? blockedReason;
+    bool moderationEnabled = false;
+
+    try {
+      final chatDoc = await FirebaseFirestore.instance
+          .collection('chats')
+          .doc(chatId)
+          .get();
+
+      if (chatDoc.exists) {
+        final data = chatDoc.data() ?? const <String, dynamic>{};
+        isBlocked = data['isBlocked'] == true;
+        blockedBy = data['blockedBy'] as String?;
+        blockedReason = data['blockedReason'] as String?;
+        moderationEnabled = data['moderationEnabled'] == true;
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error leyendo chat doc para resolver contexto: $e',
+          tag: 'ChatSecurity');
+      // Si falla, asumimos contexto normal — backend validará con reglas.
+    }
+
+    // Si soy el bloqueador, NO puedo mandar mensajes.
+    if (isBlocked && blockedBy == currentUserId) {
+      throw UserBlockedException(
+          'Has bloqueado a este usuario. No puedes enviar mensajes.');
+    }
+
+    // Si fue bloqueado por moderación parental (parent_revoked), ambos quedan
+    // sin poder mandar.
+    if (isBlocked && blockedReason == 'parent_revoked') {
+      throw UserBlockedException(
+          'Este contacto fue bloqueado por tu padre/madre.');
+    }
+
+    // Caso "otro me bloqueó": el envío SÍ avanza (1 tilde), pero `visibleTo`
+    // se restringe al sender — el destinatario nunca lo recibe.
+    final blockedByOther =
+        isBlocked && blockedBy != null && blockedBy != currentUserId;
+
+    List<String> visibleTo;
+    ModerationStatus moderationStatus;
+
+    if (blockedByOther) {
+      visibleTo = [currentUserId];
+      moderationStatus = ModerationStatus.approved;
+    } else if (moderationEnabled) {
+      visibleTo = [currentUserId];
+      moderationStatus = ModerationStatus.pending;
+    } else {
+      visibleTo = [currentUserId, otherUserId];
+      moderationStatus = ModerationStatus.approved;
+    }
+
+    return _SendContext(
+      visibleTo: visibleTo,
+      moderationStatus: moderationStatus,
+      hasModeration: moderationEnabled,
+    );
   }
 
   /// Extraer user IDs del chatId (formato: user1_user2)
@@ -661,99 +725,6 @@ class ChatMessagingService {
         '⚠️ [ChatMessaging] Error en update optimista: $e',
         tag: 'ChatMessaging',
       );
-    }
-  }
-
-  /// 🔒 Verificar moderación si está activada
-  /// Solo llama a Cloud Function si la moderación está activada
-  /// Retorna true si hay moderación activa (para que el caller use Cloud Function)
-  Future<bool> _checkModeration({
-    required String chatId,
-    required String content,
-    required String type,
-    String? mediaUrl,
-  }) async {
-    try {
-      final currentUserId = _messageRepository.currentUserId;
-      if (currentUserId == null) return false;
-
-      // 1. Verificar moderación a nivel de CHAT (solo si el chat existe)
-      bool moderationEnabled = false;
-      final chatDoc = await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(chatId)
-          .get();
-      if (chatDoc.exists) {
-        moderationEnabled = chatDoc.data()?['moderationEnabled'] ?? false;
-      }
-
-      // 2. Verificar moderación a nivel de CONTACTO (del receptor) si no está activada en chat
-      if (!moderationEnabled) {
-        try {
-          // Extraer contactId del chatId
-          final userIds = _extractUserIdsFromChatId(chatId);
-          final contactId = userIds.firstWhere((id) => id != currentUserId, orElse: () => '');
-
-          if (contactId.isNotEmpty) {
-            final sortedUsers = [currentUserId, contactId]..sort();
-            final contactsQuery = await FirebaseFirestore.instance
-                .collection('contacts')
-                .where('users', isEqualTo: sortedUsers)
-                .limit(1)
-                .get();
-
-            if (contactsQuery.docs.isNotEmpty) {
-              final contactDoc = contactsQuery.docs.first;
-              final moderationSettings =
-                  contactDoc.data()['moderationSettings'] as Map<String, dynamic>?;
-
-              if (moderationSettings != null) {
-                // ✅ FIX: Buscar la configuración del SENDER (currentUserId)
-                // Estructura: moderationSettings[senderId] = {enabled: true, level: "high"}
-                // Cuando un padre activa moderación para un hijo, se guarda en moderationSettings[childId]
-                // Por lo tanto, cuando el sender (currentUserId) envía mensajes,
-                // debemos verificar si el sender tiene moderación activada
-                final senderModerationSettings =
-                    moderationSettings[currentUserId] as Map<String, dynamic>?;
-                if (senderModerationSettings != null && senderModerationSettings['enabled'] == true) {
-                  moderationEnabled = true;
-                  ReleaseLogger.log(
-                    '🔒 Moderación activada: sender ($currentUserId) tiene moderación habilitada',
-                    tag: 'Moderation',
-                  );
-                }
-              }
-            }
-          }
-        } catch (e) {
-          // Continuar sin moderación del contacto si hay error
-          ReleaseLogger.warning('Error verificando moderación del contacto: $e', tag: 'Moderation');
-        }
-      }
-
-      // 3. Si NO hay moderación activada, permitir envío directo
-      if (!moderationEnabled) {
-        ReleaseLogger.info('✅ Sin moderación activada - enviando mensaje directamente', tag: 'Moderation');
-        return false;
-      }
-
-      // 4. ✅ OPTIMIZACIÓN: Solo retornar true si hay moderación activa
-      // El trigger `moderateMessage` se encargará de analizar el mensaje
-      // El mensaje se guardará con `moderationStatus: pending` y el receptor
-      // no lo verá hasta que sea aprobado (filtrado en el controller)
-      ReleaseLogger.log('🔒 Moderación activada - mensaje será analizado por trigger', tag: 'Moderation');
-      return true; // ✅ Retorna true para indicar que debe usar Cloud Function con requiresModeration
-    } on ModerationBlockedException {
-      // Re-lanzar bloqueos de moderación sin modificar
-      rethrow;
-    } catch (e) {
-      // Si es otro error (network, etc), loguearlo y ASUMIR moderación activa
-      // Esto es más seguro: si no podemos verificar, usamos Cloud Function
-      // que manejará correctamente el caso con o sin moderación
-      ReleaseLogger.error('⚠️ Error técnico en verificación de moderación (asumiendo activa): $e', tag: 'Moderation');
-      // ✅ FIX: Retornar true para usar Cloud Function (más seguro que escritura directa)
-      // Si intentamos escribir directamente y hay moderación, Firestore lo rechazará
-      return true;
     }
   }
 

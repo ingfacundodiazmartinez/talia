@@ -58,6 +58,43 @@ exports.sendNotificationOnCreate = onDocumentCreated(
 
       console.log(`📱 [NotificationTrigger] Enviando push a ${userId}, tipo: ${type}`);
 
+      // 🔒 Respeto de `visibleTo`: si el destinatario no debe ver el mensaje
+      // (porque lo bloqueó, o porque la moderación aún no aprobó), no
+      // mandamos push. Esto subsume el check anterior de chat.isBlocked.
+      if (
+        (type === "chat_message" || type === "group_message") &&
+        chatId &&
+        messageId &&
+        userId
+      ) {
+        try {
+          const collection = type === "group_message" ? "groups_v2" : "chats";
+          const messageSnap = await getFirestore()
+            .collection(collection)
+            .doc(chatId)
+            .collection("messages")
+            .doc(messageId)
+            .get();
+          if (messageSnap.exists) {
+            const messageData = messageSnap.data();
+            const visibleTo = Array.isArray(messageData.visibleTo)
+              ? messageData.visibleTo
+              : null;
+            if (visibleTo !== null && !visibleTo.includes(userId)) {
+              console.log(
+                `🔇 [NotificationTrigger] Skipping push: visibleTo=${JSON.stringify(visibleTo)} no incluye ${userId}`
+              );
+              await event.data.ref.update({ pushSent: true, skippedDueToVisibility: true });
+              return null;
+            }
+          }
+        } catch (visibleCheckError) {
+          console.log(
+            `⚠️ [NotificationTrigger] No se pudo verificar visibleTo (continuando): ${visibleCheckError.message}`
+          );
+        }
+      }
+
       // Obtener usuario para FCM token
       const userDoc = await getFirestore().collection("users").doc(userId).get();
 
@@ -212,6 +249,11 @@ exports.sendNotificationOnCreate = onDocumentCreated(
           }
         });
       }
+
+      // NOTA: `lastReceivedAt_{recipient}` NO se actualiza acá. El receipt
+      // se marca client-side cuando el device REALMENTE recibe la push
+      // (Dart background handler / chat docs listener). Esto evita falsos
+      // ✓✓ cuando el device está apagado y FCM solo encola la push.
 
       // Marcar como enviada
       await event.data.ref.update({ pushSent: true });

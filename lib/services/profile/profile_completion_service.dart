@@ -78,7 +78,7 @@ class ProfileCompletionService {
       }
 
       // Get ID token to ensure Storage has access
-      final idToken = await refreshedUser.getIdToken(true);
+      await refreshedUser.getIdToken(true);
 
       // Give time for Storage SDK to update its token cache
       await Future.delayed(Duration(milliseconds: 500));
@@ -215,7 +215,6 @@ class ProfileCompletionService {
 
           final response = result.data;
           final success = response['success'] as bool? ?? false;
-          final newRole = response['role'] as String?;
 
           if (success) {
           } else {
@@ -438,7 +437,7 @@ class ProfileCompletionService {
       } else {
       }
       return null;
-    } catch (e, stackTrace) {
+    } catch (e) {
       return null;
     }
   }
@@ -448,8 +447,10 @@ class ProfileCompletionService {
     try {
       final result = await _deviceService.registerDeviceForUser(userId);
       if (!result.isSuccess) {
+        // Device registration failed but profile completion should continue
       }
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - device registration errors should not block profile completion
     }
   }
 

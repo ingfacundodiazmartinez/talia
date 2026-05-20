@@ -135,9 +135,9 @@ class TriviaResultsService {
     }
 
     // Calcular promedios
-    final totalScore = responses.fold<int>(0, (sum, r) => sum + r.totalScore);
+    final totalScore = responses.fold<int>(0, (total, r) => total + r.totalScore);
     final totalCorrect =
-        responses.fold<int>(0, (sum, r) => sum + r.correctCount);
+        responses.fold<int>(0, (total, r) => total + r.correctCount);
     final totalQuestions = responses.first.totalQuestions;
     final totalAnswered = responses.length * totalQuestions;
 

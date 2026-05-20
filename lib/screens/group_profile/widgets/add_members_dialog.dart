@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../services/chat_permission_service.dart';
 import '../../../services/contact_alias_service.dart';
+import '../../../services/user_cache_service.dart';
 import '../../../groups/services/group_service.dart';
 import '../../../utils/release_logger.dart';
 import 'group_profile_constants.dart';
@@ -25,7 +25,7 @@ class AddMembersDialog extends StatefulWidget {
 class _AddMembersDialogState extends State<AddMembersDialog> {
   final ChatPermissionService _permissionService = ChatPermissionService();
   final GroupService _groupService = GroupService();
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final UserCacheService _userCacheService = UserCacheService();
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final ContactAliasService _aliasService = ContactAliasService();
 
@@ -64,8 +64,7 @@ class _AddMembersDialogState extends State<AddMembersDialog> {
           continue;
         }
 
-        final userDoc = await _firestore.collection('users').doc(contactId).get();
-        final userData = userDoc.data();
+        final userData = await _userCacheService.getUserData(contactId);
 
         if (userData != null) {
           final realName = userData['name'] ?? 'Usuario';

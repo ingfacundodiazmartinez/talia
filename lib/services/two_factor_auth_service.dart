@@ -53,7 +53,7 @@ class TwoFactorAuthService {
   String generateQRCodeUri({
     required String secret,
     required String email,
-    String issuer = 'Talia',
+    String issuer = 'Tália',
   }) {
     final encodedIssuer = Uri.encodeComponent(issuer);
     final encodedEmail = Uri.encodeComponent(email);

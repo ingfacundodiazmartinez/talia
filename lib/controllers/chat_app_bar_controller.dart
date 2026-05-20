@@ -165,12 +165,15 @@ class ChatAppBarController {
     }
 
     final userData = snapshot!.data() as Map<String, dynamic>;
+    final isChild = userData['role'] == 'child';
+    final showOnlineStatus = userData['showOnlineStatus'] ?? !isChild;
+    final hideLastSeenRaw = userData['hideLastSeen'] ?? isChild;
     return {
       'photoURL': userData['photoURL'] as String? ?? '',
-      'isOnline': userData['isOnline'] ?? false,
+      'isOnline': showOnlineStatus ? (userData['isOnline'] ?? false) : false,
       'name': userData['name'] as String? ?? '',
       'lastSeen': userData['lastSeen'] as Timestamp?,
-      'hideLastSeen': userData['hideLastSeen'] ?? false,
+      'hideLastSeen': hideLastSeenRaw || !showOnlineStatus,
     };
   }
 

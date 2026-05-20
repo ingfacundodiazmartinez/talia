@@ -189,6 +189,8 @@ async function checkFaceSwapLimit(userId) {
  * Determinar qué modelo de IA usar para la transformación
  * @param {object} characterData - Datos del personaje de Firestore
  * @returns {string} Identificador del modelo: 'face_swap', 'p_image_edit', o 'nano_banana'
+ *   NOTA: el key 'nano_banana' se mantiene por backward compat con characters
+ *   existentes en Firestore, pero internamente ahora invoca openai/gpt-image-2 low.
  */
 function determineAiModel(characterData) {
   const aiModel = characterData.aiModel || "auto";
@@ -209,9 +211,14 @@ function determineAiModel(characterData) {
 }
 
 /**
- * Editar imagen usando Nano Banana de Google (via Replicate)
- * Edita una imagen existente basándose en el prompt (image-to-image)
- * Precio: ~$0.039/imagen
+ * Editar imagen usando GPT-Image-2 de OpenAI (via Replicate), quality "low".
+ * Reemplazo de google/nano-banana ($0.039) por openai/gpt-image-2 low ($0.012).
+ *
+ * IMPORTANTE: el aiModel key en Firestore sigue siendo "nano_banana" para
+ * mantener backward compatibility con characters configurados. Solo el modelo
+ * que se llama internamente cambió.
+ *
+ * Precio: ~$0.012/imagen (low quality)
  * @param {string} prompt - Prompt para la edición
  * @param {string} inputImageUrl - URL de la imagen a editar
  * @returns {Promise<string>} URL de la imagen editada
@@ -224,29 +231,30 @@ async function transformWithNanoBanana(prompt, inputImageUrl) {
 
   const replicate = new Replicate({ auth: replicateToken });
 
-  console.log(`🍌 [Nano-Banana] Editando imagen con prompt: ${prompt.substring(0, 100)}...`);
+  console.log(`🎨 [GPT-Image-2] Editando imagen con prompt: ${prompt.substring(0, 100)}...`);
   console.log(`   Input image: ${inputImageUrl.substring(0, 80)}...`);
 
-  const output = await replicate.run("google/nano-banana", {
+  const output = await replicate.run("openai/gpt-image-2", {
     input: {
       prompt: prompt,
-      image_input: [inputImageUrl],
-      aspect_ratio: "match_input_image",
+      input_images: [inputImageUrl],
+      aspect_ratio: "1:1",
+      quality: "low",
       output_format: "png",
     },
   });
 
-  console.log(`✅ [Nano-Banana] Imagen editada exitosamente`);
+  console.log(`✅ [GPT-Image-2] Imagen editada exitosamente`);
 
   // Replicate devuelve URL directamente (o array de URLs)
   const resultUrl = Array.isArray(output) ? output[0] : output;
 
   if (!resultUrl) {
-    console.error(`❌ [Nano-Banana] Response inesperado:`, JSON.stringify(output).substring(0, 200));
-    throw new Error("Nano Banana no devolvió una URL válida");
+    console.error(`❌ [GPT-Image-2] Response inesperado:`, JSON.stringify(output).substring(0, 200));
+    throw new Error("GPT-Image-2 no devolvió una URL válida");
   }
 
-  console.log(`✅ [Nano-Banana] Resultado: ${resultUrl}`);
+  console.log(`✅ [GPT-Image-2] Resultado: ${resultUrl}`);
   return resultUrl;
 }
 
@@ -587,14 +595,14 @@ exports.transformCharacter = onCall(
         let tempFilePath = null;
 
         // ═══════════════════════════════════════════════════════════════
-        // Nano Banana: Edición directa con OpenAI (sin polling)
+        // Modelo con prompt (aiModel="nano_banana"): GPT-Image-2 low (sin polling)
         // ═══════════════════════════════════════════════════════════════
         if (selectedModel === "nano_banana") {
           if (!characterData.prompt || !characterData.prompt.trim()) {
-            throw new HttpsError("invalid-argument", "Nano Banana requiere un prompt configurado en el personaje");
+            throw new HttpsError("invalid-argument", "El modelo de edición con prompt requiere un prompt configurado en el personaje");
           }
 
-          console.log(`🎨 [TransformCharacter] Usando Nano Banana 1.5...`);
+          console.log(`🎨 [TransformCharacter] Usando GPT-Image-2 low...`);
           const nanoBananaUrl = await transformWithNanoBanana(characterData.prompt, imageUrl);
 
           // Nano Banana retorna directamente, no hay polling
@@ -920,7 +928,7 @@ exports.createCharacterTransformation = onCall(
       await statusDocRef.update({
         status: "creating_prediction",
         progress: 0.1,
-        message: selectedModel === "nano_banana" ? "Editando con Nano Banana..." : "Conectando con IA...",
+        message: "Conectando con IA...",
         transformationType: transformationTypeMap[selectedModel] || "faceSwap",
         aiModel: selectedModel,
         updatedAt: FieldValue.serverTimestamp(),
@@ -931,14 +939,14 @@ exports.createCharacterTransformation = onCall(
       let nanoBananaResultUrl = null;
 
       // ═══════════════════════════════════════════════════════════════
-      // Nano Banana: Edición directa con OpenAI (sin polling)
+      // Modelo con prompt (aiModel="nano_banana"): GPT-Image-2 low (sin polling)
       // ═══════════════════════════════════════════════════════════════
       if (selectedModel === "nano_banana") {
         if (!characterData.prompt || !characterData.prompt.trim()) {
-          throw new HttpsError("invalid-argument", "Nano Banana requiere un prompt configurado en el personaje");
+          throw new HttpsError("invalid-argument", "El modelo de edición con prompt requiere un prompt configurado en el personaje");
         }
 
-        console.log(`🎨 [CreateCharacterTransformation] Usando Nano Banana 1.5`);
+        console.log(`🎨 [CreateCharacterTransformation] Usando GPT-Image-2 low`);
         console.log(`   Prompt: ${characterData.prompt}`);
 
         await statusDocRef.update({
@@ -973,14 +981,14 @@ exports.createCharacterTransformation = onCall(
             updatedAt: FieldValue.serverTimestamp(),
           });
 
-          console.log(`✅ [CreateCharacterTransformation] Nano Banana completado`);
+          console.log(`✅ [CreateCharacterTransformation] GPT-Image-2 completado`);
 
           // Limpiar archivo temporal
           if (tempFilePath) {
             await cleanupTempFile(tempFilePath);
           }
         } catch (nanoBananaError) {
-          console.error(`❌ [CreateCharacterTransformation] Error Nano Banana: ${nanoBananaError.message}`);
+          console.error(`❌ [CreateCharacterTransformation] Error GPT-Image-2: ${nanoBananaError.message}`);
           await statusDocRef.update({
             status: "failed",
             progress: 0,

@@ -1,11 +1,11 @@
-/// Add Participant Service - Single responsibility: Add a participant to an existing call
-/// Atomic service that calls the Cloud Function to add participants mid-call
+// Add Participant Service - Single responsibility: Add a participant to an existing call
+// Atomic service that calls the Cloud Function to add participants mid-call
 
 import 'package:cloud_functions/cloud_functions.dart';
 import '../models/service_response.dart';
 import '../../utils/release_logger.dart';
 
-/// Result model for added participant
+// Result model for added participant
 class AddedParticipant {
   final String participantId;
   final int agoraUid;

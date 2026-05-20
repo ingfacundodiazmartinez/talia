@@ -2,7 +2,6 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/chat_message.dart';
 import '../utils/release_logger.dart';
-import 'chats/chat_preferences_cache.dart'; // ✅ FIX: Para filtrar por clearedAt
 
 /// Servicio para cachear mensajes localmente usando Hive
 ///
@@ -30,7 +29,8 @@ class MessageCacheService {
 
       // Ejecutar limpieza de mensajes viejos (si es necesario)
       await _checkAndCleanupOldMessages();
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cache errors should not crash the app
     }
   }
 
@@ -49,10 +49,9 @@ class MessageCacheService {
 
         // Guardar timestamp de esta limpieza
         await _messagesBox!.put(lastCleanupKey, now);
-      } else {
-        final nextCleanup = Duration(milliseconds: 24 * 60 * 60 * 1000 - (now - lastCleanup));
       }
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cache errors should not crash the app
     }
   }
 
@@ -95,13 +94,16 @@ class MessageCacheService {
         'originalContactName': message.originalContactName,
         // ✅ FIX: Campo de eliminación
         'isDeletedForEveryone': message.isDeletedForEveryone,
+        // ✅ Visibilidad por destinatario
+        'visibleTo': message.visibleTo,
       };
 
       await _messagesBox!.put(key, data);
 
       // Limpiar mensajes viejos si excedemos el límite
       await _cleanOldMessages(chatId);
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cache errors should not crash the app
     }
   }
 
@@ -159,13 +161,16 @@ class MessageCacheService {
           'originalContactName': message.originalContactName,
           // ✅ FIX: Campo de eliminación
           'isDeletedForEveryone': message.isDeletedForEveryone,
+          // ✅ Visibilidad por destinatario
+          'visibleTo': message.visibleTo,
         };
       }
 
       await _messagesBox!.putAll(entries);
       await _cleanOldMessages(chatId);
 
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cache errors should not crash the app
     }
   }
 
@@ -247,7 +252,8 @@ class MessageCacheService {
         data['status'] = status.name;
         await _messagesBox!.put(key, data);
       }
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cache errors should not crash the app
     }
   }
 
@@ -290,10 +296,13 @@ class MessageCacheService {
         'originalContactName': message.originalContactName,
         // ✅ FIX: Campo de eliminación
         'isDeletedForEveryone': message.isDeletedForEveryone,
+        // ✅ Visibilidad por destinatario
+        'visibleTo': message.visibleTo,
       };
 
       await _messagesBox!.put(key, data);
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cache errors should not crash the app
     }
   }
 
@@ -304,7 +313,8 @@ class MessageCacheService {
     try {
       final key = '${chatId}_$messageId';
       await _messagesBox!.delete(key);
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cache errors should not crash the app
     }
   }
 
@@ -323,7 +333,8 @@ class MessageCacheService {
         }
 
       }
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cache errors should not crash the app
     }
   }
 
@@ -388,6 +399,10 @@ class MessageCacheService {
       originalContactName: data['originalContactName'] as String?,
       // ✅ FIX: Campo de eliminación
       isDeletedForEveryone: data['isDeletedForEveryone'] as bool? ?? false,
+      // ✅ Visibilidad por destinatario
+      visibleTo: data['visibleTo'] != null
+          ? List<String>.from(data['visibleTo'] as List)
+          : null,
     );
   }
 
@@ -463,7 +478,8 @@ class MessageCacheService {
       if (deletedCount > 0) {
       } else {
       }
-    } catch (e) {
+    } catch (_) {
+      // Silently ignored - cache errors should not crash the app
     }
   }
 

@@ -6,7 +6,6 @@ import 'package:firebase_storage/firebase_storage.dart';
 import '../models/models.dart';
 import '../repositories/repositories.dart';
 import '../../utils/release_logger.dart';
-import '../../services/contact_alias_service.dart';
 
 /// Result of group creation
 class CreateGroupResult {
@@ -83,7 +82,6 @@ class GroupService {
   final GroupMessageRepository _messageRepository;
   final FirebaseFunctions _functions;
   final FirebaseAuth _auth;
-  final ContactAliasService _aliasService;
 
   // Cache de alias para evitar llamadas repetidas a Firestore
   Map<String, String>? _aliasCache;
@@ -95,12 +93,10 @@ class GroupService {
     GroupMessageRepository? messageRepository,
     FirebaseFunctions? functions,
     FirebaseAuth? auth,
-    ContactAliasService? aliasService,
   })  : _groupRepository = groupRepository ?? GroupRepository(),
         _messageRepository = messageRepository ?? GroupMessageRepository(),
         _functions = functions ?? FirebaseFunctions.instance,
-        _auth = auth ?? FirebaseAuth.instance,
-        _aliasService = aliasService ?? ContactAliasService();
+        _auth = auth ?? FirebaseAuth.instance;
 
   String get _currentUserId => _auth.currentUser?.uid ?? '';
 
@@ -438,38 +434,20 @@ class GroupService {
       final currentUser = _auth.currentUser;
       if (currentUser == null) return null;
 
-      // Check if group has moderation enabled
+      // Read group state ONCE — we need moderation flag + members for visibleTo.
       final group = await _groupRepository.getById(groupId);
       final hasModeration = group?.moderationEnabled ?? false;
+      final memberIds = group?.memberIds ?? const <String>[];
 
-      if (hasModeration) {
-        // Use Cloud Function for moderated groups
-        ReleaseLogger.log(
-          'Sending message via Cloud Function (moderation enabled)',
-          tag: 'GroupService',
-        );
+      // Compute visibleTo:
+      // - Con moderación → solo el sender ve hasta que la CF apruebe.
+      // - Sin moderación → todos los miembros del grupo.
+      final visibleTo =
+          hasModeration ? <String>[currentUser.uid] : memberIds.toList();
 
-        final functions = FirebaseFunctions.instanceFor(region: 'us-central1');
-        final result = await functions.httpsCallable('sendGroupV2Message').call({
-          'groupId': groupId,
-          'text': text,
-          'senderName': senderName ?? currentUser.displayName ?? 'Usuario',
-          'senderPhotoURL': senderPhotoURL ?? currentUser.photoURL,
-          if (localId != null) 'localId': localId,
-          if (replyTo != null) 'replyTo': {
-            'messageId': replyTo.id,
-            'senderId': replyTo.senderId,
-            'senderName': replyTo.senderName,
-            'text': replyTo.text,
-            'hasMedia': replyTo.hasMedia,
-          },
-        });
-
-        final data = Map<String, dynamic>.from(result.data as Map);
-        return data['messageId'] as String?;
-      }
-
-      // No moderation - direct write to Firestore
+      // Direct write to Firestore (always). Backwards compat: si las reglas
+      // todavía no están desplegadas con la lógica nueva, el write con
+      // visibleTo=[me] fallaría — pero asumimos rules ya desplegadas.
       final message = GroupMessage(
         id: '', // Will be set by Firestore
         senderId: currentUser.uid,
@@ -490,6 +468,8 @@ class GroupService {
         reactions: {},
         readBy: [currentUser.uid],
         localId: localId, // For optimistic UI matching
+        moderationStatus: hasModeration ? 'pending' : null,
+        visibleTo: visibleTo,
       );
 
       return await _messageRepository.sendMessage(groupId, message);
@@ -523,39 +503,13 @@ class GroupService {
       // Check if group has moderation enabled
       final group = await _groupRepository.getById(groupId);
       final hasModeration = group?.moderationEnabled ?? false;
+      final memberIds = group?.memberIds ?? const <String>[];
+      final visibleTo =
+          hasModeration ? <String>[currentUser.uid] : memberIds.toList();
 
-      if (hasModeration) {
-        // Use Cloud Function for moderated groups
-        ReleaseLogger.log(
-          'Sending media message via Cloud Function (moderation enabled)',
-          tag: 'GroupService',
-        );
-
-        final functions = FirebaseFunctions.instanceFor(region: 'us-central1');
-        final result = await functions.httpsCallable('sendGroupV2Message').call({
-          'groupId': groupId,
-          'text': text,
-          'senderName': senderName ?? currentUser.displayName ?? 'Usuario',
-          'senderPhotoURL': senderPhotoURL ?? currentUser.photoURL,
-          if (localId != null) 'localId': localId, // For optimistic UI matching
-          if (imageUrl != null) 'imageUrl': imageUrl,
-          if (videoUrl != null) 'videoUrl': videoUrl,
-          if (audioUrl != null) 'audioUrl': audioUrl,
-          if (thumbnailUrl != null) 'thumbnailUrl': thumbnailUrl,
-          if (replyTo != null) 'replyTo': {
-            'messageId': replyTo.id,
-            'senderId': replyTo.senderId,
-            'senderName': replyTo.senderName,
-            'text': replyTo.text,
-            'hasMedia': replyTo.hasMedia,
-          },
-        });
-
-        final data = Map<String, dynamic>.from(result.data as Map);
-        return data['messageId'] as String?;
-      }
-
-      // No moderation - direct write to Firestore
+      // Direct write to Firestore (siempre, sin CF intermedia). El trigger
+      // moderateMessage analiza el contenido async y expande visibleTo si
+      // aprueba.
       final message = GroupMessage(
         id: '',
         senderId: currentUser.uid,
@@ -579,6 +533,9 @@ class GroupService {
         isDeleted: false,
         reactions: {},
         readBy: [currentUser.uid],
+        localId: localId,
+        moderationStatus: hasModeration ? 'pending' : null,
+        visibleTo: visibleTo,
       );
 
       return await _messageRepository.sendMessage(groupId, message);

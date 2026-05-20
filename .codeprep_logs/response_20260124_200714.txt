@@ -1,0 +1,187 @@
+═══════════════════════════════════════════════════════════════
+CODEPREP - Registro de Query
+═══════════════════════════════════════════════════════════════
+
+Fecha: 2026-01-24 20:07:14
+Proyecto: /Users/olagg/Personal/talia
+
+─── MÉTRICAS REALES ───
+Input tokens:       1,564
+Output tokens:      165
+Cache creado:       0
+Cache leído:        0
+TOTAL:              1,729 tokens
+Costo:              $0.0000 USD
+Tiempo:             0.0s
+
+─── QUERY ───
+Analiza el código del proyecto buscando violaciones de los principios DRY (Don't Repeat Yourself) y SST (Single Source of Truth). Identifica código duplicado, lógica repetida, y lugares donde la misma información se define en múltiples lugares. Prioriza los casos más críticos.
+
+─── CONTEXTO ENVIADO ───
+# Contexto Pre-procesado por Cliente Local
+
+*Este contexto fue compilado por un modelo local (7B) para optimizar tu razonamiento.*
+
+## 📋 Reglas del Proyecto (CLAUDE.md)
+*Estas reglas son OBLIGATORIAS. Violaciones = código rechazado.*
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Reglas por Capa:**
+- **Screen** - PROHIBIDO: `FirebaseFirestore.instance.collection(...)`, `FirebaseFunctions.instance.httpsCallable(...)`, Direct calls to Services
+
+**Prohibiciones Globales:**
+- ❌ print() - usar ReleaseLogger
+- ❌ debugPrint() - usar ReleaseLogger
+- ❌ Firestore directo en Screen - usar Controller
+- ❌ Functions directo en Screen - usar Controller
+- ❌ Llamadas directas a Services desde Screen
+
+**Servicios Documentados:**
+- `notificationService`: NotificationService(),
+- `videoCallService`: VideoCallService(),
+- `autoApprovalService`: AutoApprovalService(),
+
+## Proyecto
+Proyecto Flutter/Dart en /Users/olagg/Personal/talia
+
+**Arquitectura:** Screen → Controller → Service → Model
+
+**Convenciones:**
+- Controllers usan ChangeNotifier
+- Modelos en lib/models/
+
+## Análisis Previo (modelo local)
+*Confianza del análisis: 70%*
+
+### Pensamiento inicial
+El usuario pide un análisis preliminar del código para identificar violaciones de los principios DRY y SST en un proyecto Flutter/Dart siguiendo una arquitectura Screen → Controller → Service → Model. El objetivo es encontrar casos donde el mismo código o lógica se repite, o donde la misma información se define en múltiples lugares.
+
+### Módulos relevantes
+- `lib/controllers`
+- `lib/services`
+- `lib/models`
+
+### Patrones observados en el proyecto
+- código repetido en diferentes controladores
+- definiciones de modelos duplicadas
+- lógica similar en servicios
+
+### Borrador de approach
+Realizar una revisión manual de los archivos relevantes, identificar bloques de código repetidos y verificar la consistencia en las definiciones de modelos. Utilizar herramientas de análisis estático si es necesario.
+
+### Puntos que requieren tu análisis
+- ¿Debería considerar un análisis automatizado para detectar patrones de duplicidad?
+- ¿Hay algún patrón específico que sea más crítico de abordar primero?
+- ¿Se requiere una revisión detallada de todos los archivos o se pueden omitir ciertos módulos por razones de tiempo?
+
+## ⚠️ Anti-Frankenstein: NO DUPLIQUES
+*El modelo local analizó TODO el proyecto y encontró código reutilizable.*
+
+### Código que DEBES reutilizar (no crear de nuevo)
+- **`sleep.d`** en `/Users/olagg/Personal/talia/node_modules/@firebase/messaging/dist/src/helpers/sleep.d.ts`
+  - Propósito: * @license
+  - Relevancia: 61%
+- **`register.d`** en `/Users/olagg/Personal/talia/node_modules/@firebase/messaging/dist/src/helpers/register.d.ts`
+  - Propósito: * @license
+  - Relevancia: 61%
+- **`index.d`** en `/Users/olagg/Personal/talia/node_modules/@firebase/remote-config-types/index.d.ts`
+  - Propósito: * @license
+  - Relevancia: 61%
+- **`transport_service.d`** en `/Users/olagg/Personal/talia/node_modules/@firebase/performance/dist/src/services/transport_service.d.ts`
+  - Propósito: * @license
+  - Relevancia: 60%
+- **`oob_resources_service.d`** en `/Users/olagg/Personal/talia/node_modules/@firebase/performance/dist/src/services/oob_resources_service.d.ts`
+  - Propósito: * @license
+  - Relevancia: 60%
+
+### Patrones del Proyecto (DEBES seguir)
+- **Singletons:** Mixto o no detectado
+- **Clases base:** Name, Dispatcher, Compat, _FirebaseService, FirebaseApp
+- **State management:** No detectado
+- **Naming:** Sufijos comunes: {}
+
+### ⚠️ Advertencias
+- Ya existen helpers que podrían ser útiles: sleep.d, register.d
+- Clases base comunes: Name, Dispatcher, Compat
+- State management: No detectado
+
+### 🧟 Código Duplicado EXISTENTE (Frankenstein actual)
+*El proyecto YA tiene este código duplicado. NO agregues otra copia.*
+
+**Manejo de errores de Firebase** (10 copias)
+  - `test/test_helpers.dart:41`
+  - `lib/main.dart:142`
+  - `lib/notification_service.dart:79`
+  - 💡 **Refactor sugerido:** Crear FirebaseErrorHandler centralizado
+
+**Validación de null con early return/throw** (386 copias)
+  - `lib/link_parent_child.dart:88`
+  - `lib/link_parent_child.dart:116`
+  - `lib/link_parent_child.dart:158`
+  - 💡 **Refactor sugerido:** Usar extensión o helper de validación
+
+**Validación de strings vacíos/null** (52 copias)
+  - `lib/link_parent_child.dart:73`
+  - `lib/gemini_ai_service.dart:57`
+  - `lib/models/child.dart:17`
+  - 💡 **Refactor sugerido:** Crear StringUtils.isNullOrEmpty()
+
+**Formateo de tiempo relativo (hace X minutos/horas/días)** (33 copias)
+  - `lib/reports_screen.dart:503`
+  - `lib/reports_screen.dart:505`
+  - `lib/reports_screen.dart:507`
+  - 💡 **Refactor sugerido:** Crear DateTimeUtils.formatRelative(DateTime) -> String
+
+**Formateo de fechas con DateFormat** (8 copias)
+  - `lib/screens/reported_messages_screen.dart:173`
+  - `lib/screens/message_info_screen.dart:315`
+  - `lib/screens/message_info_screen.dart:318`
+  - 💡 **Refactor sugerido:** Crear DateTimeUtils con formatos constantes
+
+**Manejo de estado de loading** (47 copias)
+  - `lib/screens/add_contact_screen.dart:284`
+  - `lib/screens/add_contact_screen.dart:343`
+  - `lib/screens/splash_wrapper.dart:40`
+  - 💡 **Refactor sugerido:** Usar mixin o helper de loading state
+
+## Código Relevante
+*0 archivos seleccionados por relevancia semántica*
+
+---
+## Query del Usuario
+Analiza el código del proyecto buscando violaciones de los principios DRY (Don't Repeat Yourself) y SST (Single Source of Truth). Identifica código duplicado, lógica repetida, y lugares donde la misma información se define en múltiples lugares. Prioriza los casos más críticos.
+
+---
+**IMPORTANTE:** Usa el código reutilizable listado arriba. NO crees funciones/clases duplicadas. Sigue los patrones del proyecto.
+
+---
+## 🔍 ¿Necesitas más contexto?
+Si el código proporcionado NO es suficiente para responder, puedes pedir más contexto.
+Usa este formato EXACTO en tu respuesta:
+```
+[NEED_CONTEXT: descripción de lo que necesitas buscar]
+```
+Ejemplos:
+- `[NEED_CONTEXT: archivos de Service Worker o firebase-messaging-sw.js]`
+- `[NEED_CONTEXT: configuración de Firebase en el frontend]`
+- `[NEED_CONTEXT: cómo se registra el service worker]`
+
+El sistema buscará automáticamente y te enviará el contexto adicional.
+
+─── RESPUESTA DE CLAUDE ───
+## Conclusión
+
+Las violaciones más críticas son:
+
+1. **50 instancias** del patrón `isGroup ? 'groups_v2' : 'chats'` - SST violation
+2. **70 líneas** de código 100% idéntico en `cacheChatsForShareExtension()` - DRY violation
+3. **19 instancias** del patrón "obtener otro participante" - DRY violation (ya existe solución en `Chat` model)
+4. **906 instancias** de manejo de errores inconsistente - SST violation
+
+El impacto más inmediato lo tendrías resolviendo las primeras 3 violaciones, que son "quick wins" con bajo riesgo y alto impacto en mantenibilidad.
+
+¿Quieres que implemente alguna de estas soluciones o que profundice en alguna violación específica?
+
+
+═══════════════════════════════════════════════════════════════

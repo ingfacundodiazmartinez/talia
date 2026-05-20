@@ -16,7 +16,11 @@ class InAppPurchaseService {
   factory InAppPurchaseService() => _instance;
   InAppPurchaseService._internal();
 
-  final InAppPurchase _iap = InAppPurchase.instance;
+  // ✅ Lazy: no instanciar InAppPurchase.instance al construir el service.
+  // Eso evita que el plugin Android (BillingClient) entre en loop infinito
+  // de retries cuando el emulator no tiene Play Services configurados.
+  InAppPurchase? _iapInstance;
+  InAppPurchase get _iap => _iapInstance ??= InAppPurchase.instance;
   final FirebaseFunctions _functions = FirebaseFunctions.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final SubscriptionService _subscriptionService = SubscriptionService();

@@ -18,9 +18,6 @@ class AudioPlayerWidget extends StatefulWidget {
   final List<double>? waveformData; // Waveform ya procesado (optimistic)
   final bool isLocal; // Si el audio es local (aún no subido)
 
-  // AI-generated audio indicator
-  final bool isAiGenerated;
-
   const AudioPlayerWidget({
     super.key,
     required this.audioUrl,
@@ -28,7 +25,6 @@ class AudioPlayerWidget extends StatefulWidget {
     required this.colorScheme,
     this.waveformData,
     this.isLocal = false,
-    this.isAiGenerated = false,
   });
 
   @override
@@ -582,42 +578,6 @@ class _AudioPlayerWidgetState extends State<AudioPlayerWidget> {
               ),
             ),
           ),
-          // AI badge (only show if AI generated)
-          if (widget.isAiGenerated) ...[
-            const SizedBox(width: 4),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: widget.isMe
-                    ? Colors.white.withValues(alpha: 0.2)
-                    : widget.colorScheme.primary.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.auto_awesome,
-                    size: 12,
-                    color: widget.isMe
-                        ? Colors.white.withValues(alpha: 0.9)
-                        : widget.colorScheme.primary,
-                  ),
-                  const SizedBox(width: 2),
-                  Text(
-                    'IA',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      color: widget.isMe
-                          ? Colors.white.withValues(alpha: 0.9)
-                          : widget.colorScheme.primary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
         ],
       ),
     );

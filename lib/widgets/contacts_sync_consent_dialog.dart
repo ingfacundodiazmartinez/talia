@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 
 /// Diálogo de consentimiento para sincronización de contactos
@@ -24,12 +25,12 @@ class ContactsSyncConsentDialog {
                   Container(
                     padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF9D7FE8).withValues(alpha: 0.1),
+                      color: ThemeService.primaryColor.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: const Icon(
                       Icons.contacts,
-                      color: Color(0xFF9D7FE8),
+                      color: ThemeService.primaryColor,
                       size: 24,
                     ),
                   ),
@@ -51,7 +52,7 @@ class ContactsSyncConsentDialog {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Para ayudarte a encontrar amigos que ya usan Talia, necesitamos procesar tus contactos.',
+                    'Para ayudarte a encontrar amigos que ya usan Tália, necesitamos procesar tus contactos.',
                     style: TextStyle(
                       fontSize: 14,
                       color: Colors.grey[700],
@@ -112,7 +113,7 @@ class ContactsSyncConsentDialog {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Puedes usar Talia sin sincronizar contactos. Solo no podrás ver sugerencias automáticas de amigos.',
+                            'Puedes usar Tália sin sincronizar contactos. Solo no podrás ver sugerencias automáticas de amigos.',
                             style: TextStyle(
                               fontSize: 12,
                               color: Colors.orange[800],
@@ -135,7 +136,7 @@ class ContactsSyncConsentDialog {
                 ElevatedButton(
                   onPressed: () => Navigator.of(context).pop(true),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF9D7FE8),
+                    backgroundColor: ThemeService.primaryColor,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),

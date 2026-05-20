@@ -150,6 +150,7 @@ class _ProfileHeaderWidgetState extends State<ProfileHeaderWidget> {
       ReleaseLogger.log('Iniciando selección y subida de imagen...', tag: 'ProfileHeader');
 
       // Seleccionar imagen (pickAndUploadProfileImage maneja el loading dialog internamente)
+      // ignore: use_build_context_synchronously
       final String? imageUrl = await widget.controller.pickAndUploadImage(source, context: context);
 
       ReleaseLogger.log('Resultado: ${imageUrl != null ? 'URL obtenida' : 'null'}', tag: 'ProfileHeader');
@@ -161,6 +162,7 @@ class _ProfileHeaderWidgetState extends State<ProfileHeaderWidget> {
     } catch (e) {
       ReleaseLogger.error('Error al cambiar foto: $e', tag: 'ProfileHeader');
       if (mounted) {
+        // ignore: use_build_context_synchronously
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(ProfileController.getErrorMessage(e)),

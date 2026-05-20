@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "talia-chat-app-v2"
+    "default": "talia-chat-app-v2",
+    "production": "talia-chat-app-v2",
+    "staging": "talia-staging"
   }
 }

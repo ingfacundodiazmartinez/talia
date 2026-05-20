@@ -21,12 +21,12 @@ class OfflineQueueService {
   bool _isSyncing = false;
 
   // Tipos de operaciones
-  static const String OP_SEND_MESSAGE = 'send_message';
-  static const String OP_UPDATE_PROFILE = 'update_profile';
-  static const String OP_UPLOAD_FILE = 'upload_file';
-  static const String OP_CREATE_EMERGENCY = 'create_emergency';
-  static const String OP_BLOCK_USER = 'block_user';
-  static const String OP_UNBLOCK_USER = 'unblock_user';
+  static const String opSendMessage = 'send_message';
+  static const String opUpdateProfile = 'update_profile';
+  static const String opUploadFile = 'upload_file';
+  static const String opCreateEmergency = 'create_emergency';
+  static const String opBlockUser = 'block_user';
+  static const String opUnblockUser = 'unblock_user';
 
   /// Inicializa el servicio
   Future<void> initialize() async {
@@ -170,27 +170,27 @@ class OfflineQueueService {
     final data = operation['data'] as Map<String, dynamic>;
 
     switch (type) {
-      case OP_SEND_MESSAGE:
+      case opSendMessage:
         await _sendMessage(data);
         break;
 
-      case OP_UPDATE_PROFILE:
+      case opUpdateProfile:
         await _updateProfile(data);
         break;
 
-      case OP_UPLOAD_FILE:
+      case opUploadFile:
         await _uploadFile(data);
         break;
 
-      case OP_CREATE_EMERGENCY:
+      case opCreateEmergency:
         await _createEmergency(data);
         break;
 
-      case OP_BLOCK_USER:
+      case opBlockUser:
         await _blockUser(data);
         break;
 
-      case OP_UNBLOCK_USER:
+      case opUnblockUser:
         await _unblockUser(data);
         break;
 
@@ -231,9 +231,6 @@ class OfflineQueueService {
   }
 
   Future<void> _uploadFile(Map<String, dynamic> data) async {
-    final path = data['path'] as String;
-    final localPath = data['localPath'] as String;
-
     // Nota: En producción, necesitarías guardar el archivo localmente
     // y subirlo cuando haya conexión. Por ahora, esto es un placeholder.
     logger.warning('Upload de archivo desde offline no implementado completamente', tag: 'Offline');

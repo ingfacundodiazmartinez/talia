@@ -85,6 +85,11 @@ class StoryService {
     await _orchestrator.rejectStory(storyId, reason: reason);
   }
 
+  /// Restaurar historia rechazada a pending (undo de reject)
+  Future<void> restoreStoryToPending(String storyId) async {
+    await _orchestrator.restoreStoryToPending(storyId);
+  }
+
   /// Obtener historias pendientes para padre
   Stream<List<Story>> getPendingStoriesForParent() {
     return _orchestrator.getPendingStoriesForParent();

@@ -1,7 +1,7 @@
-/// Caller Avatar Widget
-///
-/// Displays a circular avatar with a pulsing animation for incoming calls.
-/// ✅ PHASE 1C: Provides a beautiful visual indicator during ringing state.
+// Caller Avatar Widget
+//
+// Displays a circular avatar with a pulsing animation for incoming calls.
+// ✅ PHASE 1C: Provides a beautiful visual indicator during ringing state.
 
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -13,12 +13,12 @@ class CallerAvatar extends StatefulWidget {
   final bool animate;
 
   const CallerAvatar({
-    Key? key,
+    super.key,
     required this.callerName,
     this.photoUrl,
     this.size = 120.0,
     this.animate = true,
-  }) : super(key: key);
+  });
 
   @override
   State<CallerAvatar> createState() => _CallerAvatarState();
@@ -100,7 +100,7 @@ class _CallerAvatarState extends State<CallerAvatar>
                   color: Theme.of(context)
                       .colorScheme
                       .primary
-                      .withOpacity(0.1 * (1 - (_scaleAnimation.value - 1) / 0.15)),
+                      .withValues(alpha: 0.1 * (1 - (_scaleAnimation.value - 1) / 0.15)),
                 ),
               ),
 
@@ -114,7 +114,7 @@ class _CallerAvatarState extends State<CallerAvatar>
                   color: Theme.of(context)
                       .colorScheme
                       .primary
-                      .withOpacity(0.15 * (1 - (_scaleAnimation.value - 1) / 0.15)),
+                      .withValues(alpha: 0.15 * (1 - (_scaleAnimation.value - 1) / 0.15)),
                 ),
               ),
 
@@ -130,7 +130,7 @@ class _CallerAvatarState extends State<CallerAvatar>
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
+                    color: Colors.black.withValues(alpha: 0.2),
                     blurRadius: 20,
                     offset: const Offset(0, 4),
                   ),

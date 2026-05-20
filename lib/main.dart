@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
@@ -65,11 +64,18 @@ import 'services/nudge_service.dart';
 import 'models/nudge.dart';
 import 'widgets/nudge/nudge_receiver_overlay.dart';
 
+// Environment configuration
+import 'config/app_config.dart';
+
 // IMPORTANTE: Después de ejecutar 'flutterfire configure',
 // descomenta la siguiente línea:
 import 'firebase_options.dart';
 
+/// Main entry point for PRODUCTION environment.
+/// For staging, use main_staging.dart instead.
 void main() async {
+  // Set environment to production (default)
+  AppConfig.setEnvironment(Environment.production);
   // Preservar splash nativo hasta que la app esté lista
   WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
@@ -123,15 +129,75 @@ void main() async {
   }
 
   // Inicializar Firebase solo si no está inicializado
-  if (Firebase.apps.isEmpty) {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-    ReleaseLogger.log('✅ Firebase inicializado', tag: 'MainApp');
-  } else {
-    ReleaseLogger.log('✅ Firebase ya estaba inicializado', tag: 'MainApp');
+  // Usar try-catch porque algunos plugins nativos pueden auto-inicializar Firebase
+  try {
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+      ReleaseLogger.log('✅ Firebase inicializado (${AppConfig.environmentName})', tag: 'MainApp');
+    } else {
+      ReleaseLogger.log('✅ Firebase ya estaba inicializado', tag: 'MainApp');
+    }
+  } catch (e) {
+    if (e.toString().contains('duplicate-app')) {
+      ReleaseLogger.log('⚠️ Firebase ya inicializado por native SDK (ignorando)', tag: 'MainApp');
+    } else {
+      rethrow;
+    }
   }
 
+  // Continue with common initialization
+  await _initializeAfterFirebase();
+}
+
+/// Entry point for when Firebase is already initialized (used by main_staging.dart)
+/// This allows different entry points to initialize Firebase with different configs
+/// before calling the common initialization code.
+Future<void> mainWithFirebaseInitialized() async {
+  // Preservar splash nativo hasta que la app esté lista
+  WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+  FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+
+  // Bloquear rotación de pantalla - solo permitir portrait
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+
+  // Configurar el status bar para que sea visible
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      statusBarBrightness: Brightness.light,
+      systemNavigationBarColor: Colors.white,
+      systemNavigationBarIconBrightness: Brightness.dark,
+    ),
+  );
+
+  ReleaseLogger.log(
+    '🚀 Iniciando Talia (${AppConfig.environmentName})...',
+    tag: 'MainApp',
+  );
+
+  // Inicializar MessageCacheService (Hive)
+  try {
+    await MessageCacheService().initialize();
+    ReleaseLogger.log('✅ MessageCacheService inicializado', tag: 'MainApp');
+  } catch (e) {
+    ReleaseLogger.error('❌ Error inicializando MessageCacheService: $e', tag: 'MainApp');
+  }
+
+  // Firebase ya está inicializado por el entry point
+  ReleaseLogger.log('✅ Firebase ya inicializado por entry point', tag: 'MainApp');
+
+  // Continue with common initialization
+  await _initializeAfterFirebase();
+}
+
+/// Common initialization code after Firebase is ready
+Future<void> _initializeAfterFirebase() async {
   // 🚨 CRITICAL: Registrar background handler DESPUÉS de Firebase.initializeApp
   // ANTES de runApp() para que funcione correctamente
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
@@ -213,20 +279,31 @@ void main() async {
   }
 
   // Configurar Crashlytics
-  if (kDebugMode) {
-    // Deshabilitar Crashlytics en modo debug para no contaminar reportes
-    await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(false);
-    ReleaseLogger.log(
-      '🐛 Crashlytics DESHABILITADO en modo debug',
-      tag: 'MainApp',
-    );
-  } else {
-    // Habilitar Crashlytics en producción
-    await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true);
-    ReleaseLogger.log(
-      '📊 Crashlytics HABILITADO en producción',
-      tag: 'MainApp',
-    );
+  // ✅ FIX: Added timeout to prevent hanging if Crashlytics isn't properly configured
+  try {
+    if (kDebugMode || AppConfig.isStaging) {
+      // Deshabilitar Crashlytics en modo debug y staging para no contaminar reportes
+      await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(false)
+          .timeout(const Duration(seconds: 5), onTimeout: () {
+            ReleaseLogger.log('⚠️ Crashlytics config timed out', tag: 'MainApp');
+          });
+      ReleaseLogger.log(
+        '🐛 Crashlytics DESHABILITADO en ${kDebugMode ? "debug" : "staging"}',
+        tag: 'MainApp',
+      );
+    } else {
+      // Habilitar Crashlytics en producción
+      await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(true)
+          .timeout(const Duration(seconds: 5), onTimeout: () {
+            ReleaseLogger.log('⚠️ Crashlytics config timed out', tag: 'MainApp');
+          });
+      ReleaseLogger.log(
+        '📊 Crashlytics HABILITADO en producción',
+        tag: 'MainApp',
+      );
+    }
+  } catch (e) {
+    ReleaseLogger.error('❌ Crashlytics config failed: $e (continuing)', tag: 'MainApp');
   }
 
   // Capturar errores de Flutter framework
@@ -410,70 +487,94 @@ void main() async {
 
   // Activar Firebase App Check con Play Integrity para producción
   // ✅ FIX: Usar --dart-define=USE_DEBUG_APP_CHECK=true para probar release sin TestFlight
+  // Staging también usa debug App Check para evitar configurar DeviceCheck por separado
   const useDebugAppCheck = bool.fromEnvironment('USE_DEBUG_APP_CHECK', defaultValue: false);
 
-  if (kDebugMode || useDebugAppCheck) {
-    // En modo debug o cuando se fuerza debug App Check para testing
-    await FirebaseAppCheck.instance.activate(
-      androidProvider: AndroidProvider.debug,
-      appleProvider: AppleProvider.debug,
-      webProvider: ReCaptchaV3Provider('recaptcha-v3-site-key'),
-    );
-    ReleaseLogger.log('🐛Firebase App Check activado con DEBUG provider${useDebugAppCheck ? " (forzado para testing)" : ""}');
+  // ✅ FIX: Wrap App Check activation with timeout to prevent hanging in staging
+  // App Check can hang if not properly configured in the Firebase project
+  try {
+    if (kDebugMode || useDebugAppCheck || AppConfig.isStaging) {
+      // En modo debug, staging, o cuando se fuerza debug App Check para testing
+      await FirebaseAppCheck.instance.activate(
+        providerAndroid: const AndroidDebugProvider(),
+        providerApple: const AppleDebugProvider(),
+        providerWeb: ReCaptchaV3Provider('recaptcha-v3-site-key'),
+      ).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          ReleaseLogger.log('⚠️ App Check activation timed out (continuing without App Check)', tag: 'MainApp');
+        },
+      );
+      ReleaseLogger.log('🐛Firebase App Check activado con DEBUG provider${AppConfig.isStaging ? " (staging)" : useDebugAppCheck ? " (forzado)" : ""}');
 
-    // Obtener y mostrar el debug token para registrarlo en Firebase Console
-    // En Android debug, el token se genera automáticamente por el debug provider
-    // OPTIMIZACIÓN: Eliminar delay artificial de 2 segundos en main thread
+      // Obtener y mostrar el debug token para registrarlo en Firebase Console
+      // En Android debug, el token se genera automáticamente por el debug provider
+      // OPTIMIZACIÓN: Eliminar delay artificial de 2 segundos en main thread
 
-    try {
-      final token = await FirebaseAppCheck.instance.getToken();
-      if (token != null && token.isNotEmpty) {
-        ReleaseLogger.log('🔑DEBUG TOKEN para Firebase Console:');
-        ReleaseLogger.log(
-          '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-          tag: 'MainApp',
-        );
-        ReleaseLogger.log('   $token', tag: 'MainApp');
-        ReleaseLogger.log(
-          '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-          tag: 'MainApp',
-        );
-        ReleaseLogger.log('📋Copia este token y regístralo en:');
-        ReleaseLogger.log(
-          '   Firebase Console → App Check → Apps → Manage debug tokens',
-        );
-        ReleaseLogger.log(
-          '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-          tag: 'MainApp',
-        );
+      // Solo intentar obtener debug token en desarrollo local, no en staging
+      // getToken() puede colgarse si App Check no está correctamente configurado
+      if (!AppConfig.isStaging) {
+        try {
+          final token = await FirebaseAppCheck.instance.getToken()
+              .timeout(const Duration(seconds: 5), onTimeout: () => null);
+          if (token != null && token.isNotEmpty) {
+            ReleaseLogger.log('🔑DEBUG TOKEN para Firebase Console:');
+            ReleaseLogger.log(
+              '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+              tag: 'MainApp',
+            );
+            ReleaseLogger.log('   $token', tag: 'MainApp');
+            ReleaseLogger.log(
+              '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+              tag: 'MainApp',
+            );
+            ReleaseLogger.log('📋Copia este token y regístralo en:');
+            ReleaseLogger.log(
+              '   Firebase Console → App Check → Apps → Manage debug tokens',
+            );
+            ReleaseLogger.log(
+              '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+              tag: 'MainApp',
+            );
+          } else {
+            ReleaseLogger.log(
+              '⚠️ No se pudo obtener debug token (token es null o vacío)',
+            );
+            ReleaseLogger.log(
+              '💡En algunos casos, el token se genera en logcat de Android',
+            );
+            ReleaseLogger.log('   Busca en logcat: "DebugAppCheckProvider"');
+          }
+        } catch (e) {
+          ReleaseLogger.log('⚠️ No se pudo obtener debug token: $e');
+          ReleaseLogger.log(
+            '💡El token de debug se puede encontrar en logcat de Android',
+          );
+          ReleaseLogger.log(
+            '   Busca: "DebugAppCheckProvider" o "AppCheckDebugProvider"',
+          );
+        }
       } else {
-        ReleaseLogger.log(
-          '⚠️ No se pudo obtener debug token (token es null o vacío)',
-        );
-        ReleaseLogger.log(
-          '💡En algunos casos, el token se genera en logcat de Android',
-        );
-        ReleaseLogger.log('   Busca en logcat: "DebugAppCheckProvider"');
+        ReleaseLogger.log('⏭️ Saltando getToken() en staging (no necesario)', tag: 'MainApp');
       }
-    } catch (e) {
-      ReleaseLogger.log('⚠️ No se pudo obtener debug token: $e');
-      ReleaseLogger.log(
-        '💡El token de debug se puede encontrar en logcat de Android',
+    } else {
+      // En producción, usar Play Integrity y Device Check
+      await FirebaseAppCheck.instance.activate(
+        providerAndroid: const AndroidPlayIntegrityProvider(),
+        providerApple: const AppleDeviceCheckProvider(),
+        providerWeb: ReCaptchaV3Provider('recaptcha-v3-site-key'),
+      ).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          ReleaseLogger.log('⚠️ App Check activation timed out (continuing without App Check)', tag: 'MainApp');
+        },
       );
       ReleaseLogger.log(
-        '   Busca: "DebugAppCheckProvider" o "AppCheckDebugProvider"',
+        '✅Firebase App Check activado con Play Integrity y Device Check',
       );
     }
-  } else {
-    // En producción, usar Play Integrity y Device Check
-    await FirebaseAppCheck.instance.activate(
-      androidProvider: AndroidProvider.playIntegrity,
-      appleProvider: AppleProvider.deviceCheck,
-      webProvider: ReCaptchaV3Provider('recaptcha-v3-site-key'),
-    );
-    ReleaseLogger.log(
-      '✅Firebase App Check activado con Play Integrity y Device Check',
-    );
+  } catch (e) {
+    ReleaseLogger.error('❌ App Check activation failed: $e (continuing without App Check)', tag: 'MainApp');
   }
 
   // Habilitar persistencia offline de Firestore para caché local
@@ -515,8 +616,10 @@ void main() async {
   // 3. This code saves messageId + full data to SharedPreferences (persistent)
   // 4. runApp() -> ChatDocsListener activates -> checks SharedPreferences -> SKIP duplicate
   // 5. NotificationService.initialize() -> reads pending navigation -> navigates to chat
+  // ✅ FIX: Added timeout to prevent hanging if FCM isn't properly configured
   try {
-    final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+    final initialMessage = await FirebaseMessaging.instance.getInitialMessage()
+        .timeout(const Duration(seconds: 5), onTimeout: () => null);
     if (initialMessage != null) {
       final prefs = await SharedPreferences.getInstance();
       final messageId = initialMessage.data['messageId'] ?? initialMessage.data['id'];
@@ -718,7 +821,7 @@ Future<void> _initializeHeavyServicesInBackground() async {
                 );
                 if (voipToken != null) {
                   ReleaseLogger.log(
-                    'Token (primeros 20): ${voipToken.length > 20 ? voipToken.substring(0, 20) + '...' : voipToken}',
+                    'Token (primeros 20): ${voipToken.length > 20 ? '${voipToken.substring(0, 20)}...' : voipToken}',
                     tag: 'VoIPDebug',
                   );
                   ReleaseLogger.log(
@@ -1131,7 +1234,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
 
     // V2 NAVIGATION: Shared navigation callback for both iOS and Android
     // ✅ FIX #1: Código defensivo para evitar crash al contestar desde lock screen
-    final navigateToCall = (String callId, {bool isIncoming = false}) {
+    void navigateToCall(String callId, {bool isIncoming = false}) {
       ReleaseLogger.log(
         '🚀 [Main] Navigating to AgoraCallScreen: $callId (incoming: $isIncoming)',
         tag: 'Main',
@@ -1178,7 +1281,7 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           _safeNavigateToCall(callId, isIncoming: isIncoming);
         });
       }
-    };
+    }
 
     // Configure iOS path (VoIPService)
     VoIPService().onNavigateToCall = navigateToCall;
@@ -1495,17 +1598,17 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
           )
         : baseTheme;
 
-    return GestureDetector(
+    Widget app = GestureDetector(
       onTap: () {
         // Cerrar teclado al tocar fuera de cualquier input
         FocusManager.instance.primaryFocus?.unfocus();
       },
       child: NetworkStatusBanner(
         child: MaterialApp(
-          key: ValueKey('app_${_currentUserRole ?? "unknown"}'),
+          key: ValueKey('app_${_currentUserRole ?? "unknown"}_${AppConfig.environmentName}'),
           navigatorKey: _navigatorKey,
           scaffoldMessengerKey: SnackbarService().scaffoldMessengerKey,
-          title: 'Talia',
+          title: 'Tália${AppConfig.environmentBadge}',
           debugShowCheckedModeBanner: false,
           theme: accessibleTheme,
           // Configuración de localización para date pickers nativos
@@ -1568,6 +1671,22 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         ),
       ),
     );
+
+    // Add environment banner for non-production builds
+    // ✅ FIX: Wrap Banner in Directionality since it's outside MaterialApp
+    if (!AppConfig.isProduction) {
+      app = Directionality(
+        textDirection: TextDirection.ltr,
+        child: Banner(
+          message: AppConfig.isStaging ? 'STAGING' : 'DEV',
+          location: BannerLocation.topEnd,
+          color: AppConfig.isStaging ? Colors.orange : Colors.red,
+          child: app,
+        ),
+      );
+    }
+
+    return app;
   }
 }
 
@@ -1601,6 +1720,46 @@ class _AuthWrapperState extends State<AuthWrapper> {
         ReleaseLogger.log('🔄AuthWrapper - Has data: ${snapshot.hasData}');
         ReleaseLogger.log('🔄AuthWrapper - User: ${snapshot.data?.email}');
 
+        // ✅ FIX: Show loading while waiting for auth state (especially important for staging)
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          ReleaseLogger.log('⏳ AuthWrapper - Waiting for auth state...');
+          return Scaffold(
+            body: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    ThemeService.primaryColor,
+                    Color(0xFFB39DDB),
+                    Color(0xFFCE93D8),
+                  ],
+                ),
+              ),
+              child: const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(color: Colors.white),
+                    SizedBox(height: 16),
+                    Text(
+                      'Iniciando...',
+                      style: TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        // ✅ FIX: Handle auth stream errors gracefully
+        if (snapshot.hasError) {
+          ReleaseLogger.error('❌ AuthWrapper - Auth stream error: ${snapshot.error}');
+          // On error, show login screen
+          return AuthScreen();
+        }
+
         // Usuario autenticado
         if (snapshot.hasData) {
           ReleaseLogger.log('✅Usuario autenticado: ${snapshot.data!.email}');
@@ -1612,6 +1771,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
               .registerDeviceSession(snapshot.data!.uid)
               .then((_) {
                 // Iniciar listener de sesión DESPUÉS de registrar
+                // ignore: use_build_context_synchronously
                 _deviceSessionService.startSessionListener(context);
               })
               .catchError((e) {
@@ -1619,6 +1779,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
                   '⚠️ Error registrando sesión de dispositivo: $e',
                 );
                 // Aún así iniciar listener para detectar otros dispositivos
+                // ignore: use_build_context_synchronously
                 _deviceSessionService.startSessionListener(context);
               });
 
@@ -1761,7 +1922,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
                       ReleaseLogger.log(
                         '👶 Redirigiendo a ChildMainShell (role: $role)',
                       );
-                      return ChildMainShell();
+                      return ChildMainShell(key: ChildMainShell.shellKey);
                     }
                   },
                 );
@@ -1777,7 +1938,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
                 ReleaseLogger.log(
                   '👶 Redirigiendo a ChildMainShell (role: $role)',
                 );
-                return ChildMainShell();
+                return ChildMainShell(key: ChildMainShell.shellKey);
               }
             },
           );

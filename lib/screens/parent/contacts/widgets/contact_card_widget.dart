@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import '../../../../services/create_chat_service.dart';
+import '../../../../services/chats/chat_services.dart';
+import '../../../chat_detail_screen.dart';
 import '../../../child_location_screen.dart';
 
 /// Widget para mostrar una tarjeta de contacto
@@ -50,13 +51,26 @@ class ContactCardWidget extends StatelessWidget {
     final isOnline = statusColor == Colors.green;
 
     return GestureDetector(
-      onTap: () {
-        // ✅ SEGURIDAD: Crear chat mediante Cloud Function antes de navegar
-        CreateChatService.createAndNavigateToChat(
-          context: context,
-          otherUserId: contactId,
-          otherUserName: displayName,
-        );
+      onTap: () async {
+        final createService = CreateChatService();
+        final result = await createService.call(otherUserId: contactId);
+
+        if (result.success && result.chatId != null && context.mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ChatDetailScreen(
+                chatId: result.chatId!,
+                contactId: contactId,
+                contactName: displayName,
+              ),
+            ),
+          );
+        } else if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(result.message)),
+          );
+        }
       },
       child: Container(
         margin: EdgeInsets.only(bottom: 8),

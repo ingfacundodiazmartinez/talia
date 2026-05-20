@@ -118,7 +118,6 @@ class ChatOrchestrator {
       messageRepository: _messageRepository,
       uploadManager: _uploadManager,
       cacheManager: _cacheManager,
-      blockService: ChatBlockService(),
       rateLimitingService: _rateLimitingService,
     );
 
@@ -142,17 +141,13 @@ class ChatOrchestrator {
     );
 
     // Inicializar servicios P2 restantes
-    _notificationService = ChatNotificationService(
-      chatRepository: _chatRepository,
-      auth: auth,
-    );
+    _notificationService = ChatNotificationService();
 
     _approvalWorkflowService = ChatApprovalWorkflowService(
       chatRepository: _chatRepository,
       notificationService: _notificationService,
       groupService: _groupService,
       cacheManager: _cacheManager,
-      auth: auth,
     );
   }
 

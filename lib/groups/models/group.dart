@@ -66,23 +66,33 @@ class Group {
   /// Create from Firestore document
   factory Group.fromFirestore(String id, Map<String, dynamic> data) {
     // Parse member details
+    // ✅ Defensive: handle corrupted data where field might be List instead of Map
     final memberDetailsMap = <String, GroupMember>{};
-    final rawMemberDetails = data['memberDetails'] as Map<String, dynamic>? ?? {};
+    final rawMemberDetails = data['memberDetails'] is Map
+        ? data['memberDetails'] as Map<String, dynamic>
+        : <String, dynamic>{};
     for (final entry in rawMemberDetails.entries) {
-      memberDetailsMap[entry.key] = GroupMember.fromMap(
-        entry.key,
-        entry.value as Map<String, dynamic>,
-      );
+      if (entry.value is Map) {
+        memberDetailsMap[entry.key] = GroupMember.fromMap(
+          entry.key,
+          entry.value as Map<String, dynamic>,
+        );
+      }
     }
 
     // Parse pending member details
+    // ✅ Defensive: handle corrupted data where field might be List instead of Map
     final pendingMemberDetailsMap = <String, PendingMember>{};
-    final rawPendingDetails = data['pendingMemberDetails'] as Map<String, dynamic>? ?? {};
+    final rawPendingDetails = data['pendingMemberDetails'] is Map
+        ? data['pendingMemberDetails'] as Map<String, dynamic>
+        : <String, dynamic>{};
     for (final entry in rawPendingDetails.entries) {
-      pendingMemberDetailsMap[entry.key] = PendingMember.fromMap(
-        entry.key,
-        entry.value as Map<String, dynamic>,
-      );
+      if (entry.value is Map) {
+        pendingMemberDetailsMap[entry.key] = PendingMember.fromMap(
+          entry.key,
+          entry.value as Map<String, dynamic>,
+        );
+      }
     }
 
     return Group(

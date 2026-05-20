@@ -14,7 +14,6 @@ import 'package:flutter/foundation.dart';
 import '../utils/release_logger.dart';
 import 'story_service_refactored.dart';
 import 'contact_photo_cache_service.dart';
-import 'user_cache_service.dart';
 
 /// Política de retención de datos
 class RetentionPolicy {
@@ -113,7 +112,7 @@ class DataManagementService {
         cleanLocalCache(),
       ]);
 
-      final totalCleaned = results.fold<int>(0, (sum, count) => sum + count);
+      final totalCleaned = results.fold<int>(0, (total, cnt) => total + cnt);
 
       ReleaseLogger.log('✅ Automatic cleanup completed: $totalCleaned items cleaned', tag: 'DataManagementService');
     } catch (e) {
@@ -173,12 +172,6 @@ class DataManagementService {
     try {
       final user = _auth.currentUser;
       if (user == null) return 0;
-
-      final cutoffDate = DateTime.now().subtract(RetentionPolicy.media);
-
-      // Buscar media antiguo en Storage
-      // Nota: Storage no soporta queries complejas, se debe iterar
-      final chatMediaRef = _storage.ref('chat_media');
 
       int deletedCount = 0;
 

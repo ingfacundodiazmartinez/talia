@@ -221,6 +221,8 @@ class GroupMessageCacheService {
       'moderationStatus': message.moderationStatus,
       'moderationReason': message.moderationReason,
       'localId': message.localId,
+      // ✅ Visibilidad por destinatario
+      'visibleTo': message.visibleTo,
     };
   }
 
@@ -281,6 +283,10 @@ class GroupMessageCacheService {
       moderationStatus: data['moderationStatus'] as String?,
       moderationReason: data['moderationReason'] as String?,
       localId: data['localId'] as String?,
+      // ✅ Visibilidad por destinatario
+      visibleTo: data['visibleTo'] != null
+          ? List<String>.from(data['visibleTo'] as List)
+          : null,
     );
   }
 

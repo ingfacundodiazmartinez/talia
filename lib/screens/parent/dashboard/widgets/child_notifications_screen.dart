@@ -1,3 +1,4 @@
+import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import '../../../../controllers/child_notifications_controller.dart';
 import '../../../../groups/groups.dart';
@@ -123,7 +124,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
       return Scaffold(
         appBar: AppBar(
           title: Text('Notificaciones de ${widget.childName}'),
-          backgroundColor: Color(0xFF9D7FE8),
+          backgroundColor: ThemeService.primaryColor,
           foregroundColor: Colors.white,
         ),
         body: Center(
@@ -135,7 +136,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text('Notificaciones de ${widget.childName}'),
-        backgroundColor: Color(0xFF9D7FE8),
+        backgroundColor: ThemeService.primaryColor,
         foregroundColor: Colors.white,
         actions: [
           // Botón de refresh para sincronizar manualmente
@@ -155,7 +156,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     if (_isLoading) {
       return Center(
         child: CircularProgressIndicator(
-          color: Color(0xFF9D7FE8),
+          color: ThemeService.primaryColor,
         ),
       );
     }
@@ -232,7 +233,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
     // Lista de notificaciones desde cache
     return RefreshIndicator(
       onRefresh: _syncAndLoadNotifications,
-      color: Color(0xFF9D7FE8),
+      color: ThemeService.primaryColor,
       child: ListView.builder(
         controller: _scrollController,
         padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -487,7 +488,7 @@ class _ChildNotificationsScreenState extends State<ChildNotificationsScreen> {
 
   Future<void> _markAllAsRead({bool showSnackbar = true}) async {
     // 1. Marcar en cache local (para UI instantánea)
-    final markedCount = await _controller.markAllAsReadInCache();
+    await _controller.markAllAsReadInCache();
 
     // 2. ✅ FIX: También marcar en Firestore (para que el badge se actualice)
     // Ejecutar en background sin esperar para no bloquear UI

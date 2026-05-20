@@ -51,18 +51,15 @@ class MediaGalleryService {
     }
 
     // Encontrar el índice del medio actual
-    int initialIndex = 0;
-    if (currentMediaUrl != null) {
-      initialIndex = allMedia.indexWhere((item) => item.url == currentMediaUrl);
-      if (initialIndex == -1) {
-        // Si no se encontró, agregar el actual al inicio
-        allMedia.insert(0, MediaItem(
-          url: currentMediaUrl,
-          type: currentMediaType,
-          caption: caption,
-        ));
-        initialIndex = 0;
-      }
+    int initialIndex = allMedia.indexWhere((item) => item.url == currentMediaUrl);
+    if (initialIndex == -1) {
+      // Si no se encontró, agregar el actual al inicio
+      allMedia.insert(0, MediaItem(
+        url: currentMediaUrl,
+        type: currentMediaType,
+        caption: caption,
+      ));
+      initialIndex = 0;
     }
 
     return (mediaItems: allMedia, initialIndex: initialIndex);

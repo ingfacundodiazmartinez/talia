@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import '../models/trivia.dart';
 import '../services/trivia/trivia_creation_service.dart';
 import '../services/trivia/trivia_orchestrator.dart';
 import '../services/trivia/trivia_suggestion_service.dart';
@@ -248,11 +247,6 @@ class TriviaCreationController {
   }
 
   // ==================== UTILITIES ====================
-
-  void _setLoading(bool loading) {
-    _isLoading = loading;
-    onLoadingChanged?.call(loading);
-  }
 
   void _setPublishing(bool publishing) {
     _isPublishing = publishing;

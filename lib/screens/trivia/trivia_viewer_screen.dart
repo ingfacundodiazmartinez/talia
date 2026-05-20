@@ -10,7 +10,6 @@ import '../../services/trivia/trivia_orchestrator.dart';
 import '../../services/trivia/trivia_participation_service.dart';
 import '../../services/ad_service.dart';
 import '../../widgets/story_native_ad_widget.dart';
-import 'trivia_play_screen.dart';
 import 'trivia_results_screen.dart';
 import 'widgets/trivia_question_widget.dart';
 import 'widgets/trivia_timer_widget.dart';

@@ -90,11 +90,13 @@ class _AddContactScreenState extends State<AddContactScreen>
     if (_userCode != null) {
       final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
       final deepLink = 'https://taliachat.com/add/$currentUserId';
-      Share.share(
-        'Agregame como contacto en Talia!\n\n'
-        'Haz click aqui: $deepLink\n\n'
-        'O usa mi codigo: $_userCode',
-        subject: 'Agregame en Talia',
+      SharePlus.instance.share(
+        ShareParams(
+          text: 'Agregame como contacto en Tália!\n\n'
+              'Haz click aqui: $deepLink\n\n'
+              'O usa mi codigo: $_userCode',
+          subject: 'Agregame en Tália',
+        ),
       );
     }
   }
@@ -323,6 +325,7 @@ class _AddContactScreenState extends State<AddContactScreen>
       }
 
       // Mostrar confirmacion
+      if (!mounted) return;
       final confirmed = await showConfirmContactDialog(
         context: context,
         contactInfo: result,

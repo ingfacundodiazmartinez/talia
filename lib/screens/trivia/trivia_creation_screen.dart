@@ -315,6 +315,7 @@ class _TriviaCreationScreenState extends State<TriviaCreationScreen> {
         if (didPop) return;
         final shouldPop = await _onWillPop();
         if (shouldPop && mounted) {
+          // ignore: use_build_context_synchronously
           Navigator.of(context).pop();
         }
       },

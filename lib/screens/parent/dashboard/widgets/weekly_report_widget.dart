@@ -59,7 +59,7 @@ class WeeklyReportWidget extends StatelessWidget {
             'Análisis de sentimientos, detección de bullying y reportes semanales automáticos.',
             style: TextStyle(
               fontSize: 14,
-              color: Colors.white.withOpacity(0.9),
+              color: Colors.white.withValues(alpha: 0.9),
             ),
           ),
           SizedBox(height: 16),

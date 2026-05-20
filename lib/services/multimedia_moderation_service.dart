@@ -36,9 +36,13 @@ class MultimediaModerationResult {
 
     MediaType? mediaType;
     final typeStr = data['mediaType'] as String?;
-    if (typeStr == 'image') mediaType = MediaType.image;
-    else if (typeStr == 'audio') mediaType = MediaType.audio;
-    else if (typeStr == 'video') mediaType = MediaType.video;
+    if (typeStr == 'image') {
+      mediaType = MediaType.image;
+    } else if (typeStr == 'audio') {
+      mediaType = MediaType.audio;
+    } else if (typeStr == 'video') {
+      mediaType = MediaType.video;
+    }
 
     return MultimediaModerationResult(
       flagged: data['flagged'] as bool? ?? false,

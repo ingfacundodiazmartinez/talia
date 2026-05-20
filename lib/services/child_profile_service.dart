@@ -37,6 +37,14 @@ class ChildProfileService {
         .snapshots();
   }
 
+  /// Stream de TODOS los links padre-hijo para un child (cualquier status)
+  Stream<QuerySnapshot> getAllParentChildLinksStream(String childId) {
+    return _firestore
+        .collection('parent_children')
+        .where('childId', isEqualTo: childId)
+        .snapshots();
+  }
+
   /// Obtiene información de un padre por su ID
   Future<Map<String, dynamic>?> getParentData(String parentId) async {
     try {

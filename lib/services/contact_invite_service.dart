@@ -25,7 +25,7 @@ iOS: $_appStoreUrl
 Android: $_playStoreUrl
 ''';
 
-      await Share.share(message, subject: 'Invitación a Talia');
+      await SharePlus.instance.share(ShareParams(text: message, subject: 'Invitación a Tália'));
       ReleaseLogger.log('Invitación compartida para $contactName', tag: 'ContactInvite');
     } catch (e) {
       ReleaseLogger.error('Error compartiendo invitación: $e', tag: 'ContactInvite');
@@ -37,7 +37,7 @@ Android: $_playStoreUrl
   Future<bool> sendSmsInvite(String phoneNumber, String contactName) async {
     try {
       final message = Uri.encodeComponent(
-        'Hola $contactName! Descarga Talia para chatear conmigo de forma segura: $_playStoreUrl'
+        'Hola $contactName! Descarga Tália para chatear conmigo de forma segura: $_playStoreUrl'
       );
 
       // Normalizar número (quitar espacios, guiones)
@@ -62,7 +62,7 @@ Android: $_playStoreUrl
   Future<bool> sendWhatsAppInvite(String phoneNumber, String contactName) async {
     try {
       final message = Uri.encodeComponent(
-        'Hola $contactName! Descarga Talia para chatear conmigo de forma segura. Es una app ideal para familias: $_playStoreUrl'
+        'Hola $contactName! Descarga Tália para chatear conmigo de forma segura. Es una app ideal para familias: $_playStoreUrl'
       );
 
       // Normalizar número (quitar +, espacios, guiones)

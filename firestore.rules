@@ -317,15 +317,26 @@ service cloud.firestore {
         }
 
         // ✅ FUNCIÓN: Verificar si el chat es válido para enviar mensajes
-        // 🔒 SEGURIDAD: También verifica si el chat está bloqueado (isBlocked)
+        // 🔒 SEGURIDAD: Bloqueo es unidireccional. Solo el bloqueador (blockedBy)
+        // pierde la capacidad de enviar mensajes. El bloqueado puede seguir mandando
+        // (quedan en 1 tilde porque el bloqueador filtra/ignora los mensajes en el
+        // cliente y nunca actualiza el lastOpenedAt del chat).
+        //
+        // Si el chat fue bloqueado por moderación (blockedReason == 'parent_revoked')
+        // sí se bloquea bidireccionalmente para ambos.
         function isChatValid() {
           let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
-          // Verificar que el chat NO esté bloqueado
-          let notBlocked = !chatDoc.data.keys().hasAny(['isBlocked']) || chatDoc.data.isBlocked != true;
+          let chatBlocked = chatDoc.data.get('isBlocked', false) == true;
+          let blocker = chatDoc.data.get('blockedBy', '');
+          let blockedReason = chatDoc.data.get('blockedReason', '');
+          // Bloqueo por padre/moderación = sigue bidireccional
+          let isParentRevoked = blockedReason == 'parent_revoked';
+          // Si el chat está bloqueado, solo el bloqueador queda sin poder mandar.
+          // Bloqueos por padre afectan a ambos.
+          let notBlocked = !chatBlocked || (!isParentRevoked && blocker != request.auth.uid);
           // Si no existe el campo isValidChat, asumimos true (compatibilidad con chats viejos)
           // Si existe, debe ser true
           let isValid = !chatDoc.data.keys().hasAny(['isValidChat']) || chatDoc.data.isValidChat == true;
-          // El chat es válido SOLO si no está bloqueado Y es válido
           return notBlocked && isValid;
         }
 
@@ -341,17 +352,54 @@ service cloud.firestore {
                  request.resource.data.senderId == request.auth.uid;
         }
 
+        // 🔒 FUNCIÓN: Validar `visibleTo` correcto al crear mensaje.
+        // Permite el envío client-side incluso con moderación activa o con
+        // bloqueo unidireccional, siempre que el cliente respete el "shape"
+        // correcto del campo:
+        //
+        // - Si el chat tiene moderación activa: el cliente DEBE escribir
+        //   `visibleTo == [senderId]`. La CF `moderateMessage` expande la
+        //   lista al aprobar el mensaje (admin SDK, sin reglas).
+        // - Si el chat está bloqueado y el sender NO es el bloqueador:
+        //   `visibleTo == [senderId]` (el destinatario no debe verlo).
+        // - Caso normal: `visibleTo` puede tener cualquier subset que incluya
+        //   al sender. Lo razonable es `[senderId, otherParticipant]`.
+        // - Backwards compat: clientes viejos que omiten `visibleTo` siguen
+        //   funcionando para chats SIN moderación.
+        function needsRestrictedVisibility() {
+          let chatDoc = get(/databases/$(database)/documents/chats/$(chatId));
+          let modOn = chatDoc.data.get('moderationEnabled', false) == true;
+          let chatBlocked = chatDoc.data.get('isBlocked', false) == true;
+          let blocker = chatDoc.data.get('blockedBy', '');
+          let blockedReason = chatDoc.data.get('blockedReason', '');
+          // Bloqueo de usuario a usuario (no parent_revoked) y el sender no
+          // es el bloqueador → la visibilidad queda restringida al sender.
+          let blockedByOther = chatBlocked &&
+                               blockedReason != 'parent_revoked' &&
+                               blocker != '' && blocker != request.auth.uid;
+          return modOn || blockedByOther;
+        }
+
+        function hasValidVisibleTo() {
+          let vt = request.resource.data.get('visibleTo', []);
+          let hasField = request.resource.data.keys().hasAny(['visibleTo']);
+          let restrictedOk = hasField && vt.size() == 1 && vt[0] == request.auth.uid;
+          let openOk = !hasField || (vt.size() >= 1 && (request.auth.uid in vt));
+          return needsRestrictedVisibility() ? restrictedOk : openOk;
+        }
+
         // 🔒 SEGURIDAD CRÍTICA: Validación completa para crear mensajes
         // Permitir crear mensaje SOLO si:
         // 1. Eres el sender (senderId == auth.uid), Y
-        // 2. Eres PARTICIPANTE del chat (validado en Firestore), Y
-        // 3. El chat es VÁLIDO (isValidChat = true o no existe), Y
+        // 2. Eres PARTICIPANTE del chat, Y
+        // 3. El chat es VÁLIDO (no bloqueado por ti ni revocado por padre), Y
         // 4. El texto no excede 5000 caracteres, Y
-        // 5. Si hay moderación, NO se permite escritura directa (debe usar Cloud Function)
-        // 6. O es un mensaje de llamada Y eres participante Y chat válido
+        // 5. `visibleTo` tiene shape correcto (restringido al sender si hay
+        //    moderación activa o bloqueo por el otro lado).
+        // 6. O es un mensaje de llamada Y eres participante Y chat válido.
         allow create: if request.auth != null && isParticipant() && isChatValid() && hasRequiredMessageFields() && (
           (request.auth.uid == request.resource.data.senderId &&
-           !chatHasModeration() &&  // NUEVO: Bloquear si hay moderación activa
+           hasValidVisibleTo() &&
            (!request.resource.data.keys().hasAny(['text']) ||
             request.resource.data.text == null ||
             request.resource.data.text.size() <= 5000)) ||
@@ -364,8 +412,11 @@ service cloud.firestore {
         function isUpdatingOnlyMetadata() {
           let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
 
-          // Campos críticos que NO deben cambiar
-          let criticalFields = ['text', 'senderId', 'timestamp', 'imageUrl', 'videoUrl', 'audioUrl', 'type'];
+          // Campos críticos que NO deben cambiar — incluyendo `visibleTo`:
+          // solo la CF (admin SDK) puede expandir la lista al aprobar moderación.
+          // Un cliente no debería poder forzar que otro usuario reciba un mensaje
+          // que originalmente estaba restringido.
+          let criticalFields = ['text', 'senderId', 'timestamp', 'imageUrl', 'videoUrl', 'audioUrl', 'type', 'visibleTo'];
 
           // Verificar si algún campo crítico está siendo modificado
           let criticalFieldsModified = changedKeys.hasAny(criticalFields);
@@ -788,6 +839,32 @@ service cloud.firestore {
     match /rate_limits/{limitId} {
       allow read: if request.auth != null && resource.data.userId == request.auth.uid;
       allow write: if false; // Solo Cloud Functions
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // WALLET DE CRÉDITOS FAMILIAR
+    // ─────────────────────────────────────────────────────────────────────
+    // Documentación: WALLET_SPEC.md §9
+    // Modelo: wallet por padre. Hijos linkados pueden leer (no escribir).
+    // Toda escritura es vía Cloud Functions con admin SDK.
+
+    match /credit_wallets/{parentUserId} {
+      // El padre dueño puede leer su wallet
+      // O un hijo linkado a ese padre (verifica linkedChildrenIds en users/{parentUserId})
+      allow read: if request.auth != null && (
+        request.auth.uid == parentUserId ||
+        request.auth.uid in get(/databases/$(database)/documents/users/$(parentUserId)).data.linkedChildrenIds
+      );
+      // Nadie escribe directo: solo Cloud Functions (wallet.js helpers)
+      allow write: if false;
+    }
+
+    match /credit_transactions/{txId} {
+      // El dueño del wallet asociado puede leer su historial
+      allow read: if request.auth != null &&
+        request.auth.uid == resource.data.walletId;
+      // Audit log inmutable: solo Cloud Functions escriben
+      allow write: if false;
     }
 
     // Configuraciones de padres
@@ -1957,24 +2034,47 @@ service cloud.firestore {
         // porque readAt_$userId es un campo dinámico que no se puede listar estáticamente
         function isUpdatingGroupMessageMetadata() {
           let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
-          // Campos críticos que NO deben modificarse
+          // Campos críticos que NO deben modificarse (incluyendo visibleTo: solo
+          // la CF puede expandir la lista al aprobar moderación).
           let criticalFields = ['text', 'senderId', 'timestamp', 'imageUrl', 'videoUrl',
                                 'audioUrl', 'thumbnailUrl', 'type', 'senderName', 'senderPhotoURL',
                                 'replyTo', 'isForwarded', 'originalContactName', 'localId',
-                                'moderationStatus', 'moderationReason'];
+                                'moderationStatus', 'moderationReason', 'visibleTo'];
           // Verificar que NO se modifiquen campos críticos
           return !changedKeys.hasAny(criticalFields);
+        }
+
+        // 🔒 FUNCIÓN: Validar `visibleTo` correcto al crear mensaje de grupo.
+        // Si el grupo tiene moderación, el cliente DEBE escribir
+        // `visibleTo == [senderId]`. La CF expandirá la lista al aprobar.
+        function hasValidGroupVisibleTo() {
+          let modOn = groupHasModeration();
+          let visibleTo = request.resource.data.get('visibleTo', []);
+          let hasVisibleField = request.resource.data.keys().hasAny(['visibleTo']);
+
+          let restrictedOk = hasVisibleField &&
+                             visibleTo.size() == 1 &&
+                             visibleTo[0] == request.auth.uid;
+
+          let openOk = !hasVisibleField || (
+            visibleTo.size() >= 1 &&
+            (request.auth.uid in visibleTo)
+          );
+
+          return modOn ? restrictedOk : openOk;
         }
 
         // Solo miembros pueden leer mensajes
         allow read: if request.auth != null && isGroupV2Member();
 
-        // Solo miembros pueden crear mensajes (y deben ser el sender)
-        // IMPORTANTE: Si el grupo tiene moderación activa, solo Cloud Functions puede escribir
+        // Crear mensaje: ahora se permite write directo incluso con moderación,
+        // siempre que `visibleTo` esté restringido al sender (la CF expande la
+        // lista al aprobar). Backwards compat: clientes viejos que omiten
+        // `visibleTo` siguen funcionando para grupos sin moderación.
         allow create: if request.auth != null &&
           isGroupV2Member() &&
           request.auth.uid == request.resource.data.senderId &&
-          !groupHasModeration();
+          hasValidGroupVisibleTo();
 
         // Permitir actualizar SI:
         // 1. Eres miembro Y solo actualizas metadata (reactions, readBy), O

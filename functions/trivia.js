@@ -785,7 +785,7 @@ FORMATO DE RESPUESTA (JSON válido):
 
 Genera exactamente ${count} preguntas creativas y variadas. Solo responde con el JSON, sin explicaciones.`;
 
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 
   const result = await model.generateContent(prompt);
   const response = await result.response;

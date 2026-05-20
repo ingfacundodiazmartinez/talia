@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "858375352661",
+    "firebase_url": "https://talia-chat-app-v2-default-rtdb.firebaseio.com",
+    "project_id": "talia-chat-app-v2",
+    "storage_bucket": "talia-chat-app-v2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:858375352661:android:88a5e3bcf10054f061bfdc",
+        "android_client_info": {
+          "package_name": "com.talia.chat"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "858375352661-1nc79es6sgei91i6aaad8k16u66me625.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC_dU9de4c3Q15sqiaBeujYYXPupYWj6R0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "858375352661-1nc79es6sgei91i6aaad8k16u66me625.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "858375352661-0morutqllasdk8bu6ij06t7n3q412gbq.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.talia.chat"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
