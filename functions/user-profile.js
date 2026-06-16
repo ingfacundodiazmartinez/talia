@@ -577,7 +577,10 @@ exports.onUserRegistered = onDocumentCreated(
                 payload: {
                   aps: {
                     sound: "default",
-                    badge: 1,
+                    // ⚠️ NO setear `badge` acá: el badge del ícono lo calcula
+                    // el cliente (UnreadMessagesService.updateBadgeCount) según
+                    // el estado real. Un `badge: 1` hardcodeado dejaba el ícono
+                    // con un (1) fantasma que no se podía limpiar.
                   },
                 },
               },

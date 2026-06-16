@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -8,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:gal/gal.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/mood_poll.dart';
 import '../models/trivia.dart';
 import '../models/trivia_response.dart';
@@ -33,6 +35,12 @@ class StoryViewerScreen extends StatefulWidget {
   final List<UserStories> allUserStories;
   final int initialUserIndex;
 
+  /// Si se especifica, abre directamente en esta historia (índice dentro de
+  /// la lista de items del usuario inicial). Si es null, el viewer aplica su
+  /// heurística por defecto (own=última, otros=primera no vista).
+  /// Usado por "Mis historias" para abrir en la historia tapeada exacta.
+  final int? initialStoryIndex;
+
   /// Trivias opcionales para mostrar integradas con las historias
   final List<Trivia>? trivias;
 
@@ -43,6 +51,7 @@ class StoryViewerScreen extends StatefulWidget {
     super.key,
     required this.allUserStories,
     required this.initialUserIndex,
+    this.initialStoryIndex,
     this.trivias,
     this.initialTriviaIndex,
   });
@@ -86,6 +95,21 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
   // VideoPlayerController map para manejar múltiples videos
   final Map<String, VideoPlayerController> _videoControllers = {};
+
+  // 🎵 Reproductor de la canción de la historia actual (si tiene música)
+  final AudioPlayer _musicPlayer = AudioPlayer();
+  String? _currentMusicUrl; // URL que está sonando, para no reiniciarla
+  // Duración real de la canción actual (la historia dura lo mismo). Fallback 15s
+  // mientras todavía no se conoce.
+  Duration? _currentMusicDuration;
+  final Duration _musicStoryDuration = const Duration(seconds: 15);
+  // true mientras la canción está cargando (mostramos loader y no arrancamos
+  // el timer hasta que empiece a sonar).
+  bool _isMusicLoading = false;
+  Timer? _musicLoadFallback; // por si el audio nunca arranca (error de red)
+  bool _showLyrics = false; // overlay de letra (toggle), estilo Instagram
+  // Posición de reproducción de la canción (ms abs), para el karaoke línea-a-línea.
+  final ValueNotifier<int> _musicPositionMs = ValueNotifier<int>(0);
   // Para distinguir tap (navegación) vs hold (pausa) sin esperar 500ms del long-press.
   DateTime? _pointerDownAt;
   Offset? _pointerDownPos;
@@ -188,16 +212,23 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
   /// Construir lista unificada de contenido (stories + trivias por usuario)
   void _buildUserContentList() {
     final trivias = widget.trivias ?? [];
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
 
     ReleaseLogger.log(
       '🔍 [StoryViewer] _buildUserContentList - allUserStories.length: ${_allUserStories.length}, trivias.length: ${trivias.length}',
       tag: 'StoryViewer',
     );
 
+    // Para las historias del propio usuario, incluir pendientes/rechazadas/
+    // expiradas para que "Mis historias" del perfil muestre el histórico
+    // completo. Para terceros, solo aprobadas y vigentes.
     if (trivias.isEmpty) {
       // Sin trivias, usar UserStories directamente
       _userContentList = _allUserStories
-          .map((us) => UserContent.fromUserStories(us))
+          .map((us) => UserContent.fromUserStories(
+                us,
+                includeUnpublished: us.userId == currentUserId,
+              ))
           .toList();
 
       // Log detalles de cada UserContent
@@ -211,7 +242,11 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     } else {
       // Con trivias, integrarlas por usuario
       _userContentList = _allUserStories
-          .map((us) => UserContent.fromUserStoriesAndTrivias(us, trivias))
+          .map((us) => UserContent.fromUserStoriesAndTrivias(
+                us,
+                trivias,
+                includeUnpublished: us.userId == currentUserId,
+              ))
           .toList();
 
       // Agregar trivias de usuarios que no tienen stories (solo trivias)
@@ -345,7 +380,209 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     if (item.isTrivia) {
       return Duration.zero;
     }
+    // Las historias con música duran lo que dura la canción.
+    final story = _getCurrentStory();
+    if (story != null && story.hasMusic) {
+      // Con recorte: dura el clip. Sin recorte: dura la canción completa.
+      if (story.musicClipMs != null && story.musicClipMs! > 0) {
+        return Duration(milliseconds: story.musicClipMs!);
+      }
+      return _currentMusicDuration ?? _musicStoryDuration;
+    }
     return _storyDuration;
+  }
+
+  /// Overlay de letra (estilo Instagram): fondo oscuro + texto scrolleable.
+  Widget _buildLyricsOverlay() {
+    final lyrics = _getCurrentStory()?.musicLyrics ?? '';
+    return Positioned.fill(
+      child: GestureDetector(
+        onTap: () => setState(() => _showLyrics = false),
+        child: Container(
+          color: Colors.black.withValues(alpha: 0.6),
+          padding: const EdgeInsets.fromLTRB(28, 90, 28, 150),
+          child: SingleChildScrollView(
+            child: Text(
+              lyrics,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                height: 1.6,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Capa de letra para la historia actual: karaoke (modo 'lyrics') o el toggle
+  /// clásico para historias legacy que solo tienen letra estática.
+  List<Widget> _buildLyricsLayer() {
+    final story = _getCurrentStory();
+    if (story == null) return const [];
+
+    // Modo 'lyrics': el karaoke es el contenido elegido, siempre visible.
+    if (story.musicDisplayMode == 'lyrics' &&
+        ((story.musicLyrics?.trim().isNotEmpty ?? false) || story.musicLyricsTimings.isNotEmpty)) {
+      return [_buildKaraokeOverlay(story)];
+    }
+
+    // Legacy (sin displayMode): mantenemos el toggle "Letra" como antes.
+    if (story.hasLegacyStaticLyrics) {
+      return [
+        if (_showLyrics) _buildLyricsOverlay(),
+        Positioned(
+          right: 12,
+          bottom: 96,
+          child: GestureDetector(
+            onTap: () => setState(() => _showLyrics = !_showLyrics),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: _showLyrics ? Colors.white : Colors.black.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.lyrics_rounded,
+                      size: 16, color: _showLyrics ? Colors.black : Colors.white),
+                  const SizedBox(width: 4),
+                  Text('Letra',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: _showLyrics ? Colors.black : Colors.white)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ];
+    }
+    return const [];
+  }
+
+  /// Overlay de karaoke: resalta la línea que está sonando (ventana de 3 líneas).
+  /// Si no hay timings, cae a mostrar la letra completa estática.
+  Widget _buildKaraokeOverlay(Story story) {
+    final lines = story.musicLyricsTimings;
+    return Positioned.fill(
+      child: IgnorePointer(
+        // No interceptar taps: el usuario debe poder avanzar la historia.
+        child: Container(
+          color: Colors.black.withValues(alpha: 0.35),
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          alignment: Alignment.center,
+          child: lines.isEmpty
+              ? SingleChildScrollView(
+                  child: Text(
+                    story.musicLyrics ?? '',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      height: 1.6,
+                      fontWeight: FontWeight.w600,
+                      shadows: [Shadow(blurRadius: 8, color: Colors.black54)],
+                    ),
+                  ),
+                )
+              : ValueListenableBuilder<int>(
+                  valueListenable: _musicPositionMs,
+                  builder: (context, ms, _) => _buildKaraokeWindow(lines, ms),
+                ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildKaraokeWindow(List<LyricLine> lines, int ms) {
+    int active = -1;
+    for (int i = 0; i < lines.length; i++) {
+      if (ms >= lines[i].startMs) {
+        active = i;
+      } else {
+        break;
+      }
+    }
+    final started = active >= 0;
+    final idx = started ? active : 0;
+
+    Widget lineText(int i, {required bool highlight}) {
+      if (i < 0 || i >= lines.length) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Text(
+          lines[i].text,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: highlight ? 1.0 : 0.45),
+            fontSize: highlight ? 26 : 18,
+            height: 1.3,
+            fontWeight: highlight ? FontWeight.w800 : FontWeight.w500,
+            shadows: const [Shadow(blurRadius: 8, color: Colors.black54)],
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        lineText(idx - 1, highlight: false),
+        lineText(idx, highlight: started),
+        lineText(idx + 1, highlight: false),
+      ],
+    );
+  }
+
+  /// 🎵 Sincroniza la reproducción de música con la historia actual.
+  /// Reproduce la canción si la story tiene música; la detiene si no.
+  Future<void> _syncMusicForCurrentStory() async {
+    final story = _getCurrentStory();
+    final url = story?.musicUrl;
+
+    if (url == null || url.isEmpty) {
+      if (_currentMusicUrl != null) {
+        _currentMusicUrl = null;
+        await _musicPlayer.stop();
+      }
+      if (_isMusicLoading && mounted) setState(() => _isMusicLoading = false);
+      return;
+    }
+
+    if (url == _currentMusicUrl) return; // Ya está sonando esta canción.
+
+    _currentMusicUrl = url;
+    _currentMusicDuration = null; // se recalcula para la canción nueva
+    try {
+      await _musicPlayer.stop();
+      await _musicPlayer.play(UrlSource(url));
+      // Si la historia tiene un recorte, arrancar la canción desde ahí.
+      final startMs = story?.musicStartMs;
+      if (startMs != null && startMs > 0) {
+        await _musicPlayer.seek(Duration(milliseconds: startMs));
+      }
+      _musicPositionMs.value = startMs ?? 0; // baseline del karaoke
+      // Fallback: si en 8s el audio no arrancó (red lenta/falla), arrancamos
+      // el timer igual para no dejar la historia trabada en el loader.
+      _musicLoadFallback?.cancel();
+      _musicLoadFallback = Timer(const Duration(seconds: 8), () {
+        if (mounted && _isMusicLoading) {
+          setState(() => _isMusicLoading = false);
+          _startStoryTimer();
+        }
+      });
+    } catch (e) {
+      ReleaseLogger.warning('Music play falló: $e', tag: 'StoryViewer');
+      if (mounted && _isMusicLoading) {
+        setState(() => _isMusicLoading = false);
+        _startStoryTimer();
+      }
+    }
   }
 
   /// Llamado cuando el usuario toca "Jugar" en una trivia
@@ -430,6 +667,31 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     );
     _controller.initialize();
 
+    // 🎵 Cuando la canción empieza a sonar, recién ahí arrancamos el timer
+    // de la historia (así no corre mientras el audio todavía bufferea).
+    _musicPlayer.onDurationChanged.listen((d) {
+      if (d.inMilliseconds > 0) _currentMusicDuration = d;
+    });
+    // Posición de la canción → mueve el resaltado del karaoke.
+    _musicPlayer.onPositionChanged.listen((pos) {
+      _musicPositionMs.value = pos.inMilliseconds;
+    });
+    _musicPlayer.onPlayerStateChanged.listen((state) async {
+      if (!mounted) return;
+      if (state == PlayerState.playing && _isMusicLoading) {
+        _musicLoadFallback?.cancel();
+        // Asegurar que conocemos la duración antes de arrancar el timer, así la
+        // historia dura exactamente lo que la canción.
+        if (_currentMusicDuration == null) {
+          final d = await _musicPlayer.getDuration();
+          if (d != null && d.inMilliseconds > 0) _currentMusicDuration = d;
+        }
+        if (!mounted) return;
+        setState(() => _isMusicLoading = false);
+        _startStoryTimer();
+      }
+    });
+
     // ✅ Cargar respuestas de trivias del usuario actual
     _loadTriviaResponses();
 
@@ -460,20 +722,34 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
       final currentUserStories = _allUserStories[initialUserIdx];
       final stories = _getStoriesForUser(currentUserStories);
 
-      // Para historias propias: abrir directamente en la más reciente. Si hay
-      // una historia en estado uploading, va a ser esa (es la más nueva).
-      // El concepto "primera no vista" no aplica cuando uno ve sus propias
-      // historias porque nunca uno se marca como viewer de sus posts.
-      //
-      // Para historias ajenas: comportamiento normal (primera no vista).
-      final isOwnStories =
-          currentUserStories.userId == _controller.currentUserId;
-      if (stories.isEmpty) {
-        initialItemIdx = 0;
-      } else if (isOwnStories) {
-        initialItemIdx = stories.length - 1;
+      // Si el caller explicitó initialStoryIndex (ej. Mis historias tapeando
+      // una historia específica), respetarlo. Clampeamos contra la lista del
+      // userContent ya construido para evitar OOB.
+      if (widget.initialStoryIndex != null) {
+        final itemsLen = (initialUserIdx < _userContentList.length)
+            ? _userContentList[initialUserIdx].items.length
+            : 0;
+        if (itemsLen > 0) {
+          initialItemIdx = widget.initialStoryIndex!.clamp(0, itemsLen - 1);
+        } else {
+          initialItemIdx = 0;
+        }
       } else {
-        initialItemIdx = _getInitialStoryIndex(stories);
+        // Para historias propias: abrir directamente en la más reciente. Si hay
+        // una historia en estado uploading, va a ser esa (es la más nueva).
+        // El concepto "primera no vista" no aplica cuando uno ve sus propias
+        // historias porque nunca uno se marca como viewer de sus posts.
+        //
+        // Para historias ajenas: comportamiento normal (primera no vista).
+        final isOwnStories =
+            currentUserStories.userId == _controller.currentUserId;
+        if (stories.isEmpty) {
+          initialItemIdx = 0;
+        } else if (isOwnStories) {
+          initialItemIdx = stories.length - 1;
+        } else {
+          initialItemIdx = _getInitialStoryIndex(stories);
+        }
       }
     }
 
@@ -643,9 +919,22 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
 
     setState(() {
       _isCurrentStoryLoaded = true;
+      _showLyrics = false; // cada historia empieza con la letra oculta
     });
     _controller.logStoryLoaded();
-    _startStoryTimer();
+
+    // 🎵 Si la historia tiene música, esperamos a que la canción empiece a
+    // sonar antes de arrancar el timer (mostrando un loader). Si no tiene,
+    // arranca el timer de inmediato como siempre.
+    final story = _getCurrentStory();
+    final hasMusic = story?.hasMusic ?? false;
+    if (hasMusic) {
+      setState(() => _isMusicLoading = true);
+    }
+    _syncMusicForCurrentStory();
+    if (!hasMusic) {
+      _startStoryTimer();
+    }
 
     // Precargar las siguientes historias
     _preloadNextStories();
@@ -711,6 +1000,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     if (currentStory != null && currentStory.mediaType == 'video') {
       _videoControllers[currentStory.id]?.pause();
     }
+    // 🎵 Pausar la música junto con la historia (hold, bottom sheet, etc.)
+    if (_currentMusicUrl != null) {
+      _musicPlayer.pause();
+    }
   }
 
   /// Llamado cuando se abre un bottom sheet (likes, respuestas)
@@ -745,6 +1038,10 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     final currentStory = _getCurrentStory();
     if (currentStory != null && currentStory.mediaType == 'video') {
       _videoControllers[currentStory.id]?.play();
+    }
+    // 🎵 Reanudar la música si la historia actual tiene canción.
+    if (_currentMusicUrl != null) {
+      _musicPlayer.resume();
     }
   }
 
@@ -1597,6 +1894,11 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     }
     _videoControllers.clear();
 
+    // 🎵 Liberar el reproductor de música
+    _musicLoadFallback?.cancel();
+    _musicPlayer.dispose();
+    _musicPositionMs.dispose();
+
     // Limpiar controller
     _controller.dispose();
 
@@ -1911,6 +2213,40 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                 isLiked: _isStoryLiked(_getCurrentStory()!),
                 onLikeToggle: _toggleLike,
               ),
+
+            // 🎵 Loader mientras la canción carga (el timer no corre hasta
+            // que la música empieza a sonar).
+            if (_isMusicLoading && _isCurrentStoryLoaded)
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 36,
+                          height: 36,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2.5,
+                          ),
+                        ),
+                        SizedBox(height: 12),
+                        Text(
+                          'Cargando música...',
+                          style: TextStyle(color: Colors.white70, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // 🎵 Letra de la canción. Tres comportamientos:
+            //  1) Modo 'lyrics' → karaoke siempre visible, resaltando la línea
+            //     actual conforme suena (sin botón: es el contenido elegido).
+            //  2) Legacy (sin displayMode pero con letra) → toggle clásico.
+            ..._buildLyricsLayer(),
           ],
         ),
           ),

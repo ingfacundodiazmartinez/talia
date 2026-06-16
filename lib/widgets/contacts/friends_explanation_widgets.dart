@@ -137,7 +137,7 @@ class FriendsEmptyState extends StatelessWidget {
           ),
           SizedBox(height: 24),
           Text(
-            'Sin amigos aún',
+            'Tu círculo está vacío',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w600,
@@ -149,13 +149,13 @@ class FriendsEmptyState extends StatelessWidget {
           FriendsExplanationCard(
             icon: Icons.person_add,
             title: 'Para que vean tus historias',
-            description: 'Agregá a alguien como amigo desde su perfil',
+            description: 'Invitá a alguien a tu círculo desde su perfil',
           ),
           SizedBox(height: 12),
           FriendsExplanationCard(
             icon: Icons.visibility,
             title: 'Para ver historias de otros',
-            description: 'Pediles que te agreguen como amigo',
+            description: 'Pediles que te inviten a su círculo',
           ),
         ],
       ),
@@ -215,17 +215,17 @@ void showFriendsExplanationSheet(BuildContext context) {
           SizedBox(height: 20),
           _ExplanationRow(
             icon: Icons.person_add,
-            text: 'Para que alguien vea tus historias, agregalo como amigo desde su perfil',
+            text: 'Para que alguien vea tus historias, invitalo a tu círculo desde su perfil',
           ),
           SizedBox(height: 12),
           _ExplanationRow(
             icon: Icons.visibility,
-            text: 'Para ver las historias de alguien, esa persona tiene que agregarte como amigo',
+            text: 'Para ver las historias de alguien, esa persona tiene que invitarte a su círculo',
           ),
           SizedBox(height: 12),
           _ExplanationRow(
             icon: Icons.swap_horiz,
-            text: 'Si ambos se agregan, los dos pueden ver las historias del otro',
+            text: 'Si ambos se invitan, los dos pueden ver las historias del otro',
           ),
           SizedBox(height: 24),
         ],

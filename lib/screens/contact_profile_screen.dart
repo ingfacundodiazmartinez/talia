@@ -1,5 +1,6 @@
 import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../controllers/contact_profile_controller.dart';
 import '../models/contact_user.dart';
 import '../services/block_service.dart';
@@ -118,6 +119,11 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
           _isLoadingFriendStatus = false;
         });
       }
+    };
+
+    // Favoritos: rebuild cuando cambia estado de carga / lista cargada.
+    _controller.onFavoritesLoadingChanged = () {
+      if (mounted) setState(() {});
     };
 
     _controller.onError = (message) {
@@ -858,6 +864,16 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                   label: 'Rol',
                   value: _getRoleLabel(role),
                 ),
+                if ((_contactUser!.phone ?? '').isNotEmpty) ...[
+                  Divider(height: 1),
+                  _buildInfoTile(
+                    icon: Icons.phone_outlined,
+                    label: 'Teléfono (tocar para copiar)',
+                    value: _contactUser!.phone!,
+                    trailingIcon: Icons.copy,
+                    onTap: () => _copyPhoneToClipboard(_contactUser!.phone!),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1388,15 +1404,29 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
     );
   }
 
+  Future<void> _copyPhoneToClipboard(String phone) async {
+    await Clipboard.setData(ClipboardData(text: phone));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Número copiado: $phone'),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   Widget _buildInfoTile({
     required IconData icon,
     required String label,
     required String value,
+    VoidCallback? onTap,
+    IconData? trailingIcon,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
 
-    return Padding(
+    final content = Padding(
       padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       child: Row(
         children: [
@@ -1432,8 +1462,18 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
               ],
             ),
           ),
+          if (trailingIcon != null) ...[
+            Icon(trailingIcon, size: 18, color: colorScheme.onSurfaceVariant),
+          ],
         ],
       ),
+    );
+
+    if (onTap == null) return content;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: content,
     );
   }
 
@@ -1461,7 +1501,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
             SizedBox(width: 16),
             Expanded(
               child: Text(
-                'Amigos',
+                'Mi círculo',
                 style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
@@ -1488,7 +1528,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
 
     switch (_friendStatus) {
       case 'accepted':
-        statusText = 'Son amigos';
+        statusText = 'Está en tu círculo';
         subtitle = 'Pueden ver sus historias mutuamente';
         iconColor = Colors.green;
         statusIcon = Icons.check_circle;
@@ -1499,9 +1539,9 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
               final confirm = await showDialog<bool>(
                 context: context,
                 builder: (context) => AlertDialog(
-                  title: Text('Eliminar amigo'),
+                  title: Text('Quitar de mi círculo'),
                   content: Text(
-                    '¿Dejar de ser amigo de ${_contactAlias ?? widget.contactName}?\n\n'
+                    '¿Quitar a ${_contactAlias ?? widget.contactName} de tu círculo?\n\n'
                     'Ya no podrán ver sus historias mutuamente.',
                   ),
                   actions: [
@@ -1512,7 +1552,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                     ElevatedButton(
                       onPressed: () => Navigator.pop(context, true),
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      child: Text('Eliminar'),
+                      child: Text('Quitar'),
                     ),
                   ],
                 ),
@@ -1529,7 +1569,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
                 children: [
                   Icon(Icons.person_remove, color: Colors.red[700]),
                   SizedBox(width: 8),
-                  Text('Dejar de ser amigos', style: TextStyle(color: Colors.red[700])),
+                  Text('Quitar de mi círculo', style: TextStyle(color: Colors.red[700])),
                 ],
               ),
             ),
@@ -1560,7 +1600,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
         break;
 
       case 'pending_received':
-        statusText = 'Quiere ser tu amigo';
+        statusText = 'Te invitó a su círculo';
         subtitle = 'Ver sus historias y que vea las tuyas';
         iconColor = colorScheme.primary;
         statusIcon = Icons.person_add;
@@ -1609,7 +1649,7 @@ class _ContactProfileScreenState extends State<ContactProfileScreen>
 
       case 'none':
       default:
-        statusText = 'Agregar a amigos';
+        statusText = 'Invitar a mi círculo';
         subtitle = 'Ver sus historias y que vea las tuyas';
         iconColor = colorScheme.primary;
         statusIcon = Icons.person_add_alt_1;

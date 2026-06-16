@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
-import 'package:intl/intl.dart';
 import '../services/block_service.dart';
 import '../services/contact_alias_service.dart';
 import '../services/favorite_service.dart';
@@ -67,6 +66,9 @@ class ContactProfileController {
   Function(bool)? onStoryNotificationsChanged;
   Function()? onParentBlocked;
   Function(bool isFriend, String status)? onFriendStatusChanged;
+  /// Disparado cuando cambia el estado de carga o el contenido de favoritos.
+  /// La pantalla lo usa para rebuildear el tab Favoritos.
+  Function()? onFavoritesLoadingChanged;
 
   // Constructor
   ContactProfileController({
@@ -108,22 +110,23 @@ class ContactProfileController {
   String get friendStatus => _friendStatus;
   bool get isLoadingFriendStatus => _isLoadingFriendStatus;
 
-  /// Inicializar el controller
+  /// Inicializar el controller.
+  ///
+  /// Cada loader corre en paralelo y notifica a la UI por callback al
+  /// completar. NO usamos `await Future.wait` porque cada loader es
+  /// independiente: si uno cuelga (Firestore lento, regla rota, etc.), no
+  /// debe bloquear al resto. Cada uno tiene su propio try/catch.
   Future<void> initialize() async {
-    // Cargar estados iniciales en paralelo
-    await Future.wait([
-      _loadBlockStatus(),
-      _loadFavoriteStatus(),
-      _loadContactAlias(),
-      _loadContactData(),
-      _loadStoryNotificationsStatus(),
-      _loadFriendStatus(),
-    ]);
+    unawaited(_loadBlockStatus());
+    unawaited(_loadFavoriteStatus());
+    unawaited(_loadContactAlias());
+    unawaited(_loadContactData());
+    unawaited(_loadStoryNotificationsStatus());
+    unawaited(_loadFriendStatus());
+    unawaited(loadFavoriteMessages());
+    unawaited(loadChildParents());
 
-    // Cargar datos adicionales después de cargar los datos del contacto
-    await Future.wait([loadFavoriteMessages(), loadChildParents()]);
-
-    // Configurar listeners para actualizaciones en tiempo real
+    // Listener realtime para cambios del documento del contacto.
     _setupContactDataListener();
   }
 
@@ -285,7 +288,7 @@ class ContactProfileController {
       _friendStatus = 'pending_sent';
       _isFriendWith = false;
       onFriendStatusChanged?.call(_isFriendWith, _friendStatus);
-      onSuccess?.call('Solicitud de amistad enviada');
+      onSuccess?.call('Invitación enviada');
       return true;
     } catch (e) {
       onError?.call(e.toString().replaceAll('Exception: ', ''));
@@ -300,7 +303,7 @@ class ContactProfileController {
       _friendStatus = 'accepted';
       _isFriendWith = true;
       onFriendStatusChanged?.call(_isFriendWith, _friendStatus);
-      onSuccess?.call('Ahora son amigos');
+      onSuccess?.call('Se sumó a tu círculo');
       return true;
     } catch (e) {
       onError?.call(e.toString().replaceAll('Exception: ', ''));
@@ -330,7 +333,7 @@ class ContactProfileController {
       _friendStatus = 'rejected';
       _isFriendWith = false;
       onFriendStatusChanged?.call(_isFriendWith, _friendStatus);
-      onSuccess?.call('Amigo eliminado');
+      onSuccess?.call('Quitado de tu círculo');
       return true;
     } catch (e) {
       onError?.call(e.toString().replaceAll('Exception: ', ''));
@@ -643,67 +646,25 @@ class ContactProfileController {
     await toggleBlock();
   }
 
-  /// Cargar mensajes favoritos
-  /// ✅ FIX: Consulta eficiente - primero obtener IDs de favoritos, luego obtener mensajes
+  /// Cargar mensajes favoritos desde Hive (storage local).
   Future<void> loadFavoriteMessages() async {
     try {
       _isLoadingFavorites = true;
       _hasError = false;
+      onFavoritesLoadingChanged?.call();
 
-      // 1. Obtener IDs de mensajes favoritos (consulta eficiente en users/{uid}/favorites)
-      final favoriteIds = await _favoriteService.getFavoriteMessageIds(
+      final messages = await _favoriteService.getFavoriteMessagesForProfile(
         chatId: chatId,
         isGroupChat: false,
       );
 
-      if (favoriteIds.isEmpty) {
-        _favoriteMessages = [];
-        _isLoadingFavorites = false;
-        return;
-      }
-
-      // 2. Obtener los mensajes por ID (en lotes de 10 para evitar límite de Firestore)
-      final messages = <Map<String, dynamic>>[];
-      final idsList = favoriteIds.toList();
-
-      for (var i = 0; i < idsList.length; i += 10) {
-        final batch = idsList.skip(i).take(10).toList();
-        final snapshot = await FirebaseFirestore.instance
-            .collection('chats')
-            .doc(chatId)
-            .collection('messages')
-            .where(FieldPath.documentId, whereIn: batch)
-            .get();
-
-        for (final doc in snapshot.docs) {
-          final data = doc.data();
-          data['id'] = doc.id;
-
-          // Convertir Timestamp a String formateado
-          if (data['timestamp'] is Timestamp) {
-            final timestamp = data['timestamp'] as Timestamp;
-            data['formattedTime'] = DateFormat(
-              'dd/MM/yyyy HH:mm',
-            ).format(timestamp.toDate());
-            data.remove('timestamp');
-          }
-
-          messages.add(data);
-        }
-      }
-
-      // 3. Ordenar por fecha (más reciente primero)
-      messages.sort((a, b) {
-        final aTime = a['formattedTime'] ?? '';
-        final bTime = b['formattedTime'] ?? '';
-        return bTime.compareTo(aTime);
-      });
-
       _favoriteMessages = messages;
       _isLoadingFavorites = false;
+      onFavoritesLoadingChanged?.call();
     } catch (e) {
       _hasError = true;
       _isLoadingFavorites = false;
+      onFavoritesLoadingChanged?.call();
       onError?.call('Error cargando mensajes favoritos');
     }
   }
@@ -716,6 +677,15 @@ class ContactProfileController {
   /// Cargar padres del niño si aplica
   Future<void> loadChildParents() async {
     try {
+      // ✅ FIX: initialize() dispara _loadContactData() y loadChildParents() en
+      // paralelo (ambos unawaited). Si no esperamos a que cargue el contacto,
+      // _contactUser es null acá → isContactChild() devuelve false → quedaba
+      // "Sin padres asociados" aunque el hijo SÍ tenga padres vinculados.
+      // _loadContactData() es un .get() idempotente (el listener está aparte).
+      if (_contactUser == null) {
+        await _loadContactData();
+      }
+
       final isChild = isContactChild();
       ReleaseLogger.log(
         '👨‍👩‍👧 [loadChildParents] contactId: $contactId, isChild: $isChild, _contactUser: $_contactUser',
@@ -736,6 +706,10 @@ class ContactProfileController {
       ReleaseLogger.error('Error cargando información de padres: $e', tag: 'ContactProfile');
       _childParents = [];
       onError?.call('Error cargando información de padres');
+    } finally {
+      // Refrescar la UI para reflejar los padres cargados (la screen reconstruye
+      // con onContactDataChanged; no hay callback dedicado para childParents).
+      onContactDataChanged?.call(_contactUser);
     }
   }
 

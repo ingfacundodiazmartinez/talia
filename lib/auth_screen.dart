@@ -158,6 +158,11 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
       child: Builder(
         builder: (context) {
           final colorScheme = Theme.of(context).colorScheme;
+          // Con el teclado abierto colapsamos lo decorativo (logo, subtítulo,
+          // ícono, indicador de pasos) para que el input y el botón de acción
+          // queden SIEMPRE visibles. Antes el CTA quedaba tapado por el
+          // teclado y el usuario no sabía que podía scrollear.
+          final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
 
           return Scaffold(
             resizeToAvoidBottomInset: true,
@@ -184,30 +189,34 @@ class _AuthScreenState extends State<AuthScreen> with TickerProviderStateMixin {
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                // Logo
-                                Image.asset(
-                                  'assets/images/logo.png',
-                                  height: 80,
-                                  fit: BoxFit.contain,
-                                ),
-
-                                SizedBox(height: 8),
-
-                                Text(
-                                  'Verificación con SMS',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    color: Colors.white.withValues(alpha: 0.9),
+                                // Logo y subtítulo solo con teclado cerrado —
+                                // con teclado abierto ese espacio es del CTA.
+                                if (!keyboardOpen) ...[
+                                  Image.asset(
+                                    'assets/images/logo.png',
+                                    height: 80,
+                                    fit: BoxFit.contain,
                                   ),
-                                  textAlign: TextAlign.center,
-                                ),
 
-                                SizedBox(height: 48),
+                                  SizedBox(height: 8),
+
+                                  Text(
+                                    'Verificación con SMS',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white.withValues(alpha: 0.9),
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+
+                                  SizedBox(height: 48),
+                                ],
 
                                 // Phone Verification Widget (ya tiene su propia card)
                                 // ✅ FIX: Solo permitir cancelar si hay una pantalla anterior
                                 // Si AuthScreen es la pantalla raíz (usuario nuevo), no mostrar "Cancelar"
                                 PhoneVerificationWidget(
+                                  compact: keyboardOpen,
                                   onVerificationSuccess: _onPhoneVerificationSuccess,
                                   onCancel: Navigator.canPop(context)
                                       ? () {

@@ -15,6 +15,9 @@ import 'group_profile_screen.dart';
 import 'group_message_info_screen.dart';
 import '../../screens/chat/widgets/chat_input_bar.dart';
 import '../../screens/chat/widgets/message_bubble.dart';
+import '../../screens/chat/widgets/animated_message_entry.dart';
+import '../../screens/chat/widgets/location_share_sheet.dart';
+import '../../services/live_location_service.dart';
 import '../../screens/chat/widgets/reply_bar.dart';
 import '../../screens/chat/widgets/attachment_options.dart';
 import '../../models/chat_message.dart';
@@ -59,6 +62,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
 
   // UI Controllers
   final TextEditingController _messageController = TextEditingController();
+  final FocusNode _messageFocusNode = FocusNode();
   final ScrollController _scrollController = ScrollController();
   final RecorderController _recorderController = RecorderController();
   // ReactionService is provided by ReactionPickerMixin
@@ -153,6 +157,10 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       }
     };
 
+    _controller.onSummaryStateChanged = () {
+      if (mounted) setState(() {});
+    };
+
     await _controller.initialize();
 
     // Subscribe to favorites stream
@@ -214,6 +222,7 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
     LocalUnreadCountService().exitChat();
     _controller.dispose();
     _messageController.dispose();
+    _messageFocusNode.dispose();
     _scrollController.dispose();
     _recorderController.dispose();
     disposeReactionPicker(); // From ReactionPickerMixin
@@ -453,7 +462,39 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
         Navigator.pop(context);
         _controller.sendVideoFromPicker();
       },
+      onLocationTap: () {
+        Navigator.pop(context);
+        _handleShareLocation();
+      },
     );
+  }
+
+  /// Compartir ubicación (estática o en vivo) en el grupo — tipo WhatsApp.
+  Future<void> _handleShareLocation() async {
+    final choice = await LocationShareSheet.show(context);
+    if (choice == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    bool ok;
+    if (choice.isLive) {
+      ok = await LiveLocationService().startLiveShare(
+        chatId: widget.groupId,
+        isGroup: true,
+        duration: choice.liveDuration!,
+      );
+    } else {
+      ok = await LiveLocationService().shareStaticLocation(
+        chatId: widget.groupId,
+        isGroup: true,
+      );
+    }
+    if (!ok && mounted) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo compartir la ubicación. Revisá los permisos.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   @override
@@ -466,12 +507,122 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
         children: [
           Column(
             children: [
+              if (_controller.shouldOfferSummary) _buildSummaryBanner(colorScheme),
               Expanded(child: _buildMessagesList()),
               if (_replyingTo != null) _buildReplyBar(),
               _buildInputBar(),
               if (_showEmojiPicker) _buildEmojiPicker(),
             ],
           ),
+        ],
+      ),
+    );
+  }
+
+  /// Banner que aparece cuando el user entra a un grupo con ≥20 mensajes
+  /// sin leer. Permite pedir un resumen IA. Efímero — al tocar "Cerrar" o
+  /// salir del chat, no vuelve a aparecer en la sesión.
+  Widget _buildSummaryBanner(ColorScheme colorScheme) {
+    final unread = _controller.initialUnreadCount;
+    final summary = _controller.aiSummary;
+    final loading = _controller.isSummarizing;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colorScheme.primaryContainer.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colorScheme.primary.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.auto_awesome, color: colorScheme.primary, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  summary != null
+                      ? 'Resumen IA de $unread mensajes'
+                      : 'Tenés $unread mensajes sin leer',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: colorScheme.onSurface,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: Icon(Icons.close, size: 18, color: colorScheme.onSurfaceVariant),
+                onPressed: _controller.dismissSummaryBanner,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                tooltip: 'Cerrar',
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (summary != null) ...[
+            Text(
+              summary,
+              style: TextStyle(
+                fontSize: 14,
+                color: colorScheme.onSurface,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if (_controller.firstUnreadMessageId != null)
+                  TextButton.icon(
+                    onPressed: () => _scrollToSpecificMessage(_controller.firstUnreadMessageId!),
+                    icon: const Icon(Icons.arrow_downward, size: 16),
+                    label: const Text('Ir al primero'),
+                  ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: loading ? null : _controller.generateSummary,
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('Regenerar'),
+                ),
+              ],
+            ),
+          ] else if (loading) ...[
+            Row(
+              children: [
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Generando resumen...',
+                  style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 13),
+                ),
+              ],
+            ),
+          ] else
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '¿Querés un resumen rápido con IA?',
+                    style: TextStyle(
+                      color: colorScheme.onSurfaceVariant,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: _controller.generateSummary,
+                  icon: const Icon(Icons.auto_awesome, size: 16),
+                  label: const Text('Resumir'),
+                ),
+              ],
+            ),
         ],
       ),
     );
@@ -592,7 +743,12 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       itemCount: messages.length,
       itemBuilder: (context, index) {
         final message = messages[index];
-        return _buildMessageBubble(message);
+        // ✅ Entrada sutil SOLO para burbujas frescas (en vivo); el historial
+        // aparece sin animar.
+        return AnimatedMessageEntry(
+          messageTime: message.timestamp,
+          child: _buildMessageBubble(message),
+        );
       },
     );
   }
@@ -669,6 +825,12 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
       isGroupChat: true,
       senderPhotoURL: message.senderPhotoURL,
       contactName: widget.groupName,
+      // ✅ Ubicación
+      type: message.contentType == 'location' ? 'location' : null,
+      latitude: message.latitude,
+      longitude: message.longitude,
+      isLiveLocation: message.isLiveLocation,
+      liveLocationExpiresAt: message.liveLocationExpiresAt,
       // ✅ FIX #8: Pass forwarded message fields to MessageBubble
       isForwarded: message.isForwarded,
       originalContactName: message.originalContactName,
@@ -1032,6 +1194,13 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
   }
 
   Widget _buildInputBar() {
+    // "Solo administradores pueden enviar mensajes": reemplazar el input
+    // por un banner informativo. Reacciona en vivo: onGroupChanged hace
+    // setState cuando un admin cambia el toggle.
+    if (!_controller.canSendMessages) {
+      return _buildAdminOnlyBanner();
+    }
+
     // Mostrar UI de grabación estilo Instagram cuando está grabando
     if (_isRecording) {
       return RecordingInputBar(
@@ -1043,22 +1212,76 @@ class _GroupChatScreenV2State extends State<GroupChatScreenV2>
 
     return ChatInputBar(
       messageController: _messageController,
+      messageFocusNode: _messageFocusNode,
       showEmojiPicker: _showEmojiPicker,
       isRecording: _isRecording,
-      onToggleEmojiPicker: () {
-        setState(() {
-          _showEmojiPicker = !_showEmojiPicker;
-        });
-        if (_showEmojiPicker) {
-          FocusScope.of(context).unfocus();
-        }
-      },
+      onToggleEmojiPicker: _toggleEmojiPicker,
+      onTextFieldFocused: _onTextFieldFocused,
       onAttachTap: _showAttachmentOptions,
       onSendTap: _handleSendMessage,
       onRecordStart: _startRecording,
       onRecordEnd: _stopRecording,
       onSubmitMessage: _handleSendMessage,
     );
+  }
+
+  /// Banner mostrado a no-admins cuando el grupo tiene activo
+  /// "solo administradores pueden enviar mensajes".
+  Widget _buildAdminOnlyBanner() {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        border: Border(
+          top: BorderSide(color: colorScheme.outlineVariant, width: 0.5),
+        ),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.lock_outline,
+              size: 18,
+              color: colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                'Solo los administradores pueden enviar mensajes',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Toggle estilo WhatsApp: alterna keyboard ⇄ emoji panel sin que ambos
+  /// queden visibles a la vez.
+  void _toggleEmojiPicker() {
+    if (_showEmojiPicker) {
+      setState(() => _showEmojiPicker = false);
+      _messageFocusNode.requestFocus();
+    } else {
+      _messageFocusNode.unfocus();
+      setState(() => _showEmojiPicker = true);
+    }
+  }
+
+  void _onTextFieldFocused() {
+    if (_showEmojiPicker) {
+      setState(() => _showEmojiPicker = false);
+    }
   }
 
   Widget _buildEmojiPicker() {

@@ -24,6 +24,14 @@ class AppStateService {
   bool get isInForeground => _currentState == AppLifecycleState.resumed;
   bool get isInBackground => _currentState != AppLifecycleState.resumed;
 
+  // Timestamp in-memory de la última vez que la app entró a foreground.
+  // Se setea en initialize() (cold start) y se actualiza sincrónicamente en
+  // _onAppLifecycleChanged. Usado por ChatStreamManager para filtrar
+  // notificaciones de mensajes viejos sin depender de SharedPreferences
+  // (que tiene race conditions con escritura async).
+  DateTime _lastForegroundResumeTime = DateTime.now();
+  DateTime get lastForegroundResumeTime => _lastForegroundResumeTime;
+
   // Stream controller para notificar cambios de estado
   final StreamController<bool> _foregroundStateController = StreamController<bool>.broadcast();
   Stream<bool> get foregroundStateStream => _foregroundStateController.stream;
@@ -79,6 +87,13 @@ class AppStateService {
       '📱 Estado de app cambió: ${previousState.name} → ${state.name}',
       tag: 'AppStateService'
     );
+
+    // Actualizar timestamp in-memory SINCRÓNICAMENTE (antes de cualquier await).
+    // Si el listener de Firestore en ChatStreamManager dispara antes de que
+    // termine la escritura async a SharedPreferences, igual lee el valor fresco.
+    if (previousState != state && isInForeground) {
+      _lastForegroundResumeTime = DateTime.now();
+    }
 
     // Notificar el cambio de estado
     if (previousState != state) {

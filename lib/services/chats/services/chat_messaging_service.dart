@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+
+import '../../../utils/init_diagnostics.dart';
 
 import '../../../models/chat_message.dart';
 import '../../video_frame_extractor.dart';
@@ -44,7 +47,7 @@ class _SendContext {
 }
 
 // Tipo temporal para compatibilidad hasta adaptar al modelo existente
-enum MessageType { text, image, audio, video }
+enum MessageType { text, image, audio, video, location }
 
 /// Servicio especializado para envío y gestión de mensajes
 ///
@@ -363,6 +366,14 @@ class ChatMessagingService {
       status: MessageStatus.sending,
       localTimestamp: now,
       localPath: mediaPath,
+      // ✅ Ubicación (type == location): coords + flags de live vienen en metadata.
+      latitude: (metadata?['latitude'] as num?)?.toDouble(),
+      longitude: (metadata?['longitude'] as num?)?.toDouble(),
+      isLiveLocation: metadata?['isLiveLocation'] as bool? ?? false,
+      liveLocationExpiresAt: metadata?['liveLocationExpiresAt'] is int
+          ? Timestamp.fromMillisecondsSinceEpoch(
+              metadata!['liveLocationExpiresAt'] as int)
+          : null,
     );
   }
 
@@ -465,6 +476,11 @@ class ChatMessagingService {
         moderationStatus: moderationStatus,
         transcription: transcription,
         visibleTo: visibleTo,
+        // ✅ Preservar ubicación del optimista (type == location)
+        latitude: optimisticMessage.latitude,
+        longitude: optimisticMessage.longitude,
+        isLiveLocation: optimisticMessage.isLiveLocation,
+        liveLocationExpiresAt: optimisticMessage.liveLocationExpiresAt,
       );
 
       // ✅ Write directo a Firestore (siempre, sin Cloud Function intermedia).
@@ -586,11 +602,24 @@ class ChatMessagingService {
     String? blockedReason;
     bool moderationEnabled = false;
 
+    // ✅ FIX cold-start lag: leer SOLO de cache. El doc del chat está en
+    // cache local de Firestore (persistenceEnabled=true) en la abrumadora
+    // mayoría de los casos — el usuario ya estuvo en el chat al menos una
+    // vez. Si por casualidad no está en cache (chat fresh, o cache eviction),
+    // asumimos contexto normal y dejamos que las Firestore rules + el
+    // trigger de moderation actúen como defensa del lado server.
+    //
+    // El read previo con Source.serverAndCache se colgaba ~5s en cold start
+    // esperando que la conexión gRPC + AppCheck token se establecieran. Con
+    // Source.cache es instantáneo o no-op.
+    final ctxStopwatch = Stopwatch()..start();
     try {
       final chatDoc = await FirebaseFirestore.instance
           .collection('chats')
           .doc(chatId)
-          .get();
+          .get(const GetOptions(source: Source.cache))
+          .timeout(const Duration(seconds: 2));
+      ctxStopwatch.stop();
 
       if (chatDoc.exists) {
         final data = chatDoc.data() ?? const <String, dynamic>{};
@@ -599,9 +628,65 @@ class ChatMessagingService {
         blockedReason = data['blockedReason'] as String?;
         moderationEnabled = data['moderationEnabled'] == true;
       }
-    } catch (e) {
+
+      if (ctxStopwatch.elapsed.inMilliseconds > 500) {
+        InitDiagnostics.instance.recordEvent(
+          name: 'Send: _resolveSendContext.cache',
+          duration: ctxStopwatch.elapsed,
+        );
+      }
+    } on FirebaseException catch (e) {
+      ctxStopwatch.stop();
+      // Cache miss es el caso común para chats nunca visitados — no es error
+      // real. Solo logueamos a debug y asumimos contexto normal.
+      if (e.code == 'unavailable' || e.code == 'not-found') {
+        ReleaseLogger.log(
+          'ℹ️ Chat $chatId no está en cache local — asumiendo contexto normal',
+          tag: 'ChatSecurity',
+        );
+      } else {
+        ReleaseLogger.error(
+          'Error inesperado leyendo chat doc de cache: ${e.code} ${e.message}',
+          tag: 'ChatSecurity',
+        );
+        FirebaseCrashlytics.instance.recordError(
+          e,
+          StackTrace.current,
+          reason: '_resolveSendContext: cache read FirebaseException',
+          information: ['chatId=$chatId', 'code=${e.code}'],
+          fatal: false,
+        );
+      }
+    } on TimeoutException catch (e, st) {
+      ctxStopwatch.stop();
+      ReleaseLogger.warning(
+        '⏱️ Timeout 2s leyendo chat doc de cache — fallback a contexto normal',
+        tag: 'ChatSecurity',
+      );
+      FirebaseCrashlytics.instance.recordError(
+        e,
+        st,
+        reason: '_resolveSendContext: cache read timeout',
+        information: ['chatId=$chatId'],
+        fatal: false,
+      );
+      InitDiagnostics.instance.recordEvent(
+        name: 'Send: _resolveSendContext cache TIMEOUT',
+        duration: ctxStopwatch.elapsed,
+        failed: true,
+        errorMessage: 'cache get() timeoutó a los 2s para chat $chatId',
+      );
+    } catch (e, st) {
+      ctxStopwatch.stop();
       ReleaseLogger.error('Error leyendo chat doc para resolver contexto: $e',
           tag: 'ChatSecurity');
+      FirebaseCrashlytics.instance.recordError(
+        e,
+        st,
+        reason: '_resolveSendContext: chat doc get failed',
+        information: ['chatId=$chatId'],
+        fatal: false,
+      );
       // Si falla, asumimos contexto normal — backend validará con reglas.
     }
 
@@ -701,6 +786,9 @@ class ChatMessagingService {
             break;
           case 'audio':
             messagePreview = '🎤 Audio';
+            break;
+          case 'location':
+            messagePreview = '📍 Ubicación';
             break;
         }
       }

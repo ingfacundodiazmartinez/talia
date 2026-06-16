@@ -126,13 +126,26 @@ class Parent extends User {
         .snapshots();
   }
 
-  /// Actualiza la configuración de aprobación automática
+  /// Actualiza la configuración de aprobación automática (global, todos los hijos)
   Future<void> updateAutoApprovalSetting(bool enabled) async {
     await FirebaseFirestore.instance
         .collection('parent_settings')
         .doc(id)
         .set({
       'autoApproveRequests': enabled,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  /// Actualiza la aprobación automática de contactos para UN hijo específico.
+  /// Se persiste en el mapa `childAutoApproveRequests` (merge profundo), sin
+  /// tocar el flag global `autoApproveRequests` para mantener compatibilidad.
+  Future<void> updateChildAutoApprovalSetting(String childId, bool enabled) async {
+    await FirebaseFirestore.instance
+        .collection('parent_settings')
+        .doc(id)
+        .set({
+      'childAutoApproveRequests': {childId: enabled},
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }

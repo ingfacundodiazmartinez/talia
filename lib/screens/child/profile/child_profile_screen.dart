@@ -9,6 +9,9 @@ import '../../../theme_service.dart';
 import '../../common/child_settings_screen.dart';
 import '../../common/help_support_screen.dart';
 import '../../common/privacy_security_screen.dart';
+import '../../historias/mi_circulo_screen.dart';
+import '../../historias/mis_historias_screen.dart';
+import '../../../models/contact.dart';
 import '../../../screens/my_code_screen.dart';
 import '../../parent/profile/edit_profile_screen.dart';
 import '../../../controllers/child_profile_controller.dart';
@@ -206,6 +209,43 @@ class _ChildProfileScreenState extends State<ChildProfileScreen> {
 
               // Opción de solicitar independencia para children de 18+ años con padres vinculados
               _buildRequestIndependenceOption(user.uid),
+
+              // ✅ NUEVO: Mis historias subidas
+              ProfileOptionItem(
+                icon: Icons.auto_stories,
+                title: 'Mis historias',
+                subtitle: 'Ve las historias que publicaste',
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const MisHistoriasScreen(),
+                    ),
+                  );
+                },
+              ),
+
+              // ✅ NUEVO: Mi círculo (con badge de invitaciones pendientes)
+              StreamBuilder<List<Contact>>(
+                stream: Contact.watchPendingFriendRequests(user.uid),
+                builder: (context, snapshot) {
+                  final pending = snapshot.data?.length ?? 0;
+                  return ProfileOptionItem(
+                    icon: Icons.favorite,
+                    title: 'Mi círculo',
+                    subtitle: pending > 0
+                        ? '$pending ${pending == 1 ? "invitación pendiente" : "invitaciones pendientes"}'
+                        : 'Personas que comparten historias con vos',
+                    badge: pending > 0 ? pending : null,
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => const MiCirculoScreen(),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
 
               ProfileOptionItem(
                 icon: Icons.settings,

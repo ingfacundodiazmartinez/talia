@@ -8,7 +8,7 @@ import 'package:flutter/material.dart';
 /// - Botón de adjuntar archivos
 /// - Botón de enviar/grabar audio (con presión continua)
 /// - Mostrar emoji picker cuando se activa
-class ChatInputBar extends StatelessWidget {
+class ChatInputBar extends StatefulWidget {
   final TextEditingController messageController;
   final bool showEmojiPicker;
   final bool isRecording;
@@ -19,6 +19,14 @@ class ChatInputBar extends StatelessWidget {
   final VoidCallback? onRecordEnd;
   final VoidCallback onSubmitMessage;
   final Widget? emojiPickerWidget;
+
+  /// FocusNode opcional para el TextField. Si se provee, el parent puede
+  /// manejar focus/unfocus para coordinar con el emoji picker (estilo WhatsApp).
+  final FocusNode? messageFocusNode;
+
+  /// Callback que dispara cuando el TextField gana foco. Útil para que el
+  /// parent cierre el emoji picker si estaba abierto.
+  final VoidCallback? onTextFieldFocused;
 
   const ChatInputBar({
     super.key,
@@ -32,7 +40,51 @@ class ChatInputBar extends StatelessWidget {
     this.onRecordEnd,
     required this.onSubmitMessage,
     this.emojiPickerWidget,
+    this.messageFocusNode,
+    this.onTextFieldFocused,
   });
+
+  @override
+  State<ChatInputBar> createState() => _ChatInputBarState();
+}
+
+class _ChatInputBarState extends State<ChatInputBar> {
+  FocusNode? _internalFocusNode;
+  FocusNode get _effectiveFocusNode =>
+      widget.messageFocusNode ?? (_internalFocusNode ??= FocusNode());
+
+  @override
+  void initState() {
+    super.initState();
+    _effectiveFocusNode.addListener(_handleFocusChange);
+  }
+
+  @override
+  void didUpdateWidget(covariant ChatInputBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.messageFocusNode != widget.messageFocusNode) {
+      (oldWidget.messageFocusNode ?? _internalFocusNode)
+          ?.removeListener(_handleFocusChange);
+      _effectiveFocusNode.addListener(_handleFocusChange);
+    }
+  }
+
+  void _handleFocusChange() {
+    // Cuando el TextField gana foco con el emoji picker abierto, avisamos
+    // al parent para que lo cierre. Replica el comportamiento de WhatsApp:
+    // tocar el input mientras está el emoji panel cierra el panel y abre el
+    // teclado en su lugar.
+    if (_effectiveFocusNode.hasFocus && widget.showEmojiPicker) {
+      widget.onTextFieldFocused?.call();
+    }
+  }
+
+  @override
+  void dispose() {
+    _effectiveFocusNode.removeListener(_handleFocusChange);
+    _internalFocusNode?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -68,26 +120,29 @@ class ChatInputBar extends StatelessWidget {
                   ),
                   child: Row(
                     children: [
-                      // Botón emoji
+                      // Botón emoji: cuando el picker está abierto el icono
+                      // pasa a "teclado" (estilo WhatsApp) — al tocarlo vuelve
+                      // el keyboard y se cierra el panel.
                       IconButton(
                         icon: Icon(
-                          showEmojiPicker
-                              ? Icons.emoji_emotions
+                          widget.showEmojiPicker
+                              ? Icons.keyboard
                               : Icons.emoji_emotions_outlined,
                           size: 22,
                         ),
-                        color: showEmojiPicker
+                        color: widget.showEmojiPicker
                             ? colorScheme.primary
                             : colorScheme.onSurfaceVariant,
                         padding: const EdgeInsets.all(8),
                         constraints: const BoxConstraints(),
-                        onPressed: onToggleEmojiPicker,
-                        tooltip: 'Emojis',
+                        onPressed: widget.onToggleEmojiPicker,
+                        tooltip: widget.showEmojiPicker ? 'Teclado' : 'Emojis',
                       ),
                       // TextField de mensaje (expandible hasta 5 líneas)
                       Expanded(
                         child: TextField(
-                          controller: messageController,
+                          controller: widget.messageController,
+                          focusNode: _effectiveFocusNode,
                           textCapitalization: TextCapitalization.sentences,
                           keyboardType: TextInputType.multiline,
                           autocorrect: true,
@@ -125,7 +180,7 @@ class ChatInputBar extends StatelessWidget {
                         color: colorScheme.onSurfaceVariant,
                         padding: const EdgeInsets.all(8),
                         constraints: const BoxConstraints(),
-                        onPressed: onAttachTap,
+                        onPressed: widget.onAttachTap,
                         tooltip: 'Adjuntar',
                       ),
                     ],
@@ -135,7 +190,7 @@ class ChatInputBar extends StatelessWidget {
               const SizedBox(width: 8),
               // Botones de acción: Enviar o Micrófono
               ValueListenableBuilder<TextEditingValue>(
-                valueListenable: messageController,
+                valueListenable: widget.messageController,
                 builder: (context, value, child) {
                   final text = value.text.trim();
                   final isEmpty = text.isEmpty;
@@ -149,7 +204,7 @@ class ChatInputBar extends StatelessWidget {
                       ),
                       child: IconButton(
                         icon: const Icon(Icons.send, color: Colors.white),
-                        onPressed: onSendTap,
+                        onPressed: widget.onSendTap,
                         tooltip: 'Enviar',
                       ),
                     );
@@ -158,21 +213,23 @@ class ChatInputBar extends StatelessWidget {
                   // Si no hay texto, mostrar botón de audio con toggle
                   return GestureDetector(
                     onTap: () {
-                      if (isRecording) {
-                        onRecordEnd?.call();
+                      if (widget.isRecording) {
+                        widget.onRecordEnd?.call();
                       } else {
-                        onRecordStart?.call();
+                        widget.onRecordStart?.call();
                       }
                     },
                     child: Container(
                       width: 48,
                       height: 48,
                       decoration: BoxDecoration(
-                        color: isRecording ? Colors.red : colorScheme.primary,
+                        color: widget.isRecording
+                            ? Colors.red
+                            : colorScheme.primary,
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
-                        isRecording ? Icons.stop : Icons.mic_none,
+                        widget.isRecording ? Icons.stop : Icons.mic_none,
                         color: Colors.white,
                         size: 24,
                       ),

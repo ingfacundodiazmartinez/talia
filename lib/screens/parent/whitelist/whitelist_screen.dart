@@ -36,18 +36,14 @@ class WhitelistScreen extends StatefulWidget {
 }
 
 class _WhitelistScreenState extends State<WhitelistScreen>
-    with AutomaticKeepAliveClientMixin, TickerProviderStateMixin {
+    with AutomaticKeepAliveClientMixin {
   late WhitelistController _controller;
-  late TabController _tabController;
-
-  // Orden de tabs (define los estados visibles, en orden de prioridad para el padre)
-  static const List<String> _tabFilters = ['pending', 'approved', 'rejected', 'revoked'];
 
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
-  // Filtro por estado (derivado del tab seleccionado)
-  String get _statusFilter => _tabFilters[_tabController.index];
+  // Filtro por estado. 'all' = sin filtrar (default: muestra todos).
+  String _statusFilter = 'all';
 
   // Filtro por hijo
   late String _childFilter;
@@ -72,18 +68,6 @@ class _WhitelistScreenState extends State<WhitelistScreen>
   void initState() {
     super.initState();
     _childFilter = widget.initialChildFilter ?? 'all';
-
-    // Default: arrancar en "Pendientes" (lo más relevante para el padre)
-    _tabController = TabController(length: _tabFilters.length, vsync: this);
-    _tabController.addListener(() {
-      if (!_tabController.indexIsChanging) {
-        // Al salir de "Pendientes", limpiar selección
-        if (_statusFilter != 'pending' && _selectedContactIds.isNotEmpty) {
-          _selectedContactIds.clear();
-        }
-        setState(() {});
-      }
-    });
 
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser != null) {
@@ -168,7 +152,6 @@ class _WhitelistScreenState extends State<WhitelistScreen>
 
   @override
   void dispose() {
-    _tabController.dispose();
     _controller.onDataChanged = null; // Limpiar callback
     _searchController.dispose();
     _controller.dispose();
@@ -370,58 +353,34 @@ class _WhitelistScreenState extends State<WhitelistScreen>
               icon: Icons.child_care,
             ),
           SizedBox(height: 12),
-          // Tabs por estado
-          _buildStatusTabs(context),
+          // Filtro por estado (default 'all' = sin filtrar). El estado es un
+          // filtro más, no tabs: por defecto muestra TODOS los contactos.
+          _buildFilterDropdown(
+            value: _statusFilter,
+            items: [
+              const DropdownMenuItem(value: 'all', child: Text('Todos los estados')),
+              DropdownMenuItem(
+                value: 'pending',
+                child: Text(_pendingCount > 0
+                    ? 'Pendientes ($_pendingCount)'
+                    : 'Pendientes'),
+              ),
+              const DropdownMenuItem(value: 'approved', child: Text('Aprobados')),
+              const DropdownMenuItem(value: 'rejected', child: Text('Rechazados')),
+              const DropdownMenuItem(value: 'revoked', child: Text('Revocados')),
+            ],
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() {
+                _statusFilter = value;
+                // La selección masiva solo aplica al filtro "Pendientes".
+                if (_statusFilter != 'pending') _selectedContactIds.clear();
+              });
+            },
+            icon: Icons.filter_list,
+          ),
         ],
       ),
-    );
-  }
-
-  Widget _buildStatusTabs(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return TabBar(
-      controller: _tabController,
-      isScrollable: true,
-      tabAlignment: TabAlignment.start,
-      labelColor: colorScheme.primary,
-      unselectedLabelColor: colorScheme.onSurfaceVariant,
-      indicatorColor: colorScheme.primary,
-      indicatorSize: TabBarIndicatorSize.label,
-      labelStyle: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-      unselectedLabelStyle: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
-      dividerColor: Colors.transparent,
-      tabs: [
-        Tab(child: _tabLabel('Pendientes', count: _pendingCount)),
-        const Tab(text: 'Aprobados'),
-        const Tab(text: 'Rechazados'),
-        const Tab(text: 'Revocados'),
-      ],
-    );
-  }
-
-  Widget _tabLabel(String text, {int count = 0}) {
-    if (count <= 0) return Text(text);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(text),
-        const SizedBox(width: 6),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: Colors.orange,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Text(
-            '$count',
-            style: const TextStyle(
-              fontSize: 11,
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-      ],
     );
   }
 

@@ -5,9 +5,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:in_app_purchase_android/billing_client_wrappers.dart';
 import 'package:in_app_purchase_android/in_app_purchase_android.dart';
-import 'package:in_app_purchase_storekit/in_app_purchase_storekit.dart';
 import 'package:talia/services/subscription_service.dart';
 import 'package:talia/services/app_config_service.dart';
+import 'package:talia/utils/release_logger.dart';
 
 /// Servicio para manejar In-App Purchases de Play Store y App Store
 /// Integra con Cloud Functions para verificación server-side
@@ -403,7 +403,18 @@ class InAppPurchaseService {
   Future<bool> _verifyWithServer(PurchaseDetails purchase) async {
     try {
       final user = _auth.currentUser;
-      if (user == null) return false;
+      ReleaseLogger.log(
+        '[IAP] _verifyWithServer product=${purchase.productID} '
+        'status=${purchase.status} user=${user?.uid ?? "NULL"}',
+        tag: 'IAP',
+      );
+      if (user == null) {
+        ReleaseLogger.error(
+          '[IAP] currentUser NULL — no se puede verificar la compra',
+          tag: 'IAP',
+        );
+        return false;
+      }
 
       if (Platform.isAndroid) {
         return await _verifyPlayStorePurchase(purchase);
@@ -411,6 +422,7 @@ class InAppPurchaseService {
         return await _verifyAppStorePurchase(purchase);
       }
     } catch (e) {
+      ReleaseLogger.error('[IAP] _verifyWithServer EXCEPTION: $e', tag: 'IAP');
       return false;
     }
   }
@@ -438,18 +450,29 @@ class InAppPurchaseService {
   /// Verificar compra de App Store con servidor
   Future<bool> _verifyAppStorePurchase(PurchaseDetails purchase) async {
     try {
-      final appStoreDetails = purchase as AppStorePurchaseDetails;
+      // purchaseID es el transactionIdentifier cross-SK1/SK2. NO usar
+      // skPaymentTransaction.transactionIdentifier: esa es API de StoreKit 1
+      // y lanza excepción en modo StoreKit 2 (iOS 15+), sobre todo en
+      // transacciones restauradas.
+      final txId = purchase.purchaseID;
+      ReleaseLogger.log(
+        '[IAP] verifyAppStore call txId=${txId ?? "NULL"} '
+        'product=${purchase.productID}',
+        tag: 'IAP',
+      );
 
       final result = await _functions
           .httpsCallable('verifyAppStorePurchase')
           .call({
-        'transactionId': appStoreDetails.skPaymentTransaction.transactionIdentifier,
+        'transactionId': txId,
         'productId': purchase.productID,
       });
 
-      final data = result.data as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(result.data as Map);
+      ReleaseLogger.log('[IAP] verifyAppStore resp=$data', tag: 'IAP');
       return data['valid'] == true;
     } catch (e) {
+      ReleaseLogger.error('[IAP] verifyAppStore EXCEPTION: $e', tag: 'IAP');
       return false;
     }
   }

@@ -466,33 +466,40 @@ class ContactRepository {
     try {
       final usersInfo = <String, Map<String, dynamic>>{};
 
-      // Firestore whereIn limita a 10 items
+      // Firestore whereIn limita a 10 items.
+      // ⚡ PERF: los chunks corren en PARALELO. Antes eran secuenciales:
+      // con N chunks de timeout 10s c/u el peor caso era N*10s por snapshot.
+      final chunkFutures = <Future<void>>[];
       for (int i = 0; i < userIds.length; i += 10) {
         final chunk = userIds.skip(i).take(10).toList();
 
-        try {
-          final snapshot = await _firestore
-              .collection('users')
-              .where(FieldPath.documentId, whereIn: chunk)
-              .get()
-              .timeout(
-                const Duration(seconds: 10),
-                onTimeout: () => throw TimeoutException('Timeout obteniendo usuarios'),
-              );
+        chunkFutures.add(() async {
+          try {
+            final snapshot = await _firestore
+                .collection('users')
+                .where(FieldPath.documentId, whereIn: chunk)
+                .get()
+                .timeout(
+                  const Duration(seconds: 10),
+                  onTimeout: () => throw TimeoutException('Timeout obteniendo usuarios'),
+                );
 
-          for (final doc in snapshot.docs) {
-            if (doc.exists) {
-              usersInfo[doc.id] = doc.data();
+            for (final doc in snapshot.docs) {
+              if (doc.exists) {
+                usersInfo[doc.id] = doc.data();
+              }
             }
+          } catch (chunkError) {
+            // ✅ FIX #9: Continuar con los demás chunks en vez de fallar completamente
+            ReleaseLogger.warning(
+              'Error obteniendo chunk de usuarios: $chunkError',
+              tag: 'ContactRepository',
+            );
           }
-        } catch (chunkError) {
-          // ✅ FIX #9: Continuar con siguiente chunk en vez de fallar completamente
-          ReleaseLogger.warning(
-            'Error obteniendo chunk de usuarios: $chunkError',
-            tag: 'ContactRepository',
-          );
-        }
+        }());
       }
+
+      await Future.wait(chunkFutures);
 
       return usersInfo;
     } catch (e) {

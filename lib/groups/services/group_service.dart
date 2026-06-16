@@ -548,6 +548,40 @@ class GroupService {
     }
   }
 
+  /// Activar/desactivar "solo administradores pueden enviar mensajes".
+  /// Escritura directa al doc del grupo (patrón de moderación); las rules
+  /// solo permiten este update a admins del grupo.
+  Future<bool> setAdminOnlyMessages({
+    required String groupId,
+    required bool enabled,
+  }) async {
+    try {
+      final userId = _auth.currentUser?.uid;
+      if (userId == null) return false;
+
+      await FirebaseFirestore.instance
+          .collection('groups_v2')
+          .doc(groupId)
+          .update({
+        'adminOnlyMessages': enabled,
+        'adminOnlyMessagesUpdatedAt': FieldValue.serverTimestamp(),
+        'adminOnlyMessagesUpdatedBy': userId,
+      });
+
+      ReleaseLogger.log(
+        '✅ adminOnlyMessages actualizado: groupId=$groupId, enabled=$enabled',
+        tag: 'GroupService',
+      );
+      return true;
+    } catch (e) {
+      ReleaseLogger.error(
+        'Error actualizando adminOnlyMessages: $e',
+        tag: 'GroupService',
+      );
+      return false;
+    }
+  }
+
   /// Add reaction to message
   Future<void> addReaction({
     required String groupId,

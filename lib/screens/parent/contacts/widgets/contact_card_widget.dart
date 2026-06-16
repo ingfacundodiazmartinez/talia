@@ -165,7 +165,7 @@ class ContactCardWidget extends StatelessWidget {
                       if (isFriend) ...[
                         SizedBox(width: 6),
                         Tooltip(
-                          message: 'Amigo - Pueden ver sus historias',
+                          message: 'En tu círculo - Pueden ver sus historias',
                           child: Icon(
                             Icons.check_circle,
                             size: 16,

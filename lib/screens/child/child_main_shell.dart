@@ -69,7 +69,6 @@ class _ChildMainShellState extends State<ChildMainShell> {
 
   // GlobalKeys para mantener el estado de navegación de cada tab
   final GlobalKey<NavigatorState> _chatsNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ChildChats');
-  final GlobalKey<NavigatorState> _contactsNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ChildContacts');
   final GlobalKey<NavigatorState> _profileNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ChildProfile');
 
   @override
@@ -312,9 +311,6 @@ class _ChildMainShellState extends State<ChildMainShell> {
         currentKey = _chatsNavigatorKey;
         break;
       case 1:
-        currentKey = _contactsNavigatorKey;
-        break;
-      case 2:
         currentKey = _profileNavigatorKey;
         break;
       default:
@@ -322,7 +318,6 @@ class _ChildMainShellState extends State<ChildMainShell> {
     }
     final navigator = currentKey.currentState;
     if (navigator == null) return false;
-    // Si el navigator puede hacer pop, significa que hay rutas anidadas
     return navigator.canPop();
   }
 
@@ -356,9 +351,6 @@ class _ChildMainShellState extends State<ChildMainShell> {
               currentKey = _chatsNavigatorKey;
               break;
             case 1:
-              currentKey = _contactsNavigatorKey;
-              break;
-            case 2:
               currentKey = _profileNavigatorKey;
               break;
             default:
@@ -391,13 +383,32 @@ class _ChildMainShellState extends State<ChildMainShell> {
           ),
           Offstage(
             offstage: _selectedIndex != 1,
-            child: _buildNavigator(_contactsNavigatorKey, ChildContactsScreen(childId: currentUserId)),
-          ),
-          Offstage(
-            offstage: _selectedIndex != 2,
             child: _buildNavigator(_profileNavigatorKey, ChildProfileScreen()),
           ),
         ],
+      ),
+      floatingActionButton: ValueListenableBuilder<int>(
+        valueListenable: BottomNavVisibility.instance.fullScreenCount,
+        builder: (context, fullScreenCount, _) {
+          // Mostrar FAB sólo en tab Chats y cuando no hay full-screen activo
+          if (_selectedIndex != 0 || fullScreenCount > 0 || _hasNestedRoute) {
+            return const SizedBox.shrink();
+          }
+          return FloatingActionButton(
+            heroTag: 'child_new_chat_fab',
+            backgroundColor: colorScheme.primary,
+            foregroundColor: colorScheme.onPrimary,
+            tooltip: 'Nuevo chat',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ChildContactsScreen(childId: currentUserId),
+                ),
+              );
+            },
+            child: const Icon(Icons.edit),
+          );
+        },
       ),
       // Bottom nav siempre visible salvo cuando hay una pantalla full-screen
       // registrada (chat detail, llamadas, story viewer, AR camera, media viewer).
@@ -450,11 +461,6 @@ class _ChildMainShellState extends State<ChildMainShell> {
                 icon: _buildIconWithBadge(Icons.chat_bubble_outline, totalUnreadMessages),
                 activeIcon: _buildIconWithBadge(Icons.chat_bubble, totalUnreadMessages),
                 label: 'Chats',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.people_outline),
-                activeIcon: Icon(Icons.people),
-                label: 'Contactos',
               ),
               BottomNavigationBarItem(
                 icon: Icon(Icons.person_outline),

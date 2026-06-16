@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_database/firebase_database.dart';
 
 import '../../../models/story.dart';
 import '../../../utils/release_logger.dart';
+import '../../../utils/server_time_offset.dart';
 
 /// Repository para acceso a datos de historias en Firestore
 ///
@@ -19,7 +19,6 @@ class StoryRepository {
 
   /// Cache del offset de tiempo del servidor (en millisegundos)
   static int _serverTimeOffset = 0;
-  static DateTime? _lastOffsetFetch;
 
   StoryRepository({
     required FirebaseFirestore firestore,
@@ -30,30 +29,10 @@ class StoryRepository {
     _refreshServerTimeOffset();
   }
 
-  /// Refrescar offset del servidor desde RTDB
+  /// Refrescar offset del servidor desde RTDB (vía helper compartido;
+  /// el cache de 5 min y el fallback silencioso viven ahí)
   Future<void> _refreshServerTimeOffset() async {
-    // Solo refrescar cada 5 minutos
-    if (_lastOffsetFetch != null &&
-        DateTime.now().difference(_lastOffsetFetch!) < Duration(minutes: 5)) {
-      return;
-    }
-
-    try {
-      final snapshot = await FirebaseDatabase.instance
-          .ref('.info/serverTimeOffset')
-          .get();
-      _serverTimeOffset = (snapshot.value as int?) ?? 0;
-      _lastOffsetFetch = DateTime.now();
-      ReleaseLogger.log(
-        '⏰ [StoryRepository] Server time offset: ${_serverTimeOffset}ms',
-        tag: 'StoryRepository',
-      );
-    } catch (e) {
-      ReleaseLogger.error(
-        '❌ [StoryRepository] Error fetching server time offset: $e',
-        tag: 'StoryRepository',
-      );
-    }
+    _serverTimeOffset = await ServerTimeOffset.fetchMs();
   }
 
   /// Obtener tiempo actual del servidor
@@ -151,6 +130,30 @@ class StoryRepository {
             .toList());
   }
 
+  /// Historias aprobadas de un autor específico, visibles para el usuario
+  /// actual. Usa la MISMA forma de query que el stream principal
+  /// (availableFor + status + createdAt), que las security rules ya permiten,
+  /// y filtra por autor en el cliente. Una query solo por userId ajeno
+  /// (como getByUserId) es rechazada por las rules con permission-denied.
+  Future<List<Story>> getApprovedStoriesByAuthor(String authorId) async {
+    final viewerId = currentUserId;
+    if (viewerId == null) return [];
+
+    final snapshot = await _firestore
+        .collection('stories')
+        .where('availableFor', arrayContains: viewerId)
+        .where('status', isEqualTo: 'approved')
+        .where('createdAt', isGreaterThan: _get24HoursAgo())
+        .orderBy('createdAt', descending: true)
+        .get()
+        .timeout(const Duration(seconds: 8));
+
+    return snapshot.docs
+        .map((doc) => Story.fromFirestore(doc))
+        .where((story) => story.userId == authorId)
+        .toList();
+  }
+
   /// Obtener historias de múltiples usuarios (chunked para Firestore limits)
   Future<List<Story>> getByUserIds(List<String> userIds) async {
     if (userIds.isEmpty) return [];
@@ -240,65 +243,85 @@ class StoryRepository {
           return snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList();
         });
 
-    // Combinar ambos streams y deduplicar
-    return _combineStoriesStreams(contactStoriesStream, ownStoriesStream);
+    // Stream de comunicados oficiales de Talia (broadcast para TODOS los usuarios).
+    // No usan availableFor (sería ilimitado); se filtran por isBroadcast + vigencia.
+    // ⚠️ Los filtros isBroadcast + isOfficial deben coincidir EXACTAMENTE con la
+    // cláusula de canViewThisStory() en firestore.rules: las reglas de `list` se
+    // evalúan contra los filtros del query, no contra los datos.
+    final broadcastStoriesStream = _firestore
+        .collection('stories')
+        .where('isBroadcast', isEqualTo: true)
+        .where('isOfficial', isEqualTo: true)
+        .where('status', isEqualTo: 'approved')
+        .where('expiresAt', isGreaterThan: Timestamp.now())
+        .snapshots()
+        .handleError((error) {
+          ReleaseLogger.error('❌ [StoryRepository] Error en getStoriesAvailableForUser (broadcast): $error', tag: 'StoryRepository');
+          return <Story>[];
+        })
+        .map((snapshot) {
+          ReleaseLogger.log(
+            '📥 [StoryRepository] Broadcast stories snapshot: ${snapshot.docs.length} stories received',
+            tag: 'StoryRepository',
+          );
+          return snapshot.docs.map((doc) => Story.fromFirestore(doc)).toList();
+        });
+
+    // Combinar los tres streams y deduplicar
+    return _combineStoriesStreams([
+      contactStoriesStream,
+      ownStoriesStream,
+      broadcastStoriesStream,
+    ]);
   }
 
-  /// Combina dos streams de historias y elimina duplicados
-  /// Emite cada vez que cualquiera de los streams emite un nuevo valor
+  /// Combina múltiples streams de historias y elimina duplicados por ID.
+  /// Emite cada vez que cualquiera de los streams emite un nuevo valor.
+  /// El orden de [streams] define la prioridad de dedup: los últimos
+  /// sobreescriben a los primeros (ej: la versión propia pisa la de contacto).
   Stream<List<Story>> _combineStoriesStreams(
-    Stream<List<Story>> contactsStream,
-    Stream<List<Story>> ownStream,
+    List<Stream<List<Story>>> streams,
   ) {
     final controller = StreamController<List<Story>>.broadcast();
 
-    List<Story> contactStories = [];
-    List<Story> ownStories = [];
+    final latest = List<List<Story>>.filled(streams.length, const <Story>[]);
 
     void emitCombined() {
-      // Combinar y deduplicar por ID (ownStories tiene prioridad para mostrar estado actualizado)
+      // Combinar y deduplicar por ID respetando la prioridad por orden.
       final combined = <String, Story>{};
-      for (final story in contactStories) {
-        combined[story.id] = story;
-      }
-      for (final story in ownStories) {
-        combined[story.id] = story; // Sobreescribe con versión propia si existe
+      for (final stories in latest) {
+        for (final story in stories) {
+          combined[story.id] = story;
+        }
       }
 
-      // Ordenar por fecha de creación (más reciente primero)
       final sortedStories = combined.values.toList()
         ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
       ReleaseLogger.log(
-        '📤 [StoryRepository] Combined stories: ${sortedStories.length} total (${contactStories.length} from contacts, ${ownStories.length} own)',
+        '📤 [StoryRepository] Combined stories: ${sortedStories.length} total',
         tag: 'StoryRepository',
       );
 
       controller.add(sortedStories);
     }
 
-    StreamSubscription<List<Story>>? sub1;
-    StreamSubscription<List<Story>>? sub2;
-
-    sub1 = contactsStream.listen(
-      (stories) {
-        contactStories = stories;
-        emitCombined();
-      },
-      onError: controller.addError,
-    );
-
-    sub2 = ownStream.listen(
-      (stories) {
-        ownStories = stories;
-        emitCombined();
-      },
-      onError: controller.addError,
-    );
+    final subs = <StreamSubscription<List<Story>>>[];
+    for (var i = 0; i < streams.length; i++) {
+      final index = i;
+      subs.add(streams[i].listen(
+        (stories) {
+          latest[index] = stories;
+          emitCombined();
+        },
+        onError: controller.addError,
+      ));
+    }
 
     controller.onCancel = () async {
-      await sub1?.cancel();
-      await sub2?.cancel();
+      for (final sub in subs) {
+        await sub.cancel();
+      }
     };
 
     return controller.stream;

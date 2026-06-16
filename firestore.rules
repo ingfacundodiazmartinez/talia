@@ -87,8 +87,18 @@ service cloud.firestore {
         return changedKeys.hasOnly(['moderatingUserIds', 'moderationLevels']);
       }
 
-      // ACTUALIZAR: Solo puede actualizar SU PROPIO usuario Y sin tocar campos sensibles
-      // NOTA: Los campos premium (isPremium, subscriptionTier, etc.) están protegidos
+      // ACTUALIZAR: Solo puede actualizar SU PROPIO usuario Y sin tocar campos sensibles.
+      //
+      // 🔒 Campos protegidos contra modificación directa por el usuario:
+      // - isAdmin / role: privilegios. Solo admins / CF.
+      // - isPremium, subscriptionTier, premiumExpiresAt, subscriptionType,
+      //   subscriptionId, subscriptionAutoRenew: solo IAP CF debe tocarlos.
+      // - linkedChildrenIds, linkedParents, linkedParentsData: vínculo
+      //   familiar. Self-update permitiría privilege escalation completa
+      //   (ver/aprobar stories de cualquier chico, leer emergencies,
+      //   modificar membresía de grupos, etc.). Solo CF createParentChildLink
+      //   y deleteParentChildLink deben tocarlos.
+      // - claimedReferralCode, referrals: anti-fraude del programa de referidos.
       allow update: if request.auth.uid == userId &&
         !request.resource.data.diff(resource.data).affectedKeys().hasAny([
           'isAdmin',
@@ -98,7 +108,10 @@ service cloud.firestore {
           'premiumExpiresAt',
           'subscriptionType',
           'subscriptionId',
-          'subscriptionAutoRenew'
+          'subscriptionAutoRenew',
+          'linkedChildrenIds',
+          'linkedParents',
+          'linkedParentsData'
         ]);
 
       // Padres pueden actualizar campos de moderación en sus hijos vinculados
@@ -261,16 +274,26 @@ service cloud.firestore {
       // 3. El usuario es participante Y solo está actualizando sus propios campos de archivado, O
       // 4. El usuario es participante Y solo está actualizando su propio contador de no leídos
       // 🔒 NUEVO: Prohibir actualización de lastMessage, lastMessageTime, lastMessageSender desde frontend
-      allow update: if request.auth != null && !isUpdatingCriticalChatFields() && (
-        (request.auth.uid in resource.data.participants && !isUpdatingModerationFields()) ||
+      allow update: if request.auth != null && (
+        // 🔒 PADRE de un participante: actualiza SOLO campos de moderación/bloqueo.
+        // Su propósito legítimo ES cambiar moderationEnabled (activar moderación
+        // del hijo), por eso esta rama va FUERA del gate isUpdatingCriticalChatFields:
+        // ese gate trataba "activar moderación" (false→true) como campo crítico y
+        // bloqueaba al propio padre. El hasOnly() ya impide que toque lastMessage*
+        // u otros campos sensibles, así que es seguro.
         (isParentOfParticipant() &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-           'moderationEnabled', 'moderationParentId', 'moderationEnabledAt', 'moderationLevel',
+           'moderationEnabled', 'moderationParentId', 'moderationEnabledAt',
+           'moderationUpdatedAt', 'moderationLevel',
            'isBlocked', 'blockedAt', 'blockedBy', 'unblockedAt', 'unblockedBy', 'lastActivity',
            'updatedAt', 'participants'
          ])) ||
-        (request.auth.uid in resource.data.participants && isUpdatingOnlyArchiveFields()) ||
-        (request.auth.uid in resource.data.participants && isUpdatingOnlyUnreadCount())
+        // Participantes: protegidos por el gate de campos críticos.
+        (!isUpdatingCriticalChatFields() && (
+          (request.auth.uid in resource.data.participants && !isUpdatingModerationFields()) ||
+          (request.auth.uid in resource.data.participants && isUpdatingOnlyArchiveFields()) ||
+          (request.auth.uid in resource.data.participants && isUpdatingOnlyUnreadCount())
+        ))
       );
 
       match /messages/{messageId} {
@@ -569,6 +592,19 @@ service cloud.firestore {
         // No permitir actualizar ni eliminar (TTL lo limpia automáticamente)
         allow update, delete: if false;
       }
+
+      // 📍 Sesiones de ubicación en vivo. Cada usuario escribe SOLO su propio
+      // doc (id == su uid). Cualquier participante del chat puede leerlo.
+      match /live_locations/{sharerId} {
+        function chatParticipants() {
+          return get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        }
+        allow read: if request.auth != null &&
+          request.auth.uid in chatParticipants();
+        allow write: if request.auth != null &&
+          request.auth.uid == sharerId &&
+          request.auth.uid in chatParticipants();
+      }
     }
 
     // Messages (colección global)
@@ -630,21 +666,51 @@ service cloud.firestore {
         return changedKeys.hasOnly(['moderationSettings']);
       }
 
-      // 🔒 FUNCIÓN: Verificar solicitud de aprobación válida (potential → pending/approved)
+      // 🔒 FUNCIÓN: ¿Este contacto requiere aprobación parental?
+      // Lee los dos users del doc desde /users/ y chequea si alguno tiene
+      // padres linkados. Si AL MENOS UNO tiene padres, el contacto requiere
+      // aprobación y NO puede saltarse a 'approved' directo desde el client.
+      //
+      // Usa `linkedParents` (cached en users/{uid}). Ese campo ahora solo
+      // puede modificarlo CF (ver blacklist en users update rule), así que
+      // es confiable como fuente para la regla.
+      function contactRequiresParentalApproval() {
+        let users = resource.data.users;
+        let u1Doc = get(/databases/$(database)/documents/users/$(users[0])).data;
+        let u2Doc = get(/databases/$(database)/documents/users/$(users[1])).data;
+        let u1HasParents = u1Doc.get('linkedParents', []).size() > 0;
+        let u2HasParents = u2Doc.get('linkedParents', []).size() > 0;
+        return u1HasParents || u2HasParents;
+      }
+
+      // 🔒 FUNCIÓN: Verificar solicitud de aprobación válida (potential → pending/approved).
+      //
+      // ⚠️ ANTES permitía `potential → approved` directo SIN chequear si el
+      // contacto necesitaba aprobación parental. Un chico podía marcarse a
+      // sí mismo como 'approved' sin que su padre nunca aprobara.
+      //
+      // Ahora:
+      //   - potential → pending: siempre permitido (es el flow normal).
+      //   - potential → approved: solo si NINGUNO de los dos users tiene
+      //     padres linkados (i.e., dos adultos auto-aprobando contacto
+      //     entre adultos).
+      // Para todos los demás casos de approved, debe pasar por
+      // isValidApprovalUpdate() (un parentViewer aprobando) o por una CF.
       function isValidApprovalRequest() {
-        // Solo desde status 'potential'
         let fromPotential = resource.data.status == 'potential';
-        // Solo hacia 'pending' o 'approved'
-        let toValidStatus = request.resource.data.status == 'pending' ||
-                           request.resource.data.status == 'approved';
-        // El initiatorId debe ser el usuario actual
+        let toPending = request.resource.data.status == 'pending';
+        let toApproved = request.resource.data.status == 'approved';
+        let toValidStatus = toPending || toApproved;
         let isInitiator = request.resource.data.initiatorId == request.auth.uid;
-        // Campos permitidos para esta transición
         let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
         let allowedKeys = ['status', 'initiatorId', 'requestedAt', 'approvals', 'completedApprovals', 'approvedAt'];
         let onlyAllowedKeys = changedKeys.hasOnly(allowedKeys);
 
-        return fromPotential && toValidStatus && isInitiator && onlyAllowedKeys;
+        // 🔒 Approved solo permitido si NO requiere aprobación parental.
+        let approvedOnlyWhenAllowed = !toApproved || !contactRequiresParentalApproval();
+
+        return fromPotential && toValidStatus && isInitiator && onlyAllowedKeys &&
+               approvedOnlyWhenAllowed;
       }
 
       // 🔒 FUNCIÓN: Verificar cancelación válida (pending → rejected en approvals)
@@ -973,6 +1039,12 @@ service cloud.firestore {
       // ✅ OPTIMIZADO: Usa availableFor y parentViewers para queries eficientes
       function canViewThisStory() {
         return request.auth.uid == resource.data.userId ||
+               // ✅ Comunicados oficiales de Talia: legibles por cualquier autenticado.
+               // Acceso directo a campos (no .get()) para que la evaluación de
+               // queries `list` pueda resolverse desde los filtros del query
+               // (mismo patrón que el check de availableFor/status de abajo).
+               (resource.data.isBroadcast == true &&
+                resource.data.isOfficial == true) ||
                // ✅ Check optimizado usando availableFor (historias aprobadas para contactos)
                (resource.data.status == 'approved' &&
                 resource.data.availableFor != null &&
@@ -1050,6 +1122,13 @@ service cloud.firestore {
         return !changedKeys.hasAny(['availableFor']);
       }
 
+      // 🔒 SEGURIDAD: Los flags oficiales (isOfficial/isBroadcast) solo los
+      // escribe el backoffice vía Admin SDK. El cliente nunca puede setearlos.
+      function isNotModifyingOfficialFlags() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        return !changedKeys.hasAny(['isOfficial', 'isBroadcast']);
+      }
+
       // 🔒 SEGURIDAD CRÍTICA: Reglas extremadamente restrictivas para historias
       // Permitir leer historia individual SOLO si:
       // 1. Eres el creador (owner), O
@@ -1067,9 +1146,12 @@ service cloud.firestore {
         canViewThisStory()
       );
 
-      // Solo el creador puede crear su propia historia
+      // Solo el creador puede crear su propia historia.
+      // 🔒 El cliente no puede crear historias oficiales/broadcast (anti-forge).
       allow create: if request.auth != null &&
-        request.auth.uid == request.resource.data.userId;
+        request.auth.uid == request.resource.data.userId &&
+        request.resource.data.get('isOfficial', false) == false &&
+        request.resource.data.get('isBroadcast', false) == false;
 
       // 🔒 ACTUALIZACIÓN SEGURA: Permitir actualizar SOLO si:
       // 1. Eres el creador de la historia Y NO modificas availableFor, O
@@ -1078,7 +1160,7 @@ service cloud.firestore {
       // 4. Eres el creador Y solo actualizas campos de visibilidad
       // 🔒 NOTA: availableFor solo puede ser modificado por Cloud Functions
       allow update: if request.auth != null && (
-        (request.auth.uid == resource.data.userId && isNotModifyingAvailableFor()) ||
+        (request.auth.uid == resource.data.userId && isNotModifyingAvailableFor() && isNotModifyingOfficialFlags()) ||
         (canViewThisStory() && (isOnlyUpdatingViewedBy() || isOnlyUpdatingReplies() || isOnlyUpdatingLikedBy())) ||
         (hasStoryApprovalAccess(resource.data.userId, request.auth.uid) && isOnlyUpdatingApprovalFields()) ||
         (request.auth.uid == resource.data.userId && isOnlyUpdatingVisibilityFields())
@@ -1430,10 +1512,17 @@ service cloud.firestore {
       }
 
       // Permitir leer si:
-      // 1. Eres uno de los participantes (tu UID está en el documento ID), O
-      // 2. El documento existe Y eres padre del childId
+      // 1. Eres uno de los dos participantes (tu UID es uno de los segmentos
+      //    del ID `{uidA}_{uidB}`), O
+      // 2. El documento existe Y eres padre del childId.
+      //
+      // 🔒 Antes era `blockedId.matches('.*' + uid + '.*')` — regex SIN anchors,
+      // matcheaba si el uid era substring en cualquier posición. Como los UIDs
+      // de Firebase Auth son largos (28 chars) y randomizados es muy raro que
+      // pase en práctica, pero deja una superficie frágil. Anclamos con ^ y $.
       allow read: if request.auth != null && (
-        blockedId.matches('.*' + request.auth.uid + '.*') ||
+        blockedId.matches('^' + request.auth.uid + '_.*$') ||
+        blockedId.matches('^.*_' + request.auth.uid + '$') ||
         isParentOfBlockedChatChild()
       );
 
@@ -1984,6 +2073,17 @@ service cloud.firestore {
         return isAdmin && changedKeys.hasOnly(moderationFields);
       }
 
+      // Función para verificar si un admin está actualizando el toggle
+      // "solo administradores pueden enviar mensajes"
+      function isAdminUpdatingAdminOnlyMessages() {
+        let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+        let adminOnlyFields = ['adminOnlyMessages', 'adminOnlyMessagesUpdatedAt', 'adminOnlyMessagesUpdatedBy'];
+
+        let isAdmin = resource.data.admins != null && request.auth.uid in resource.data.admins;
+
+        return isAdmin && changedKeys.hasOnly(adminOnlyFields);
+      }
+
       // Miembros pueden actualizar campos de actividad y su propio unreadCount
       // O pueden salir del grupo (removerse a sí mismos del array members)
       // Padres pueden modificar membresía de sus hijos (approve/revoke)
@@ -1992,7 +2092,8 @@ service cloud.firestore {
         (request.auth.uid in resource.data.members && isUpdatingOnlyAllowedGroupFields()) ||
         isLeavingGroup() ||
         isParentModifyingChildMembership() ||
-        isAdminUpdatingModeration()
+        isAdminUpdatingModeration() ||
+        isAdminUpdatingAdminOnlyMessages()
       );
 
       // Solo Cloud Functions pueden eliminar grupos
@@ -2010,6 +2111,16 @@ service cloud.firestore {
         function groupHasModeration() {
           let groupDoc = get(/databases/$(database)/documents/groups_v2/$(groupId));
           return groupDoc.data.moderationEnabled == true;
+        }
+
+        // 🔒 FUNCIÓN: "Solo administradores pueden enviar mensajes".
+        // Si el flag está activo, solo los admins del grupo pueden crear
+        // mensajes. El get() del doc del grupo se cachea junto con el de
+        // isGroupV2Member (mismo documento), no agrega lecturas.
+        function senderCanSendInGroup() {
+          let groupDoc = get(/databases/$(database)/documents/groups_v2/$(groupId));
+          return groupDoc.data.get('adminOnlyMessages', false) != true ||
+                 request.auth.uid in groupDoc.data.get('admins', []);
         }
 
         // 🔒 FUNCIÓN: Verificar si el mensaje tiene menos de 10 minutos
@@ -2074,7 +2185,8 @@ service cloud.firestore {
         allow create: if request.auth != null &&
           isGroupV2Member() &&
           request.auth.uid == request.resource.data.senderId &&
-          hasValidGroupVisibleTo();
+          hasValidGroupVisibleTo() &&
+          senderCanSendInGroup();
 
         // Permitir actualizar SI:
         // 1. Eres miembro Y solo actualizas metadata (reactions, readBy), O
@@ -2161,6 +2273,19 @@ service cloud.firestore {
 
         // No permitir actualizar ni eliminar (TTL lo limpia automáticamente)
         allow update, delete: if false;
+      }
+
+      // 📍 Sesiones de ubicación en vivo en grupos. Cada miembro escribe SOLO
+      // su propio doc (id == su uid); cualquier miembro puede leer.
+      match /live_locations/{sharerId} {
+        function groupMembers() {
+          return get(/databases/$(database)/documents/groups_v2/$(groupId)).data.members;
+        }
+        allow read: if request.auth != null &&
+          request.auth.uid in groupMembers();
+        allow write: if request.auth != null &&
+          request.auth.uid == sharerId &&
+          request.auth.uid in groupMembers();
       }
     }
 
@@ -2376,11 +2501,22 @@ service cloud.firestore {
         canViewTriviaResponse()
       );
 
-      // Permitir listar si:
-      // 1. Eres el respondedor de la respuesta, O
-      // 2. Eres el creador de la trivia, O
-      // 3. Puedes ver la trivia (para leaderboard público)
-      allow list: if request.auth != null;
+      // 🔒 Antes era `allow list: if request.auth != null` sin filtro, lo que
+      // permitía a cualquier user enumerar TODAS las respuestas de cualquier
+      // trivia (privacy leak: respuestas, scores, identidades).
+      //
+      // Ahora cada doc del resultset debe pasar uno de estos chequeos:
+      // - El user es el respondedor (oderId == su uid). [self-query]
+      // - El user es el creador de la trivia. [creator leaderboard]
+      // - El user está en availableFor de la trivia. [participant leaderboard]
+      //
+      // Si la query devuelve aunque sea un doc que no pase, Firestore deniega
+      // la lista entera, así que el cliente está forzado a filtrar (ej.
+      // where('triviaId', '==', X)) para que la rule sea satisfacible.
+      allow list: if request.auth != null && (
+        resource.data.oderId == request.auth.uid ||
+        canViewTriviaResponse()
+      );
 
       // Permitir crear respuesta si:
       // 1. El oderId es tu propio uid, Y

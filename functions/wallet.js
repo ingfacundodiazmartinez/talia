@@ -51,16 +51,27 @@ const ADS_DAILY_CAP = 50;
 
 // Premium grants (por tier, en créditos/mes)
 const PREMIUM_GRANTS = {
-  premium: 400,
-  premium_plus: 1000,
+  premium: 75,
+  premium_plus: 200,
 };
 
 // Precios en créditos por feature (canon: WALLET_SPEC §4.2)
+//
+// Nota sobre image_edit (2 créditos / 2 ads rewarded):
+// - Costo real OpenAI gpt-image-2 low ~ $0.012/img.
+// - Revenue directo a eCPM $3 = 2 × $0.003 = $0.006 → -$0.006/img.
+// - PERO cada historia con IA es viral: la ven N contactos y exponen ads
+//   pasivos en story viewer / feed, lo que cierra los números via efecto
+//   indirecto. Pricing tuned para minimizar friction (2 ads en vez de 4).
 const FEATURE_PRICES = {
   face_swap: 1,
-  image_edit: 4,
+  image_edit: 2,
   image_edit_hd: 16,
   report: 1,
+  // Generación de canción con IA (Sonauto/Treblo). Costo real ~$0.05/canción.
+  // A 6 créditos = 6 rewarded ads: a eCPM local ($3-5) cubre 36-60% del costo
+  // (subsidio ~40-64%); con plan/eCPM alto (~$8.3) llega a break-even.
+  song_generation: 6,
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -292,51 +303,31 @@ exports.claimWelcomeBonus = onCall(
 );
 
 // ═══════════════════════════════════════════════════════════════
-// CALLABLE: claimDailyBonus
+// CALLABLE: claimDailyBonus  [DESACTIVADO]
 // ═══════════════════════════════════════════════════════════════
-
+//
+// El daily bonus se retiró del modelo económico — a eCPM $3 (Argentina), los
+// 5 créditos diarios "gratis" generan pérdida fija de $0.015/usuario/día sin
+// contraparte de ads que la cubra. Ver análisis completo en la conversación
+// del 2026-05-20.
+//
+// Mantenemos el callable por backward compat: clientes con app vieja siguen
+// llamándolo en cada apertura del shell. En lugar de borrarlo (rompe old
+// clients) o devolver `success`+0 créditos (muestra modal "+5" falso),
+// retornamos siempre `already-exists`. Los clients que lo llaman lo
+// interpretan como "ya se reclamó hoy" y silenciosamente no hacen nada:
+//   - Old client: no muestra modal, no falla.
+//   - New client: ni siquiera lo llama (ver parent_main_shell.dart).
 exports.claimDailyBonus = onCall(
   { cors: true, consumeAppCheckToken: true },
   async (request) => {
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "Usuario no autenticado");
     }
-
-    const userId = request.auth.uid;
-    const db = getFirestore();
-    const today = _todayUtc();
-
-    await _requireParent(db, userId);
-
-    const result = await db.runTransaction(async (tx) => {
-      const { ref, data } = await _getOrCreateWallet(tx, db, userId);
-
-      if (data.lastDailyBonusDate === today) {
-        throw new HttpsError(
-          "already-exists",
-          "El bonus diario ya fue reclamado hoy"
-        );
-      }
-
-      const { newBalance } = _applyDelta(tx, db, {
-        walletRef: ref,
-        walletData: data,
-        delta: DAILY_BONUS,
-        type: "earn",
-        reason: "daily_bonus",
-        initiatedBy: userId,
-        metadata: { clientTxId: `daily_${userId}_${today}`, date: today },
-        updates: { lastDailyBonusDate: today },
-      });
-
-      return { newBalance };
-    });
-
-    return {
-      success: true,
-      creditsEarned: DAILY_BONUS,
-      newBalance: result.newBalance,
-    };
+    throw new HttpsError(
+      "already-exists",
+      "El bonus diario ya fue reclamado hoy"
+    );
   }
 );
 
@@ -365,9 +356,29 @@ exports.earnCreditsFromAd = onCall(
     const userId = request.auth.uid;
     const { adId, adNetwork = "admob", ssvSignature = null } = request.data || {};
 
-    if (!adId || typeof adId !== "string" || adId.length < 4) {
-      throw new HttpsError("invalid-argument", "adId requerido");
+    // 🔒 SEGURIDAD: validar formato de adId.
+    // adIds reales de AdMob suelen ser UUIDs / strings >= 16 chars con
+    // letras+dígitos+guiones. Rechazar adIds triviales reduce abuse trivial
+    // de scripts que envían "ad_1", "ad_2", etc.
+    if (
+      !adId ||
+      typeof adId !== "string" ||
+      adId.length < 16 ||
+      !/^[A-Za-z0-9_-]+$/.test(adId)
+    ) {
+      throw new HttpsError(
+        "invalid-argument",
+        "adId con formato inválido (debe ser >=16 chars alfanuméricos)"
+      );
     }
+
+    // 🔒 SEGURIDAD: throttle por tiempo. Un rewarded ad real dura ~30s y se
+    // muestra completo antes de disparar el callback. Si llegan dos solicitudes
+    // del mismo usuario con menos de MIN_MS de diferencia, es script.
+    // Esto NO reemplaza una verificación SSV real (server-to-server desde
+    // AdMob con HMAC ECDSA), pero reduce el daño de abuse trivial hasta que
+    // el SSV se configure en AdMob console.
+    const MIN_MS_BETWEEN_ADS = 20 * 1000; // 20 segundos
 
     const db = getFirestore();
     const today = _todayUtc();
@@ -382,6 +393,24 @@ exports.earnCreditsFromAd = onCall(
 
     const result = await db.runTransaction(async (tx) => {
       const { ref, data } = await _getOrCreateWallet(tx, db, userId);
+
+      // 🔒 Throttle por tiempo: requiere ≥ MIN_MS_BETWEEN_ADS desde el último
+      // ad acreditado. Esto previene scripts que envían adIds randomizados
+      // a alta velocidad.
+      const lastAdAt = data.lastAdCreditedAt;
+      if (lastAdAt) {
+        const lastMs =
+          lastAdAt.toMillis && typeof lastAdAt.toMillis === "function"
+            ? lastAdAt.toMillis()
+            : new Date(lastAdAt).getTime();
+        const delta = Date.now() - lastMs;
+        if (delta < MIN_MS_BETWEEN_ADS) {
+          throw new HttpsError(
+            "resource-exhausted",
+            `Demasiados ads en poco tiempo. Espera ${Math.ceil((MIN_MS_BETWEEN_ADS - delta) / 1000)}s.`
+          );
+        }
+      }
 
       // Resetear contador diario si cambió la fecha
       const counterDate = data.todayCounterDate;
@@ -414,6 +443,7 @@ exports.earnCreditsFromAd = onCall(
         updates: {
           todayAdsWatched: todayAdsWatched + 1,
           todayCounterDate: today,
+          lastAdCreditedAt: Timestamp.now(),
         },
       });
 
@@ -498,6 +528,15 @@ async function spendCredits(initiatedBy, reason, metadata = {}) {
 
   const targetWalletId = candidates[0].id;
 
+  // Denormalizar nombre + rol del initiator en la metadata de la tx.
+  // El historial en el wallet del padre lo lee de acá para mostrar
+  // "Tade · Face-swap" sin queries extras.
+  const enrichedMetadata = {
+    ...metadata,
+    initiatedByName: userData.name || userData.displayName || null,
+    initiatedByRole: userData.role || null,
+  };
+
   // Spend transaccional
   const result = await db.runTransaction(async (tx) => {
     const { ref, data } = await _getOrCreateWallet(tx, db, targetWalletId);
@@ -517,7 +556,7 @@ async function spendCredits(initiatedBy, reason, metadata = {}) {
       type: "spend",
       reason,
       initiatedBy,
-      metadata,
+      metadata: enrichedMetadata,
     });
 
     return { newBalance, txId: txRef.id };
@@ -834,6 +873,101 @@ exports.grantPremiumMonthlyToAll = onSchedule(
         `granted=${granted}, upgrades=${upgrades}, skipped=${skipped}, ` +
         `failed=${failed}, créditos=${totalCredits}`
     );
+  }
+);
+
+// ═══════════════════════════════════════════════════════════════
+// REQUEST CREDITS FROM PARENTS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * El hijo (sin créditos) pide a sus padres vinculados que carguen créditos.
+ * Manda una push a cada padre (type: load_credits_request) que, al tocarla,
+ * abre la pantalla de wallet (ver videos / cargar créditos).
+ *
+ * Rate-limit: 1 pedido cada 10 minutos por hijo (anti-spam).
+ */
+exports.requestCreditsFromParents = onCall(
+  { region: "us-central1", consumeAppCheckToken: true },
+  async (request) => {
+    const childId = request.auth?.uid;
+    if (!childId) {
+      throw new HttpsError("unauthenticated", "Usuario no autenticado");
+    }
+
+    const db = getFirestore();
+    const now = Date.now();
+    const windowMs = 10 * 60 * 1000; // 10 min
+
+    // 1. Rate limit
+    const rlRef = db.collection("credit_requests").doc(childId);
+    const rlSnap = await rlRef.get();
+    if (rlSnap.exists) {
+      const last = rlSnap.data().lastRequestAt;
+      const lastMs = last && last.toMillis ? last.toMillis() : 0;
+      if (now - lastMs < windowMs) {
+        const waitMin = Math.ceil((windowMs - (now - lastMs)) / 60000);
+        throw new HttpsError(
+          "resource-exhausted",
+          `Ya avisaste recién. Esperá ${waitMin} min para volver a avisar.`
+        );
+      }
+    }
+
+    // 2. Padres vinculados (fuente de verdad: parent_children)
+    const links = await db
+      .collection("parent_children")
+      .where("childId", "==", childId)
+      .where("status", "==", "approved")
+      .get();
+    const parentIds = links.docs
+      .map((d) => d.data().parentId)
+      .filter((id) => !!id);
+
+    if (parentIds.length === 0) {
+      throw new HttpsError(
+        "failed-precondition",
+        "No tenés un familiar vinculado."
+      );
+    }
+
+    // 3. Nombre del hijo (para el texto de la notif)
+    const childDoc = await db.collection("users").doc(childId).get();
+    const childName =
+      (childDoc.exists && childDoc.data().name) || "Tu hijo/a";
+
+    // 4. Una notificación por padre (el trigger sendNotificationOnCreate envía
+    //    el push). data.type=load_credits_request → al tocar abre la wallet.
+    const batch = db.batch();
+    for (const parentId of parentIds) {
+      const notifRef = db.collection("notifications").doc();
+      batch.set(notifRef, {
+        userId: parentId,
+        type: "load_credits_request",
+        title: `${childName} necesita créditos ✨`,
+        body:
+          `${childName} se quedó sin créditos para crear historias con IA. ` +
+          `Mirá un video para cargar créditos.`,
+        pushSent: false,
+        data: {
+          type: "load_credits_request",
+          childId: childId,
+          childName: childName,
+        },
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+    batch.set(
+      rlRef,
+      { lastRequestAt: FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+    await batch.commit();
+
+    console.log(
+      `💳 [requestCreditsFromParents] ${childName} (${childId}) avisó a ${parentIds.length} padre(s)`
+    );
+    return { success: true, parentsNotified: parentIds.length };
   }
 );
 

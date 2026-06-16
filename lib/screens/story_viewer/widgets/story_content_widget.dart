@@ -214,6 +214,8 @@ class StoryContentWidget extends StatelessWidget {
         return _buildImageContent(context, story, userIndex, storyIndex);
       case 'mood':
         return _buildMoodContent(context, story, userIndex, storyIndex);
+      case 'music':
+        return _buildMusicContent(context, story, userIndex, storyIndex);
       case 'trivia_results':
         return _buildTriviaResultsContent(context, story, userIndex, storyIndex);
       case 'video':
@@ -453,6 +455,121 @@ class StoryContentWidget extends StatelessWidget {
                           ),
                         ),
                       ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Historia de solo-música (sin foto): fondo gradiente + visual de canción.
+  /// La reproducción del audio la maneja el StoryViewerScreen.
+  Widget _buildMusicContent(BuildContext context, Story story, int userIndex, int storyIndex) {
+    // En modo 'lyrics' el contenido principal es el karaoke (overlay del viewer),
+    // así que acá solo mostramos el arte de fondo. En modo 'title' (o legacy con
+    // título) mostramos el título. NUNCA mostramos el prompt de generación.
+    final showTitle = story.musicDisplayMode != 'lyrics';
+    final description = showTitle ? (story.musicTitle?.trim() ?? '') : '';
+
+    if (!isCurrentStoryLoaded &&
+        userIndex == currentUserIndex &&
+        storyIndex == currentStoryIndex) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        onStoryLoaded();
+      });
+    }
+
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF2A1B3D), Color(0xFF7C4DFF)],
+        ),
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            top: -80,
+            right: -80,
+            child: Container(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -60,
+            left: -60,
+            child: Container(
+              width: 220,
+              height: 220,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.06),
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 130,
+                      height: 130,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white.withValues(alpha: 0.15),
+                        border: Border.all(color: Colors.white24, width: 2),
+                      ),
+                      child: const Icon(
+                        Icons.music_note_rounded,
+                        color: Colors.white,
+                        size: 64,
+                      ),
+                    ),
+                    const SizedBox(height: 28),
+                    if (description.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          description,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.auto_awesome, color: Colors.white70, size: 14),
+                        SizedBox(width: 6),
+                        Text(
+                          'Música creada con IA',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),

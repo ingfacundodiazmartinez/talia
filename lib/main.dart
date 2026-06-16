@@ -23,10 +23,12 @@ import 'theme_service.dart';
 import 'services/two_factor_session_service.dart';
 import 'services/app_config_service.dart';
 import 'services/message_cache_service.dart';
+import 'groups/services/group_message_cache_service.dart';
 import 'services/dashboard_cache_service.dart';
 import 'services/notification_cache_service.dart';
 import 'services/device_session_service.dart';
 import 'services/online_status_service.dart';
+import 'services/timezone_service.dart';
 import 'services/screenshot_protection_service.dart';
 import 'services/voip_service.dart';
 import 'services/call_service_wrapper.dart';
@@ -57,6 +59,7 @@ import 'calls_v2/services/agora_engine_service.dart';
 import 'calls_v2/config/agora_config.dart';
 import 'dart:async';
 import 'utils/release_logger.dart';
+import 'utils/init_diagnostics.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'services/device_contact_name_cache.dart';
@@ -116,17 +119,11 @@ void main() async {
 
   // 🚀 CACHE INITIALIZATION: MessageCacheService primero (inicializa Hive)
   ReleaseLogger.log('🚀 Inicializando MessageCacheService...', tag: 'MainApp');
-
-  // Inicializar MessageCacheService primero (llama Hive.initFlutter())
-  try {
-    await MessageCacheService().initialize();
-    ReleaseLogger.log('✅ MessageCacheService inicializado', tag: 'MainApp');
-  } catch (e) {
-    ReleaseLogger.error(
-      '❌ Error inicializando MessageCacheService: $e',
-      tag: 'MainApp',
-    );
-  }
+  await InitDiagnostics.track(
+    'MessageCache (Hive)',
+    () => MessageCacheService().initialize(),
+    timeout: const Duration(seconds: 10),
+  );
 
   // Inicializar Firebase solo si no está inicializado
   // Usar try-catch porque algunos plugins nativos pueden auto-inicializar Firebase
@@ -182,12 +179,11 @@ Future<void> mainWithFirebaseInitialized() async {
   );
 
   // Inicializar MessageCacheService (Hive)
-  try {
-    await MessageCacheService().initialize();
-    ReleaseLogger.log('✅ MessageCacheService inicializado', tag: 'MainApp');
-  } catch (e) {
-    ReleaseLogger.error('❌ Error inicializando MessageCacheService: $e', tag: 'MainApp');
-  }
+  await InitDiagnostics.track(
+    'MessageCache (Hive)',
+    () => MessageCacheService().initialize(),
+    timeout: const Duration(seconds: 10),
+  );
 
   // Firebase ya está inicializado por el entry point
   ReleaseLogger.log('✅ Firebase ya inicializado por entry point', tag: 'MainApp');
@@ -221,26 +217,14 @@ Future<void> _initializeAfterFirebase() async {
   // Todos estos servicios usan Hive (ya inicializado) y son independientes entre sí
   ReleaseLogger.log('🚀 Inicializando cache services en paralelo...', tag: 'MainApp');
   await Future.wait([
-    DashboardCacheService().initialize().then((_) {
-      ReleaseLogger.log('✅ DashboardCacheService inicializado', tag: 'MainApp');
-    }).catchError((e) {
-      ReleaseLogger.error('❌ Error inicializando DashboardCacheService: $e', tag: 'MainApp');
-    }),
-    NotificationCacheService().initialize().then((_) {
-      ReleaseLogger.log('✅ NotificationCacheService inicializado', tag: 'MainApp');
-    }).catchError((e) {
-      ReleaseLogger.error('❌ Error inicializando NotificationCacheService: $e', tag: 'MainApp');
-    }),
-    LocalUnreadCountService().initialize().then((_) {
-      ReleaseLogger.log('✅ LocalUnreadCountService inicializado', tag: 'MainApp');
-    }).catchError((e) {
-      ReleaseLogger.error('❌ Error inicializando LocalUnreadCountService: $e', tag: 'MainApp');
-    }),
-    ChatPreferencesCache().initialize().then((_) {
-      ReleaseLogger.log('✅ ChatPreferencesCache inicializado', tag: 'MainApp');
-    }).catchError((e) {
-      ReleaseLogger.error('❌ Error inicializando ChatPreferencesCache: $e', tag: 'MainApp');
-    }),
+    InitDiagnostics.track('DashboardCache', () => DashboardCacheService().initialize()),
+    InitDiagnostics.track('NotificationCache', () => NotificationCacheService().initialize()),
+    InitDiagnostics.track('LocalUnreadCount', () => LocalUnreadCountService().initialize()),
+    InitDiagnostics.track('ChatPreferencesCache', () => ChatPreferencesCache().initialize()),
+    // 🔒 SST = Hive: sin esto el índice de últimos mensajes de grupos arranca
+    // vacío en cold start (solo se inicializaba lazy al guardar/leer) y la
+    // chat list muestra grupos sin preview hasta que llega red.
+    InitDiagnostics.track('GroupMessageCache', () => GroupMessageCacheService().initialize()),
   ]);
   ReleaseLogger.log('✅ Cache services inicializados en paralelo', tag: 'MainApp');
 
@@ -257,11 +241,23 @@ Future<void> _initializeAfterFirebase() async {
       tag: 'MainApp',
     );
     try {
-      await StoryService().startBackgroundCacheUpdates();
-      ReleaseLogger.log(
-        'StoryService inicializado manualmente',
-        tag: 'MainApp',
+      // 🚀 SPLASH: NO bloquear el arranque esperando el stream de historias.
+      // startBackgroundCacheUpdates hace init de red (listeners + fetch inicial)
+      // que alargaba el splash en cold start. Fire-and-forget: las historias
+      // cargan al renderizar el home, no antes del primer frame.
+      unawaited(
+        StoryService().startBackgroundCacheUpdates().catchError((e) {
+          ReleaseLogger.error(
+            'Error iniciando StoryService en background: $e',
+            tag: 'MainApp',
+          );
+        }),
       );
+
+      // ✅ Re-sincronizar timezone del device (self-heal). Evita que Talia mande
+      // mensajes en horarios incoherentes si el usuario viajó o se registró con
+      // el device en otro offset. No bloquea el arranque.
+      unawaited(TimezoneService.syncDeviceTimezone());
 
       // Pre-cargar Native Ad para stories (no bloquea)
       AdService().preloadStoryNativeAd();
@@ -346,18 +342,11 @@ Future<void> _initializeAfterFirebase() async {
   ReleaseLogger.log('✅ Crashlytics configurado', tag: 'MainApp');
 
   // 🔑 AppConfigService PRIMERO (secuencial) - necesario para AdService (Remote Config IDs)
-  try {
-    await AppConfigService().initialize();
-    ReleaseLogger.log(
-      '✅ App Config Service inicializado (Remote Config)',
-      tag: 'MainApp',
-    );
-  } catch (e) {
-    ReleaseLogger.error(
-      '⚠️ Error inicializando App Config: $e (continuando con valores por defecto)',
-      tag: 'MainApp',
-    );
-  }
+  await InitDiagnostics.track(
+    'AppConfig (RemoteConfig)',
+    () => AppConfigService().initialize(),
+    timeout: const Duration(seconds: 10),
+  );
 
   // 🚀 PERFORMANCE OPTIMIZATION: Paralelizar servicios independientes post-Firebase
   ReleaseLogger.log(
@@ -366,94 +355,15 @@ Future<void> _initializeAfterFirebase() async {
   );
   await Future.wait([
     // Grupo 1: Firebase Services
-    AnalyticsService()
-        .initialize()
-        .then((_) {
-          ReleaseLogger.log('✅ Analytics inicializado', tag: 'MainApp');
-        })
-        .catchError((e) {
-          ReleaseLogger.error(
-            '⚠️ Error inicializando Analytics: $e (continuando...)',
-            tag: 'MainApp',
-          );
-        }),
-
-    PerformanceService()
-        .initialize()
-        .then((_) {
-          ReleaseLogger.log(
-            '✅ Performance Monitoring inicializado',
-            tag: 'MainApp',
-          );
-        })
-        .catchError((e) {
-          ReleaseLogger.error(
-            '⚠️ Error inicializando Performance: $e (continuando...)',
-            tag: 'MainApp',
-          );
-        }),
-
+    InitDiagnostics.track('Analytics', () => AnalyticsService().initialize()),
+    InitDiagnostics.track('PerformanceMonitoring', () => PerformanceService().initialize()),
     // Grupo 2: Network & Queue Services
-    NetworkStatusService()
-        .initialize()
-        .then((_) {
-          ReleaseLogger.log(
-            '✅ Network Status Service inicializado',
-            tag: 'MainApp',
-          );
-        })
-        .catchError((e) {
-          ReleaseLogger.error(
-            '⚠️ Error inicializando Network Status: $e (continuando...)',
-            tag: 'MainApp',
-          );
-        }),
-
-    OfflineQueueService()
-        .initialize()
-        .then((_) {
-          ReleaseLogger.log(
-            '✅ Offline Queue Service inicializado',
-            tag: 'MainApp',
-          );
-        })
-        .catchError((e) {
-          ReleaseLogger.error(
-            '⚠️ Error inicializando Offline Queue: $e (continuando...)',
-            tag: 'MainApp',
-          );
-        }),
-
+    InitDiagnostics.track('NetworkStatus', () => NetworkStatusService().initialize()),
+    InitDiagnostics.track('OfflineQueue', () => OfflineQueueService().initialize()),
     // Grupo 3: Independent Services
-    AccessibilityService()
-        .initialize()
-        .then((_) {
-          ReleaseLogger.log(
-            '✅ Accessibility Service inicializado',
-            tag: 'MainApp',
-          );
-        })
-        .catchError((e) {
-          ReleaseLogger.error(
-            '⚠️ Error inicializando Accessibility: $e (continuando...)',
-            tag: 'MainApp',
-          );
-        }),
-
-    AdService()
-        .initialize()
-        .then((_) {
-          ReleaseLogger.log(
-            '✅ AdMob inicializado con cumplimiento COPPA',
-            tag: 'MainApp',
-          );
-        })
-        .catchError((e) {
-          ReleaseLogger.error(
-            '⚠️ Error inicializando AdMob: $e (continuando...)',
-            tag: 'MainApp',
-          );
-        }),
+    InitDiagnostics.track('Accessibility', () => AccessibilityService().initialize()),
+    // 📢 AdMob NO va acá: su init tarda ~900ms y bloqueaba el primer frame
+    // (el cuello de botella del splash). Se difiere a la init de fondo.
   ]);
   ReleaseLogger.log(
     '✅ Servicios principales inicializados concurrentemente',
@@ -490,6 +400,9 @@ Future<void> _initializeAfterFirebase() async {
   // Staging también usa debug App Check para evitar configurar DeviceCheck por separado
   const useDebugAppCheck = bool.fromEnvironment('USE_DEBUG_APP_CHECK', defaultValue: false);
 
+  // Timing del bloque completo de AppCheck — es uno de los principales
+  // sospechosos del "primer send lento" tras cold start.
+  final appCheckStopwatch = Stopwatch()..start();
   // ✅ FIX: Wrap App Check activation with timeout to prevent hanging in staging
   // App Check can hang if not properly configured in the Firebase project
   try {
@@ -572,10 +485,48 @@ Future<void> _initializeAfterFirebase() async {
       ReleaseLogger.log(
         '✅Firebase App Check activado con Play Integrity y Device Check',
       );
+
+      // 🔥 PRE-WARM del token de AppCheck — trackeado en InitDiagnostics
+      // para que su timing aparezca en el banner si es lento. En producción,
+      // sin esto, el primer Firestore write tras cold start tiene que esperar
+      // a que el SDK pida el token a DeviceCheck/Play Integrity (varios
+      // segundos). Eso causaba "mensaje queda pending, después error" al
+      // reiniciar la app. Si el banner muestra que AppCheck-prewarm tardó
+      // muchos segundos, ése es el culpable del primer-send lento.
+      // Fire-and-forget para no bloquear el boot.
+      unawaited(InitDiagnostics.track(
+        'AppCheck pre-warm token',
+        () async {
+          final token = await FirebaseAppCheck.instance.getToken();
+          if (token == null || token.isEmpty) {
+            throw StateError('AppCheck token vacío');
+          }
+        },
+        timeout: const Duration(seconds: 10),
+      ));
     }
-  } catch (e) {
+  } catch (e, st) {
     ReleaseLogger.error('❌ App Check activation failed: $e (continuing without App Check)', tag: 'MainApp');
+    FirebaseCrashlytics.instance.recordError(
+      e,
+      st,
+      reason: 'AppCheck activation failed',
+      fatal: false,
+    );
   }
+  appCheckStopwatch.stop();
+  // Registramos AppCheck como entry sintética para que aparezca en el banner
+  // si es lento (>3s) — es el sospechoso #1 del primer send tardío.
+  InitDiagnostics.instance.entries.value = List.of(
+    InitDiagnostics.instance.entries.value,
+  )..add(
+      InitEntry(
+        name: 'AppCheck',
+        duration: appCheckStopwatch.elapsed,
+        failed: false,
+        timedOut: false,
+      ),
+    );
 
   // Habilitar persistencia offline de Firestore para caché local
   FirebaseFirestore.instance.settings = const Settings(
@@ -593,8 +544,11 @@ Future<void> _initializeAfterFirebase() async {
 
   // ThemeService initialization (AppConfigService ya se inicializó antes)
   themeService = ThemeService();
-  await themeService.initialize();
-  ReleaseLogger.log('✅ ThemeService inicializado', tag: 'MainApp');
+  await InitDiagnostics.track(
+    'ThemeService',
+    () => themeService.initialize(),
+    timeout: const Duration(seconds: 10),
+  );
   ReleaseLogger.log(
     '✅ Configuración final completada concurrentemente',
     tag: 'MainApp',
@@ -622,17 +576,11 @@ Future<void> _initializeAfterFirebase() async {
         .timeout(const Duration(seconds: 5), onTimeout: () => null);
     if (initialMessage != null) {
       final prefs = await SharedPreferences.getInstance();
-      final messageId = initialMessage.data['messageId'] ?? initialMessage.data['id'];
-
-      // Save messageId for deduplication
-      if (messageId != null) {
-        await prefs.setString('tapped_notification_message_id', messageId);
-        await prefs.setInt('tapped_notification_timestamp', DateTime.now().millisecondsSinceEpoch);
-        ReleaseLogger.log(
-          '✅ [Dedup] App abierta desde notificación (killed) - messageId guardado: $messageId',
-          tag: 'MainApp',
-        );
-      }
+      // NOTA: antes acá se escribían tapped_notification_message_id y
+      // tapped_notification_timestamp "para dedup" — ningún código los leía
+      // (claves muertas que quedaban en SharedPreferences para siempre).
+      // La dedup real de navegación es el registry `tap` en
+      // NotificationDedupRegistry + pending_notification_data.
 
       // ✅ Save full notification data for navigation (NotificationService will process this)
       await prefs.setString('pending_notification_data', jsonEncode(initialMessage.data));
@@ -668,6 +616,23 @@ Future<void> _initializeHeavyServicesInBackground() async {
 
   // Paralelizar servicios pesados para máximo performance
   await Future.wait([
+    // 📢 AdMob (diferido - su init tarda ~900ms; era el cuello de botella del
+    // splash. Los ads cargan lazy al mostrarse un widget de ad).
+    AdService()
+        .initialize()
+        .then((_) {
+          ReleaseLogger.log(
+            '✅ AdMob inicializado en background',
+            tag: 'BackgroundInit',
+          );
+        })
+        .catchError((e) {
+          ReleaseLogger.error(
+            '❌ Error inicializando AdMob: $e',
+            tag: 'BackgroundInit',
+          );
+        }),
+
     // 🎥 Agora Config (diferido - solo necesario para llamadas)
     AgoraConfig.initialize()
         .then((_) {
@@ -996,7 +961,7 @@ Future<void> _checkPendingShareOnResume() async {
 /// Flag para evitar múltiples pantallas
 bool _isShareScreenShowing = false;
 
-void _navigateToShareScreen() {
+void _navigateToShareScreen({int attempt = 0}) {
   // Evitar múltiples pantallas de share
   if (_isShareScreenShowing) {
     ReleaseLogger.log(
@@ -1007,6 +972,7 @@ void _navigateToShareScreen() {
   }
 
   WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (_isShareScreenShowing) return;
     final navigator = DeepLinkService.navigatorKey.currentState;
     if (navigator != null) {
       ReleaseLogger.log(
@@ -1026,9 +992,16 @@ void _navigateToShareScreen() {
           tag: 'ShareTarget',
         );
       });
+    } else if (attempt < 20) {
+      // En cold start desde share el navigator puede no existir todavía.
+      // Antes solo se logueaba "will retry" sin reintentar y el share se
+      // perdía. Reintentar hasta ~10s.
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _navigateToShareScreen(attempt: attempt + 1);
+      });
     } else {
-      ReleaseLogger.log(
-        '📤 [ShareTarget] Navigator not available, will retry',
+      ReleaseLogger.error(
+        '📤 [ShareTarget] Navigator never became available, share dropped',
         tag: 'ShareTarget',
       );
     }
@@ -1410,6 +1383,66 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
     // ✅ FIX: Notificar a NotificationService cuando la app vuelve a foreground
     // Esto evita que las notificaciones de background se muestren como foreground
     if (state == AppLifecycleState.resumed) {
+      // 🔒 RECOVERY POST-BACKGROUND: el síntoma "abro la app y no se actualizan
+      // historias / no se envían mensajes; la cierro y reabro y funciona" suele
+      // ser por:
+      //   (a) App Check token expirado y la app sin mecanismo de refresh.
+      //       Sin token válido, Firestore/CFs rechazan o cuelgan.
+      //   (b) Long-lived Firestore gRPC stream suspendido por iOS/Android
+      //       durante background largo (>5min). Los listeners siguen "vivos"
+      //       en Dart pero el socket no recibe updates hasta que algo lo
+      //       despierte.
+      // Ambos se fuerzan acá en resume. Fire-and-forget con timeout corto
+      // para no bloquear el resto del lifecycle.
+      unawaited(() async {
+        try {
+          await FirebaseAppCheck.instance
+              .getToken(true)
+              .timeout(const Duration(seconds: 5));
+          ReleaseLogger.log(
+            '🔐 App Check token refreshed on resume',
+            tag: 'AppLifecycle',
+          );
+        } catch (e) {
+          ReleaseLogger.warning(
+            'App Check token refresh failed on resume (no crítico): $e',
+            tag: 'AppLifecycle',
+          );
+        }
+      }());
+      // 🔌 Despertar el socket de Firestore y RECIÉN AHÍ refrescar historias.
+      // enableNetwork() es local y casi instantáneo (flipea un flag, la
+      // reconexión real pasa async). El listener de historias debe reabrirse
+      // sobre un socket ya re-habilitado: si lo hace antes (como pasaba con
+      // las tres operaciones en paralelo) se engancha a un socket suspendido,
+      // no emite, y el auto-retry recién dispara a los 30s — o nunca si no
+      // tira error. Resultado: historias vacías hasta matar la app.
+      // El refresh del token de App Check (arriba) queda en paralelo a
+      // propósito: el SDK adjunta el token por request y lo renueva solo,
+      // no hace falta bloquear las historias esperándolo.
+      unawaited(() async {
+        try {
+          await FirebaseFirestore.instance
+              .enableNetwork()
+              .timeout(const Duration(seconds: 5));
+        } catch (e) {
+          ReleaseLogger.warning(
+            'Firestore enableNetwork failed on resume (no crítico): $e',
+            tag: 'AppLifecycle',
+          );
+        }
+        // softRefreshCache() NO invalida el cache de historias, así que el
+        // usuario ve las historias viejas al instante; esto solo dispara la
+        // llegada de datos frescos sobre un socket vivo.
+        ReleaseLogger.log('📱 App resumed - soft refreshing story stream...', tag: 'AppLifecycle');
+        try {
+          await StoryService().softRefreshCache();
+          ReleaseLogger.log('✅ Story stream soft refreshed', tag: 'AppLifecycle');
+        } catch (e) {
+          ReleaseLogger.error('⚠️ Error soft refreshing story stream: $e', tag: 'AppLifecycle');
+        }
+      }());
+
       NotificationService().notifyAppResumed();
 
       // ✅ Actualizar badge con el conteo real al abrir la app
@@ -1424,25 +1457,34 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
         PermissionSyncService().syncPermissions();
       }
 
-      // ✅ FIX: Soft refresh de historias al volver al foreground
-      // Usa softRefreshCache() para evitar parpadeo (no invalida cache)
-      // Los nuevos datos reemplazarán los viejos cuando lleguen del stream
-      ReleaseLogger.log('📱 App resumed - soft refreshing story stream...', tag: 'AppLifecycle');
-      StoryService().softRefreshCache().then((_) {
-        ReleaseLogger.log('✅ Story stream soft refreshed', tag: 'AppLifecycle');
-      }).catchError((e) {
-        ReleaseLogger.error('⚠️ Error soft refreshing story stream: $e', tag: 'AppLifecycle');
-      });
-
       // ✅ FIX: Verificar nuevos shares pendientes en iOS App Group
       // Esto maneja el caso donde el usuario compartió algo mientras la app estaba en background
       if (Platform.isIOS) {
         _checkPendingShareOnResume();
       }
-    } else if (state == AppLifecycleState.paused ||
-               state == AppLifecycleState.inactive) {
+    } else if (state == AppLifecycleState.paused) {
       // ✅ AGORA WATCHDOG: Notificar que la app va a background
       // Esto activa un watchdog más agresivo para evitar llamadas huérfanas
+      AgoraEngineService().onAppBackground();
+
+      // 🔑 Share Extension (iOS): refrescar el ID token compartido en el App
+      // Group justo cuando el usuario sale de la app. El token vence a los
+      // 55 min y la extensión no puede refrescarlo sola; el momento típico de
+      // compartir es inmediatamente después de salir de Talia (ej. desde
+      // Fotos), así que esto maximiza la ventana en que el envío directo
+      // funciona.
+      if (Platform.isIOS) {
+        unawaited(SharedKeychainService().refreshToken());
+      }
+
+      // 🧹 MEMORIA: liberar el engine de Agora si NO hay llamada activa. En
+      // background retiene el pipeline de video/cámara nativo (mucha memoria),
+      // lo que hace que el OS mate la app más seguido → splash al reabrir.
+      // Se re-crea solo en la próxima llamada. Solo en 'paused' (background
+      // real), NO en 'inactive' (transitorio: control center, app switcher,
+      // diálogo de permisos) para no liberar/recrear innecesariamente.
+      unawaited(AgoraEngineService().releaseIfIdle());
+    } else if (state == AppLifecycleState.inactive) {
       AgoraEngineService().onAppBackground();
     }
   }
@@ -1650,14 +1692,18 @@ class _TaliaAppState extends State<TaliaApp> with WidgetsBindingObserver {
               child: Builder(
                 builder: (context) {
                   final mediaQueryData = MediaQuery.maybeOf(context);
+                  // ✅ Banner de diagnóstico de init REMOVIDO: era una herramienta
+                  // temporal para detectar el culpable del primer-send lento y no
+                  // debe aparecer en producción ("Init lento: ...").
+                  final wrapped = child!;
                   if (mediaQueryData == null) {
-                    return child!;
+                    return wrapped;
                   }
                   return MediaQuery(
                     data: mediaQueryData.copyWith(
                       textScaler: TextScaler.linear(accessibility.textScale),
                     ),
-                    child: child!,
+                    child: wrapped,
                   );
                 },
               ),

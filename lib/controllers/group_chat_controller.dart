@@ -236,16 +236,16 @@ class GroupChatController extends ChangeNotifier {
     _messages.addAll(_pendingMessages);
     _messages.addAll(firestoreMessages);
 
-    // ✅ V4: Ordenar por timestamp del servidor SIEMPRE
-    // Mensajes sin timestamp (pending) van al principio (más recientes)
+    // ✅ Ordenar por tiempo EFECTIVO (timestamp del servidor, o localTimestamp
+    // si todavía no tiene). Evita que un mensaje fallido (sin timestamp de
+    // servidor) quede clavado como última burbuja para siempre.
     _messages.sort((a, b) {
-      // Mensajes sin timestamp del servidor van primero (son los más recientes/pending)
-      if (a.timestamp == null && b.timestamp == null) return 0;
-      if (a.timestamp == null) return -1; // a va primero (más reciente)
-      if (b.timestamp == null) return 1;  // b va primero (más reciente)
-
-      // Ambos tienen timestamp del servidor - ordenar descendente
-      return b.timestamp!.compareTo(a.timestamp!);
+      final aTime = a.timestamp?.toDate() ?? a.localTimestamp;
+      final bTime = b.timestamp?.toDate() ?? b.localTimestamp;
+      if (aTime == null && bTime == null) return 0;
+      if (aTime == null) return 1;
+      if (bTime == null) return -1;
+      return bTime.compareTo(aTime); // descendente: más reciente primero
     });
 
     // ✅ FIX: Marcar mensajes como leídos cuando llegan mensajes de otros usuarios

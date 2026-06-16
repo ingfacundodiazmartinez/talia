@@ -311,7 +311,7 @@ class FriendService {
       await _firestore.collection('notifications').add({
         'userId': recipientId,
         'type': 'friend_request',
-        'title': 'Solicitud de amistad',
+        'title': 'Invitación a tu círculo',
         'body': '${senderData?['name'] ?? 'Alguien'} quiere ver tus historias',
         'senderId': senderId,
         'senderName': senderData?['name'],

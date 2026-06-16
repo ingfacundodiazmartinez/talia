@@ -102,6 +102,19 @@ class ProfileController {
     }
   }
 
+  /// Actualiza la aprobación automática de contactos para un hijo específico.
+  Future<void> toggleChildAutoApproval(String childId, bool enabled) async {
+    if (_parent == null) {
+      throw Exception('Parent not initialized');
+    }
+    try {
+      await _parent!.updateChildAutoApprovalSetting(childId, enabled);
+    } catch (e) {
+      ReleaseLogger.error('Error actualizando auto-aprobación por hijo: $e', tag: 'ProfileController');
+      rethrow;
+    }
+  }
+
   /// Realiza el logout del usuario
   Future<void> logout() async {
     try {

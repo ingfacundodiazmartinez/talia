@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
 import 'edit_profile_screen.dart';
+import '../../historias/mi_circulo_screen.dart';
+import '../../historias/mis_historias_screen.dart';
+import '../../../models/contact.dart';
+import '../../../models/child.dart';
+import 'widgets/per_child_setting_sheet.dart';
 import '../../common/privacy_security_screen.dart';
 import '../../common/help_support_screen.dart';
 import '../../common/privacy_policy_screen.dart';
@@ -105,6 +111,39 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
                 title: 'Editar Perfil',
                 onTap: () => _navigateToEditProfile(),
               ),
+
+              // ✅ NUEVO: Mis historias subidas
+              _buildProfileOption(
+                icon: Icons.auto_stories,
+                title: 'Mis historias',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const MisHistoriasScreen()),
+                ),
+              ),
+
+              // ✅ NUEVO: Mi círculo (con badge de invitaciones pendientes)
+              Builder(
+                builder: (context) {
+                  final uid = FirebaseAuth.instance.currentUser?.uid;
+                  if (uid == null) return const SizedBox.shrink();
+                  return StreamBuilder<List<Contact>>(
+                    stream: Contact.watchPendingFriendRequests(uid),
+                    builder: (context, snap) {
+                      final pending = snap.data?.length ?? 0;
+                      return _buildProfileOption(
+                        icon: Icons.favorite,
+                        title: 'Mi círculo',
+                        badge: pending,
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const MiCirculoScreen()),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+
               _buildProfileOption(
                 icon: Icons.auto_awesome,
                 title: 'Mi billetera de créditos',
@@ -260,6 +299,7 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
     required String title,
     required VoidCallback onTap,
     bool isDestructive = false,
+    int? badge,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
 
@@ -278,10 +318,32 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
             fontWeight: FontWeight.w500,
           ),
         ),
-        trailing: Icon(
-          Icons.arrow_forward_ios,
-          size: 16,
-          color: colorScheme.onSurfaceVariant,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (badge != null && badge > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  badge > 99 ? '99+' : badge.toString(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            if (badge != null && badge > 0) const SizedBox(width: 8),
+            Icon(
+              Icons.arrow_forward_ios,
+              size: 16,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ],
         ),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         tileColor: colorScheme.surfaceContainerHighest,
@@ -328,51 +390,99 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
       );
     }
 
-    return StreamBuilder<DocumentSnapshot>(
-      stream: _parent!.getParentSettingsStream(),
-      builder: (context, snapshot) {
-        bool autoApprovalEnabled = false;
+    return StreamBuilder<List<String>>(
+      stream: Child.getLinkedChildrenIdsStream(_parent!.id),
+      builder: (context, childSnap) {
+        final childIds = childSnap.data ?? const <String>[];
 
-        if (snapshot.hasData && snapshot.data!.exists) {
-          final data = snapshot.data!.data() as Map<String, dynamic>?;
-          autoApprovalEnabled = data?['autoApproveRequests'] ?? false;
-        }
+        return StreamBuilder<DocumentSnapshot>(
+          stream: _parent!.getParentSettingsStream(),
+          builder: (context, snapshot) {
+            final data = (snapshot.data?.data() as Map<String, dynamic>?) ?? {};
+            final globalEnabled = data['autoApproveRequests'] == true;
+            final perChild =
+                (data['childAutoApproveRequests'] as Map<String, dynamic>?) ?? {};
 
-        return Container(
-          margin: EdgeInsets.only(bottom: 8),
-          child: ListTile(
-            leading: Icon(
-              Icons.auto_awesome,
-              color: colorScheme.primary,
-            ),
-            title: Text(
-              'Aceptar solicitudes por defecto',
-              style: TextStyle(
-                color: colorScheme.onSurface,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            subtitle: Text(
-              autoApprovalEnabled
-                  ? 'Las nuevas solicitudes se aprueban automáticamente'
-                  : 'Requiere aprobación manual para cada solicitud',
-              style: TextStyle(
-                fontSize: 12,
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            trailing: Switch(
-              value: autoApprovalEnabled,
-              onChanged: _toggleAutoApproval,
-              activeThumbColor: colorScheme.primary,
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            tileColor: colorScheme.surfaceContainerHighest,
-          ),
+            bool resolveFor(String id) =>
+                perChild.containsKey(id) ? perChild[id] == true : globalEnabled;
+
+            // Un solo hijo (o aún sin datos): switch clásico, comportamiento sin cambios.
+            if (childIds.length <= 1) {
+              return _buildSettingTile(
+                icon: Icons.auto_awesome,
+                title: 'Aceptar solicitudes por defecto',
+                subtitle: globalEnabled
+                    ? 'Las nuevas solicitudes se aprueban automáticamente'
+                    : 'Requiere aprobación manual para cada solicitud',
+                trailing: Switch(
+                  value: globalEnabled,
+                  onChanged: _toggleAutoApproval,
+                  activeThumbColor: colorScheme.primary,
+                ),
+              );
+            }
+
+            // Más de un hijo: botón que abre el modal de config por hijo.
+            final enabledCount = childIds.where(resolveFor).length;
+            return _buildSettingTile(
+              icon: Icons.auto_awesome,
+              title: 'Aceptar solicitudes por defecto',
+              subtitle: 'Configurado por hijo · $enabledCount de ${childIds.length} activados',
+              trailing: Icon(Icons.arrow_forward_ios,
+                  size: 16, color: colorScheme.onSurfaceVariant),
+              onTap: () => _openContactPerChildModal(resolveFor),
+            );
+          },
         );
       },
+    );
+  }
+
+  /// Tile genérico para los ajustes de aprobación (switch o botón).
+  Widget _buildSettingTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Widget trailing,
+    VoidCallback? onTap,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        onTap: onTap,
+        leading: Icon(icon, color: colorScheme.primary),
+        title: Text(
+          title,
+          style: TextStyle(
+            color: colorScheme.onSurface,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        subtitle: Text(
+          subtitle,
+          style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
+        ),
+        trailing: trailing,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        tileColor: colorScheme.surfaceContainerHighest,
+      ),
+    );
+  }
+
+  Future<void> _openContactPerChildModal(bool Function(String) resolveFor) async {
+    if (_parent == null) return;
+    final children = await Child.getLinkedChildren(_parent!.id);
+    if (!mounted) return;
+    await PerChildSettingSheet.show(
+      context: context,
+      title: 'Aceptar solicitudes por defecto',
+      description: 'Aprobación automática de contactos, por hijo.',
+      icon: Icons.auto_awesome,
+      children: children,
+      valueFor: resolveFor,
+      onChanged: (childId, enabled) =>
+          _controller.toggleChildAutoApproval(childId, enabled),
     );
   }
 
@@ -381,58 +491,84 @@ class _ParentProfileScreenState extends State<ParentProfileScreen>
 
     if (_parent == null) return const SizedBox.shrink();
 
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(_parent!.id)
-          .snapshots(),
-      builder: (context, snapshot) {
-        // Default ON: el padre se notifica cuando el hijo se une, sin bloquearlo.
-        bool autoApproveGroups = true;
+    return StreamBuilder<List<String>>(
+      stream: Child.getLinkedChildrenIdsStream(_parent!.id),
+      builder: (context, childSnap) {
+        final childIds = childSnap.data ?? const <String>[];
 
-        if (snapshot.hasData && snapshot.data!.exists) {
-          final data = snapshot.data!.data() as Map<String, dynamic>?;
-          final groupSettings = data?['groupSettings'] as Map<String, dynamic>?;
-          // Solo desactivar si está explícitamente en false
-          autoApproveGroups = groupSettings?['autoApproveGroups'] != false;
-        }
+        return StreamBuilder<DocumentSnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('users')
+              .doc(_parent!.id)
+              .snapshots(),
+          builder: (context, snapshot) {
+            final data = (snapshot.data?.data() as Map<String, dynamic>?) ?? {};
+            final groupSettings =
+                (data['groupSettings'] as Map<String, dynamic>?) ?? {};
+            // Default ON: solo se desactiva si está explícitamente en false.
+            final globalEnabled = groupSettings['autoApproveGroups'] != false;
+            final perChild =
+                (groupSettings['childAutoApproveGroups'] as Map<String, dynamic>?) ?? {};
 
-        return Container(
-          margin: EdgeInsets.only(bottom: 8),
-          child: ListTile(
-            leading: Icon(
-              Icons.group_add,
-              color: colorScheme.primary,
-            ),
-            title: Text(
-              'Aprobar grupos automáticamente',
-              style: TextStyle(
-                color: colorScheme.onSurface,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            subtitle: Text(
-              autoApproveGroups
-                  ? 'Tu hijo se une al grupo y te avisamos. Podés removerlo si querés.'
-                  : 'Cada solicitud de grupo requiere tu aprobación manual.',
-              style: TextStyle(
-                fontSize: 12,
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            trailing: Switch(
-              value: autoApproveGroups,
-              onChanged: _toggleGroupAutoApproval,
-              activeThumbColor: colorScheme.primary,
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            tileColor: colorScheme.surfaceContainerHighest,
-          ),
+            bool resolveFor(String id) => perChild.containsKey(id)
+                ? perChild[id] != false
+                : globalEnabled;
+
+            // Un solo hijo (o aún sin datos): switch clásico, comportamiento sin cambios.
+            if (childIds.length <= 1) {
+              return _buildSettingTile(
+                icon: Icons.group_add,
+                title: 'Aprobar grupos automáticamente',
+                subtitle: globalEnabled
+                    ? 'Tu hijo se une al grupo y te avisamos. Podés removerlo si querés.'
+                    : 'Cada solicitud de grupo requiere tu aprobación manual.',
+                trailing: Switch(
+                  value: globalEnabled,
+                  onChanged: _toggleGroupAutoApproval,
+                  activeThumbColor: colorScheme.primary,
+                ),
+              );
+            }
+
+            // Más de un hijo: botón que abre el modal de config por hijo.
+            final enabledCount = childIds.where(resolveFor).length;
+            return _buildSettingTile(
+              icon: Icons.group_add,
+              title: 'Aprobar grupos automáticamente',
+              subtitle: 'Configurado por hijo · $enabledCount de ${childIds.length} activados',
+              trailing: Icon(Icons.arrow_forward_ios,
+                  size: 16, color: colorScheme.onSurfaceVariant),
+              onTap: () => _openGroupPerChildModal(resolveFor),
+            );
+          },
         );
       },
     );
+  }
+
+  Future<void> _openGroupPerChildModal(bool Function(String) resolveFor) async {
+    if (_parent == null) return;
+    final children = await Child.getLinkedChildren(_parent!.id);
+    if (!mounted) return;
+    await PerChildSettingSheet.show(
+      context: context,
+      title: 'Aprobar grupos automáticamente',
+      description: 'Auto-aprobación de grupos, por hijo.',
+      icon: Icons.group_add,
+      children: children,
+      valueFor: resolveFor,
+      onChanged: _toggleChildGroupAutoApproval,
+    );
+  }
+
+  Future<void> _toggleChildGroupAutoApproval(String childId, bool enabled) async {
+    final uid = _parent?.id;
+    if (uid == null) return;
+    await FirebaseFirestore.instance.collection('users').doc(uid).set({
+      'groupSettings': {
+        'childAutoApproveGroups': {childId: enabled},
+      },
+    }, SetOptions(merge: true));
   }
 
   Widget _buildDarkModeSetting() {

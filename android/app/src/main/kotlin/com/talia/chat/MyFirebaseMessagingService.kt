@@ -24,8 +24,6 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.content.LocusIdCompat
 import androidx.core.graphics.drawable.IconCompat
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.MethodChannel
 import kotlin.concurrent.thread
 
 class MyFirebaseMessagingService : FirebaseMessagingService() {
@@ -43,7 +41,6 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         private const val CHANNEL_ID_SILENT = "silent_channel"
         private const val CHANNEL_NAME = "Notificaciones Importantes"
         private const val CHANNEL_NAME_SILENT = "Notificaciones Silenciosas"
-        private const val PHOTO_CACHE_CHANNEL = "com.talia.chat/photo_cache"
 
         // ✅ Keys de SharedPreferences (sincronizadas con Flutter)
         private const val SOUND_ENABLED_KEY = "flutter.notification_sound_enabled"
@@ -78,9 +75,14 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 putExtra("senderName", senderName)
             }
 
+            // ✅ FIX: requestCode único por chat. Con requestCode=0 fijo +
+            // FLAG_UPDATE_CURRENT, TODAS las notificaciones compartían el
+            // mismo PendingIntent y los extras se pisaban: tocar la
+            // notificación vieja de un chat abría el chat del mensaje más
+            // reciente de otro contacto.
             val pendingIntent = PendingIntent.getActivity(
                 context,
-                0,
+                chatId.hashCode(),
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -88,11 +90,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             // ✅ Calcular ID final: usar el pasado o generar uno basado en chatId
             val finalNotificationId = if (notificationId != 0) notificationId else chatId.hashCode()
 
-            // ✅ Try to get cached photo: Flutter cache first, then local file cache
-            var cachedPhoto = getCachedPhoto(senderId)
-            if (cachedPhoto == null) {
-                cachedPhoto = getFromLocalCacheStatic(context, senderId)
-            }
+            // ✅ Foto desde el cache local de archivos. (Se eliminó la capa de
+            // MethodChannel: invokeMethod es async/void y se llamaba desde un
+            // thread de background — nunca devolvía datos, era código muerto.)
+            val cachedPhoto = getFromLocalCacheStatic(context, senderId)
 
             // Si no hay cache y hay URL, descargar la foto en background thread
             if (cachedPhoto == null && !senderPhotoUrl.isNullOrEmpty()) {
@@ -194,37 +195,6 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "❌ [LocalCache] Error leyendo cache: ${e.message}", e)
-                null
-            }
-        }
-
-        /**
-         * ✅ Get cached photo from ContactPhotoCacheService via MethodChannel
-         * Returns ByteArray if cached, null otherwise (0ms lookup)
-         */
-        private fun getCachedPhoto(senderId: String): ByteArray? {
-            return try {
-                // Access Flutter's MethodChannel to get cached photo
-                val flutterEngine = (MainActivity.flutterEngineInstance as? FlutterEngine)
-                if (flutterEngine == null) {
-                    Log.w(TAG, "⚠️ FlutterEngine not available, can't access photo cache")
-                    return null
-                }
-
-                val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PHOTO_CACHE_CHANNEL)
-
-                // Synchronous call to Dart (blocking, but instant from memory)
-                val result = channel.invokeMethod("getCachedPhoto", senderId)
-
-                if (result is ByteArray && result.isNotEmpty()) {
-                    Log.d(TAG, "✅ [PhotoCache] Cache HIT for $senderId (${result.size} bytes)")
-                    result
-                } else {
-                    Log.d(TAG, "⚠️ [PhotoCache] Cache MISS for $senderId")
-                    null
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ [PhotoCache] Error accessing cache: ${e.message}", e)
                 null
             }
         }
@@ -710,9 +680,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             }
         }
 
+        // ✅ FIX: requestCode único por chat (ver showNotificationFromForeground)
         val pendingIntent = PendingIntent.getActivity(
             this,
-            0,
+            (data["chatId"] ?: data["groupId"] ?: "talia").hashCode(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -734,13 +705,17 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
         Log.d(TAG, "📥 [Background] notificationId consistente=$consistentNotificationId para chat=$chatId")
 
+        // 🔒 Para grupos cacheamos la foto bajo "group_$chatId" para que no
+        // contamine la foto del sender en chats 1-1.
+        val photoCacheKey = if (isGroup && chatId.isNotEmpty()) "group_$chatId" else senderId
+
         // ✅ SIEMPRE descargar foto fresca si hay URL (evita mostrar foto vieja del cache)
         if (!photoUrl.isNullOrEmpty()) {
             Log.d(TAG, "📥 [Background] Descargando foto fresca desde URL...")
             thread {
-                val downloadedBytes = downloadPhoto(photoUrl, senderId)
+                val downloadedBytes = downloadPhoto(photoUrl, photoCacheKey)
                 // Si falla descarga, usar cache local como fallback
-                val finalBytes = downloadedBytes ?: getFromLocalCache(senderId)
+                val finalBytes = downloadedBytes ?: getFromLocalCache(photoCacheKey)
                 buildAndShowNotification(
                     context = this,
                     body = body,
@@ -758,7 +733,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         }
 
         // Sin URL, usar cache local
-        val photoBytes = getFromLocalCache(senderId)
+        val photoBytes = getFromLocalCache(photoCacheKey)
         buildAndShowNotification(
             context = this,
             body = body,
@@ -794,9 +769,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             putExtra("senderName", senderName)
         }
 
+        // ✅ FIX: requestCode único por sender (ver showNotificationFromForeground)
         val pendingIntent = PendingIntent.getActivity(
             this,
-            0,
+            "nudge_$senderId".hashCode(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

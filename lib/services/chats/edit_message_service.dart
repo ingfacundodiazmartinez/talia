@@ -54,7 +54,7 @@ class EditMessageService {
           .collection('messages')
           .doc(messageId);
 
-      final messageDoc = await messageRef.get();
+      final messageDoc = await messageRef.get().timeout(const Duration(seconds: 8));
 
       if (!messageDoc.exists) {
         return (success: false, message: 'Mensaje no encontrado');
@@ -105,7 +105,7 @@ class EditMessageService {
       final chatDoc = await _firestore
           .collection(collection)
           .doc(chatId)
-          .get();
+          .get().timeout(const Duration(seconds: 8));
 
       if (chatDoc.exists) {
         final chatData = chatDoc.data()!;
@@ -146,7 +146,7 @@ class EditMessageService {
           .doc(chatId)
           .collection('messages')
           .doc(messageId)
-          .get();
+          .get().timeout(const Duration(seconds: 8));
 
       if (!messageDoc.exists) {
         return (canEdit: false, reason: 'Mensaje no encontrado');

@@ -36,27 +36,33 @@ abstract class BaseChatsController {
   @protected
   GroupChatService get groupChatService => _groupChatService;
 
-  /// Stream de chats donde el usuario participa
-  /// ✅ Paginado a 50 chats para escalar a 10,000+ chats
-  Stream<QuerySnapshot> getChatsStream({int limit = 50}) {
+  /// Stream de chats donde el usuario participa.
+  ///
+  /// 🔒 SST = Hive: el ordenamiento por "último mensaje" se hace 100%
+  /// client-side usando MessageCacheService.lastMessageChanges. No usamos
+  /// `.orderBy('lastMessageTime')` porque eso ataría la lista a Firestore.
+  /// Traemos los chats sin orden (el cliente reordena en build) con un
+  /// límite generoso (200) — suficiente para >99% de users. Si en el futuro
+  /// alguien tiene más, hay que paginar por otro criterio.
+  Stream<QuerySnapshot> getChatsStream({int limit = 200}) {
     return _firestore
         .collection('chats')
         .where('participants', arrayContains: userId)
-        .orderBy('lastMessageTime', descending: true)
         .limit(limit)
         .snapshots(includeMetadataChanges: false);
   }
 
-  /// Stream de grupos donde el usuario es miembro (Groups V2)
-  /// ✅ Paginado a 50 grupos para escalar
-  Stream<QuerySnapshot> getGroupsStream({int limit = 50}) {
+  /// Stream de grupos donde el usuario es miembro (Groups V2).
+  ///
+  /// 🔒 SST = Hive: mismo principio que getChatsStream. Sin orderBy
+  /// server-side, cliente reordena por GroupMessageCacheService.
+  Stream<QuerySnapshot> getGroupsStream({int limit = 200}) {
     ReleaseLogger.log('🔍 [getGroupsStream] Iniciando stream para userId: $userId', tag: 'BaseChats');
 
     return _firestore
         .collection('groups_v2')
         .where('members', arrayContains: userId)
         .where('isActive', isEqualTo: true)
-        .orderBy('lastActivity', descending: true)
         .limit(limit)
         .snapshots(includeMetadataChanges: false)
         .handleError((error, stackTrace) {
@@ -196,6 +202,35 @@ abstract class BaseChatsController {
     } catch (e, stack) {
       ReleaseLogger.error('❌ Error refrescando grupos: $e', tag: 'BaseChats');
       ReleaseLogger.error('   Stack: $stack', tag: 'BaseChats');
+    }
+  }
+
+  /// 🔄 Despierta el socket gRPC de Firestore tras background largo.
+  ///
+  /// iOS/Android suspenden el long-lived stream cuando la app está en
+  /// background; los listeners de `getChatsStream` siguen "vivos" en Dart
+  /// pero el socket no recibe updates hasta que algo despierte el canal.
+  /// Un `get(Source.server)` sobre la misma query fuerza una conexión nueva
+  /// y reactiva el listener. Sin esto, la lista de chats queda con datos
+  /// viejos hasta reiniciar la app.
+  ///
+  /// Se llama desde el handler `resumed` de las pantallas de chats.
+  Future<void> refreshChatsFromServer({int limit = 200}) async {
+    try {
+      await _firestore
+          .collection('chats')
+          .where('participants', arrayContains: userId)
+          .limit(limit)
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 10));
+      ReleaseLogger.log('✅ Socket de chats despertado tras resume', tag: 'BaseChats');
+    } catch (e) {
+      // No crítico: si falla, el listener se recuperará por su cuenta o en el
+      // próximo resume. Mejor degradar que bloquear la UI.
+      ReleaseLogger.warning(
+        'No se pudo refrescar chats desde servidor en resume (no crítico): $e',
+        tag: 'BaseChats',
+      );
     }
   }
 

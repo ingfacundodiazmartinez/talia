@@ -2,6 +2,8 @@ package com.talia.chat
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.os.Bundle
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
@@ -35,8 +37,34 @@ class MainActivity : FlutterActivity() {
 
         super.onCreate(savedInstanceState)
 
+        // 🔒 Forzar orientación portrait a nivel nativo. El AndroidManifest ya
+        // declara screenOrientation="portrait", pero algunos plugins (camera,
+        // image_picker, story editors) llaman setRequestedOrientation()
+        // durante su ciclo de vida y dejan la Activity rotable. Forzando acá
+        // de nuevo aseguramos que cualquier override se revierta al volver al
+        // MainActivity.
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+
         // ✅ Guardar intent inicial para procesarlo cuando Flutter esté listo
         startIntent = intent
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 🔒 Volver a forzar portrait cuando la app vuelve a foreground o
+        // cuando se pop una sub-Activity (cámara, image picker, etc.) que
+        // pudo haber cambiado la orientación.
+        if (requestedOrientation != ActivityInfo.SCREEN_ORIENTATION_PORTRAIT) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 🔒 Si algo intentó rotar la Activity, revertir al portrait.
+        if (newConfig.orientation != Configuration.ORIENTATION_PORTRAIT) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

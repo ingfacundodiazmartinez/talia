@@ -5,12 +5,14 @@ class AttachmentOptions extends StatelessWidget {
   final VoidCallback onCameraTap;
   final VoidCallback onGalleryTap;
   final VoidCallback onVideoTap;
+  final VoidCallback? onLocationTap;
 
   const AttachmentOptions({
     super.key,
     required this.onCameraTap,
     required this.onGalleryTap,
     required this.onVideoTap,
+    this.onLocationTap,
   });
 
   @override
@@ -52,6 +54,13 @@ class AttachmentOptions extends StatelessWidget {
                 color: Colors.red,
                 onTap: onVideoTap,
               ),
+              if (onLocationTap != null)
+                _AttachmentOption(
+                  icon: Icons.location_on,
+                  label: 'Ubicación',
+                  color: Colors.green,
+                  onTap: onLocationTap!,
+                ),
             ],
           ),
           const SizedBox(height: 20),
@@ -65,6 +74,7 @@ class AttachmentOptions extends StatelessWidget {
     required VoidCallback onCameraTap,
     required VoidCallback onGalleryTap,
     required VoidCallback onVideoTap,
+    VoidCallback? onLocationTap,
   }) {
     showModalBottomSheet(
       context: context,
@@ -75,6 +85,7 @@ class AttachmentOptions extends StatelessWidget {
         onCameraTap: onCameraTap,
         onGalleryTap: onGalleryTap,
         onVideoTap: onVideoTap,
+        onLocationTap: onLocationTap,
       ),
     );
   }

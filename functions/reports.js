@@ -543,7 +543,7 @@ Proporciona tu análisis en el siguiente formato JSON EXACTO (solo JSON, sin tex
   "positive_aspects": ["aspectos positivos detectados de forma GENERAL"],
   "concerns": ["preocupaciones identificadas de forma GENERAL, sin mencionar palabras exactas"],
   "recommendations": ["recomendaciones para los padres"],
-  "suggested_questions": ["3-5 preguntas que el padre puede hacerle al hijo. USA LOS NOMBRES REALES de los contactos que aparecen arriba en 'CONTACTOS CON LOS QUE HABLÓ'. Ejemplo: '¿Cómo te llevas con María?' NO uses placeholders como [Contacto_1]"],
+  "suggested_questions": ["3-5 preguntas que el PADRE puede hacerle a su HIJO. REGLAS ESTRICTAS: (1) Las preguntas están dirigidas AL HIJO, no a contactos. (2) NO empieces con el nombre del hijo como vocativo (ej. evitá 'Oli, ¿qué...?'), arrancá directo con '¿' o con un verbo. (3) Si mencionás contactos, mencionalos en TERCERA PERSONA usando los nombres reales de 'CONTACTOS CON LOS QUE HABLÓ' arriba. Ejemplo bueno: '¿Cómo te llevaste con María esta semana?'. (4) NUNCA dirijas preguntas a un contacto como destinatario (no '[Contacto], ¿X?'). (5) No uses placeholders tipo [Contacto_1]."],
   "connection_moment": {
     "suggestion": "sugerencia de momento de conexión",
     "activity": "actividad sugerida",
@@ -804,6 +804,23 @@ exports.onPendingReportCreated = onDocumentCreated(
       // Usar daysBack del pending report
       const days = daysBack || 7;
 
+      // 🔒 Filtrar contactos NO-HUMANOS y FIGURAS DE AUDIENCIA del prompt:
+      // - Tália (AI assistant) no es un peer humano; las "preguntas para
+      //   conversar" no deben dirigir al niño a hablar con la IA.
+      // - Los padres del niño son los lectores del reporte; sugerir "¿Cómo
+      //   te llevas con [Papá]?" al propio padre es absurdo.
+      // Sin este filtro, el LLM mete a Tália y al padre por nombre en las
+      // suggested_questions, generando preguntas sin sentido.
+      const TALIA_ID = "talia-assistant";
+      const parentLinks = await db
+        .collection("parent_children")
+        .where("childId", "==", childId)
+        .where("status", "==", "approved")
+        .get();
+      const parentIds = new Set(parentLinks.docs.map((d) => d.data().parentId));
+      const excludedContactIds = new Set([TALIA_ID, ...parentIds]);
+      console.log(`🚫 Excluidos del prompt: ${[...excludedContactIds].join(", ")}`);
+
       // 3. Recopilar TODOS los mensajes del HIJO en el período
       const weekAgo = new Date();
       weekAgo.setDate(weekAgo.getDate() - days);
@@ -823,6 +840,12 @@ exports.onPendingReportCreated = onDocumentCreated(
         if (chatData.participants && chatData.participants.length === 2) {
           contactId = chatData.participants.find(p => p !== childId);
         }
+
+        // 🔒 Skip chats con Tália / con padres del niño — no son peers humanos
+        // contra los que tenga sentido sugerir preguntas. Igual contamos los
+        // mensajes del niño para totales, pero los excluimos del contexto de
+        // contactos que ve el LLM.
+        const isExcludedContact = contactId && excludedContactIds.has(contactId);
 
         // Obtener nombre del contacto
         if (chatData.participantNames && contactId) {
@@ -858,8 +881,8 @@ exports.onPendingReportCreated = onDocumentCreated(
           `📨 Chat con ${contactName}: ${messagesSnapshot.docs.length} mensajes del hijo`
         );
 
-        // Trackear contexto de conversación
-        if (messagesSnapshot.docs.length > 0) {
+        // Trackear contexto de conversación (excepto contactos excluidos)
+        if (messagesSnapshot.docs.length > 0 && !isExcludedContact) {
           if (!conversationContexts[contactName]) {
             conversationContexts[contactName] = { messageCount: 0 };
           }

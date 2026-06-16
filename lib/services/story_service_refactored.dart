@@ -36,6 +36,15 @@ class StoryService {
     String? text,
     String? caption, // Compatibilidad con API anterior
     Map<String, dynamic>? filter,
+    bool aiGenerated = false,
+    String? musicUrl,
+    String? musicPrompt,
+    String? musicLyrics,
+    int? musicStartMs,
+    int? musicClipMs,
+    String? musicTitle,
+    String? musicDisplayMode,
+    List<Map<String, dynamic>>? musicLyricsTimings,
     Function(String storyId, double progress)? onProgressUpdate,
   }) async {
     // Usar caption si se proporciona, sino text
@@ -46,7 +55,41 @@ class StoryService {
       mediaPath: mediaPath,
       text: storyText,
       filter: filter,
+      aiGenerated: aiGenerated,
+      musicUrl: musicUrl,
+      musicPrompt: musicPrompt,
+      musicLyrics: musicLyrics,
+      musicStartMs: musicStartMs,
+      musicClipMs: musicClipMs,
+      musicTitle: musicTitle,
+      musicDisplayMode: musicDisplayMode,
+      musicLyricsTimings: musicLyricsTimings,
       onProgressUpdate: onProgressUpdate,
+    );
+  }
+
+  /// Crear historia de solo-música (sin foto/video)
+  Future<String> createMusicOnlyStory({
+    required String musicUrl,
+    String? musicPrompt,
+    String? musicLyrics,
+    int? musicStartMs,
+    int? musicClipMs,
+    String? musicTitle,
+    String? musicDisplayMode,
+    List<Map<String, dynamic>>? musicLyricsTimings,
+    String? caption,
+  }) async {
+    return await _orchestrator.createMusicOnlyStory(
+      musicUrl: musicUrl,
+      musicPrompt: musicPrompt,
+      musicLyrics: musicLyrics,
+      musicStartMs: musicStartMs,
+      musicClipMs: musicClipMs,
+      musicTitle: musicTitle,
+      musicDisplayMode: musicDisplayMode,
+      musicLyricsTimings: musicLyricsTimings,
+      caption: caption,
     );
   }
 

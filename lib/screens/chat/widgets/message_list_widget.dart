@@ -5,6 +5,7 @@ import '../../../controllers/chat_controller_cache_first.dart';
 import '../../../models/chat_message.dart';
 import 'message_bubble.dart';
 import 'date_separator_widget.dart';
+import 'animated_message_entry.dart';
 
 /// Widget que renderiza la lista de mensajes del chat
 ///
@@ -97,9 +98,9 @@ class MessageListWidget extends StatelessWidget {
       itemCount: controller.messages.length,
       findChildIndexCallback: (Key key) {
         if (key is ValueKey<String>) {
-          final messageId = key.value.replaceFirst('msg_', '');
+          final stableId = key.value.replaceFirst('msg_', '');
           final index = controller.messages.indexWhere(
-            (msg) => msg.id == messageId,
+            (msg) => (msg.localId ?? msg.id) == stableId,
           );
           return index >= 0 ? index : null;
         }
@@ -129,8 +130,13 @@ class MessageListWidget extends StatelessWidget {
       return _buildDeletedMessageBubble(context, message, isMe, timeString, showDateSeparator, index);
     }
 
+    // ✅ FIX FLICKER: key estable a través del swap optimista → confirmado.
+    // El mensaje optimista usa id=tempId (== localId) y el confirmado llega
+    // con id=docId pero conserva localId=tempId. Si la key usa message.id,
+    // el Element se destruye y recrea en el swap (titileo). Con localId como
+    // key, la burbuja conserva identidad y el swap es invisible.
     Widget messageBubble = MessageBubble(
-      key: ValueKey('msg_${message.id}'),
+      key: ValueKey('msg_${message.localId ?? message.id}'),
       messageId: message.id,
       chatId: chatId,
       text: message.text,
@@ -165,6 +171,13 @@ class MessageListWidget extends StatelessWidget {
       isFavorite: controller.favoriteIds.contains(message.id),  // ✅ NEW
       onFavoriteToggled: () => controller.refreshFavorites(),  // ✅ Refresh tras toggle
       localTimestamp: message.localTimestamp,  // ✅ NEW: Para timeout de pending
+      // ✅ El envío sigue en curso (upload activo): no mostrar "error" por el
+      // timeout visual de 30s mientras todavía está subiendo.
+      isUploading: isMe && controller.isSendInFlight(message.id),
+      latitude: message.latitude,
+      longitude: message.longitude,
+      isLiveLocation: message.isLiveLocation,
+      liveLocationExpiresAt: message.liveLocationExpiresAt?.toDate(),
       onRetry: isMe && (message.status == MessageStatus.sending || message.status == MessageStatus.error)
           ? () => _retryMessage(context, message)
           : null,  // Callback para reenviar mensajes fallidos o en timeout
@@ -245,6 +258,13 @@ class MessageListWidget extends StatelessWidget {
     } else {
       finalWidget = messageBubble;
     }
+
+    // ✅ Entrada sutil (fade + slide + micro-scale) SOLO para burbujas frescas
+    // (enviadas/recibidas en vivo). El historial aparece sin animar.
+    finalWidget = AnimatedMessageEntry(
+      messageTime: message.effectiveTimestamp,
+      child: finalWidget,
+    );
 
     // Agregar separador de fecha si es necesario
     if (showDateSeparator) {

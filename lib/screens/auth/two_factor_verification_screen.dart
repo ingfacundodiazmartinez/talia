@@ -144,6 +144,9 @@ class _TwoFactorVerificationScreenState
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    // Con teclado abierto, ocultar el ícono decorativo para que el campo y
+    // el botón de verificación queden visibles (no tapados por el teclado).
+    final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
 
     return Scaffold(
       body: Container(
@@ -165,21 +168,23 @@ class _TwoFactorVerificationScreenState
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Icono de seguridad
-                  Container(
-                    padding: EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
+                  // Icono de seguridad (solo con teclado cerrado)
+                  if (!keyboardOpen) ...[
+                    Container(
+                      padding: EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.verified_user,
+                        size: 64,
+                        color: colorScheme.primary,
+                      ),
                     ),
-                    child: Icon(
-                      Icons.verified_user,
-                      size: 64,
-                      color: colorScheme.primary,
-                    ),
-                  ),
 
-                  SizedBox(height: 32),
+                    SizedBox(height: 32),
+                  ],
 
                   // Card principal
                   Container(
@@ -230,6 +235,7 @@ class _TwoFactorVerificationScreenState
                           controller: _codeController,
                           keyboardType: TextInputType.number,
                           textAlign: TextAlign.center,
+                          scrollPadding: EdgeInsets.only(bottom: 160),
                           style: TextStyle(
                             fontSize: 32,
                             fontWeight: FontWeight.bold,

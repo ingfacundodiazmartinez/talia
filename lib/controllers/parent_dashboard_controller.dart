@@ -7,6 +7,7 @@ import '../services/auto_approval_service.dart';
 import '../services/user_role_service.dart';
 import '../models/parent.dart';
 import '../screens/emergency_detail_screen.dart';
+import '../screens/parent/wallet/wallet_screen.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica de negocio del Parent Dashboard
@@ -29,6 +30,7 @@ class ParentDashboardController {
 
   // Subscripciones (deben limpiarse en dispose)
   StreamSubscription? _emergencyNotificationSubscription;
+  StreamSubscription? _loadCreditsNotificationSubscription;
 
   /// Constructor
   ParentDashboardController({
@@ -91,6 +93,9 @@ class ParentDashboardController {
       _setupEmergencyNotificationListener();
       ReleaseLogger.log('Listener de emergencias configurado', tag: 'ParentDashboard');
 
+      // Listener: el hijo pidió créditos → abrir la wallet al tocar la notif.
+      _setupLoadCreditsNotificationListener();
+
       // ✅ ELIMINADO: _listenForIncomingCalls() - CallsOrchestrator en main.dart maneja esto globalmente
       ReleaseLogger.log('Listener legacy de llamadas ELIMINADO - CallsOrchestrator maneja globalmente', tag: 'ParentDashboard');
 
@@ -126,6 +131,24 @@ class ParentDashboardController {
             );
           }
         });
+      }
+    });
+  }
+
+  /// El padre tocó la notif "el hijo necesita créditos" → abrir la wallet
+  /// (donde puede ver videos y cargar créditos).
+  void _setupLoadCreditsNotificationListener() {
+    _loadCreditsNotificationSubscription = _notificationService
+        .loadCreditsRequestNotificationTapStream
+        .listen((data) {
+      ReleaseLogger.log('Navegando a wallet desde notif de créditos', tag: 'ParentDashboard');
+      if (context.mounted) {
+        // rootNavigator: true → abre la wallet por ENCIMA de todo, sin importar
+        // en qué tab esté el padre. Sin esto se empujaba sobre el navigator
+        // anidado del tab Dashboard (offstage) y no se veía.
+        Navigator.of(context, rootNavigator: true).push(
+          MaterialPageRoute(builder: (context) => const WalletScreen()),
+        );
       }
     });
   }
@@ -183,6 +206,7 @@ class ParentDashboardController {
   /// IMPORTANTE: Debe llamarse desde dispose() del screen
   void dispose() {
     _emergencyNotificationSubscription?.cancel();
+    _loadCreditsNotificationSubscription?.cancel();
 
     // ✅ OPTIMIZACIÓN: Limpiar streams cacheados
     _cachedUserDataStream = null;

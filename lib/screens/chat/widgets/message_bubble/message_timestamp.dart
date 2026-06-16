@@ -11,6 +11,7 @@ class MessageTimestamp extends StatelessWidget {
   final bool isFavorite;
   final DateTime? localTimestamp;
   final VoidCallback? onRetry;
+  final bool isUploading;
 
   const MessageTimestamp({
     super.key,
@@ -21,6 +22,7 @@ class MessageTimestamp extends StatelessWidget {
     this.isFavorite = false,
     this.localTimestamp,
     this.onRetry,
+    this.isUploading = false,
   });
 
   @override
@@ -60,6 +62,7 @@ class MessageTimestamp extends StatelessWidget {
               moderationStatus: moderationStatus,
               localTimestamp: localTimestamp,
               onRetry: onRetry,
+              isUploading: isUploading,
               size: 14,
               baseColor: Colors.white.withValues(alpha: 0.9),
             ),

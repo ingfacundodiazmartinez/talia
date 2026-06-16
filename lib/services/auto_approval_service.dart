@@ -119,6 +119,16 @@ class AutoApprovalService {
     _subscriptions.add(groupSubscription);
   }
 
+  /// Resuelve la auto-aprobación de contactos para un hijo: usa el valor por
+  /// hijo si existe (padres con >1 hijo) y cae al flag global si no.
+  bool _resolveContactAutoApprove(Map<String, dynamic> settings, String? childId) {
+    final perChild = settings['childAutoApproveRequests'];
+    if (childId != null && perChild is Map && perChild.containsKey(childId)) {
+      return perChild[childId] == true;
+    }
+    return settings['autoApproveRequests'] == true;
+  }
+
   /// Procesar aprobación automática si está habilitada
   Future<void> _processAutoApproval({
     required String contactId,
@@ -142,11 +152,11 @@ class AutoApprovalService {
       }
 
       final settings = parentSettingsDoc.data() as Map<String, dynamic>;
-      final autoApproveEnabled = settings['autoApproveRequests'] ?? false;
+      final autoApproveEnabled = _resolveContactAutoApprove(settings, childId);
 
       if (!autoApproveEnabled) {
         ReleaseLogger.log(
-          '⏭️ [AutoApproval] Auto-approve deshabilitado para padre $parentId',
+          '⏭️ [AutoApproval] Auto-approve deshabilitado para padre $parentId / hijo $childId',
           tag: 'AutoApproval',
         );
         return;
@@ -276,7 +286,9 @@ class AutoApprovalService {
       }
 
       final settings = parentSettingsDoc.data() as Map<String, dynamic>;
-      final autoApproveEnabled = settings['autoApproveRequests'] ?? false;
+      final childIdForSettings = requestData['childId'] as String?;
+      final autoApproveEnabled =
+          _resolveContactAutoApprove(settings, childIdForSettings);
 
       if (!autoApproveEnabled) {
         return;

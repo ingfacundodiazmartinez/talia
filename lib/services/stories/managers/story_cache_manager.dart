@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_database/firebase_database.dart';
+import '../../../utils/server_time_offset.dart';
 import '../../../models/story.dart';
 import '../services/story_media_preload_service.dart';
 
@@ -130,6 +130,7 @@ class StoryCacheManager {
             userPhotoURL: userStories.userPhotoURL,
             stories: userStories.stories,
             hasUnviewed: hasUnviewed,
+            isOfficial: userStories.isOfficial,
           );
         }
       }
@@ -227,6 +228,7 @@ class StoryCacheManager {
         userPhotoURL: existingUserStories.userPhotoURL,
         stories: updatedStories,
         hasUnviewed: true, // Nueva historia = no vista
+        isOfficial: existingUserStories.isOfficial,
       );
 
       _optimisticCache[userId] = updatedUserStories;
@@ -238,6 +240,7 @@ class StoryCacheManager {
         userPhotoURL: story.userPhotoURL,
         stories: [story],
         hasUnviewed: true,
+        isOfficial: story.isOfficial,
       );
     }
 
@@ -261,6 +264,7 @@ class StoryCacheManager {
       userPhotoURL: userStories.userPhotoURL,
       stories: updatedStories,
       hasUnviewed: userStories.hasUnviewed,
+      isOfficial: userStories.isOfficial,
     );
 
     _notifyCacheChange();
@@ -284,6 +288,7 @@ class StoryCacheManager {
         userPhotoURL: userStories.userPhotoURL,
         stories: updatedStories,
         hasUnviewed: userStories.hasUnviewed,
+        isOfficial: userStories.isOfficial,
       );
     }
 
@@ -304,14 +309,9 @@ class StoryCacheManager {
   void removeExpiredStories() async {
     if (_cachedStories == null) return;
 
-    // Obtener offset del servidor
-    int serverOffset = 0;
-    try {
-      final snapshot = await FirebaseDatabase.instance
-          .ref('.info/serverTimeOffset')
-          .get();
-      serverOffset = (snapshot.value as int?) ?? 0;
-    } catch (_) {}
+    // Obtener offset del servidor (helper compartido: onValue en vez de
+    // get(), que las rules de RTDB rechazan)
+    final serverOffset = await ServerTimeOffset.fetchMs();
 
     final serverNow = DateTime.now().add(Duration(milliseconds: serverOffset));
     final twentyFourHoursAgo = serverNow.subtract(Duration(hours: 24));
@@ -330,6 +330,7 @@ class StoryCacheManager {
           userPhotoURL: userStories.userPhotoURL,
           stories: validStories,
           hasUnviewed: userStories.hasUnviewed,
+          isOfficial: userStories.isOfficial,
         ));
       }
     }
@@ -387,6 +388,7 @@ class StoryCacheManager {
             userPhotoURL: userStories.userPhotoURL,
             stories: userStories.stories,
             hasUnviewed: hasUnviewed,
+            isOfficial: userStories.isOfficial,
           );
 
           updated = true;
@@ -416,6 +418,7 @@ class StoryCacheManager {
               userPhotoURL: userStories.userPhotoURL,
               stories: userStories.stories,
               hasUnviewed: hasUnviewed,
+              isOfficial: userStories.isOfficial,
             );
             updated = true;
           }
@@ -486,6 +489,7 @@ class StoryCacheManager {
               userPhotoURL: userStories.userPhotoURL,
               stories: userStories.stories,
               hasUnviewed: userStories.hasUnviewed,
+              isOfficial: userStories.isOfficial,
             );
             updated = true;
           }
@@ -536,6 +540,7 @@ class StoryCacheManager {
             userPhotoURL: userStories.userPhotoURL,
             stories: userStories.stories,
             hasUnviewed: userStories.hasUnviewed,
+            isOfficial: userStories.isOfficial,
           );
           updated = true;
           break;
@@ -654,6 +659,7 @@ class StoryCacheManager {
           userPhotoURL: userStories.userPhotoURL,
           stories: uniqueUserStories,
           hasUnviewed: userStories.hasUnviewed,
+          isOfficial: userStories.isOfficial,
         ));
       }
     }
@@ -767,6 +773,7 @@ class StoryCacheManager {
           userPhotoURL: existing.userPhotoURL,
           stories: combinedStories,
           hasUnviewed: optimisticUserStories.hasUnviewed || existing.hasUnviewed,
+          isOfficial: existing.isOfficial || optimisticUserStories.isOfficial,
         );
       } else {
         // Agregar nuevo UserStories optimista

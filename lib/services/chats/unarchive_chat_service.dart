@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../utils/release_logger.dart';
 import 'chat_preferences_cache.dart';
@@ -38,6 +39,20 @@ class UnarchiveChatService {
 
       // Desarchivar en cache local
       await _preferencesCache.unarchiveChat(chatId);
+
+      // 🔒 Limpiar el flag en Firestore para que vuelva a recibir pushes.
+      try {
+        await FirebaseFirestore.instance.collection('users').doc(userId).set({
+          'archivedChats': {
+            chatId: FieldValue.delete(),
+          },
+        }, SetOptions(merge: true));
+      } catch (e) {
+        ReleaseLogger.warning(
+          'Error limpiando archive en Firestore (cliente sigue desarchivado local): $e',
+          tag: 'UnarchiveChat',
+        );
+      }
 
       ReleaseLogger.log(
         'Chat desarchivado: $chatId',

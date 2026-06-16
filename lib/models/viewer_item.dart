@@ -88,13 +88,24 @@ class UserContent {
     required this.hasUnviewed,
   });
 
-  /// Factory desde UserStories (solo historias)
-  factory UserContent.fromUserStories(UserStories userStories) {
+  /// Factory desde UserStories (solo historias).
+  ///
+  /// [includeUnpublished]: si es true, incluye historias pendientes/rechazadas/
+  /// expiradas (allUserStoriesIncludingExpired). Solo tiene sentido cuando el
+  /// usuario está viendo su propio histórico (Mis historias del perfil), no
+  /// para feeds públicos.
+  factory UserContent.fromUserStories(
+    UserStories userStories, {
+    bool includeUnpublished = false,
+  }) {
+    final source = includeUnpublished
+        ? userStories.allUserStoriesIncludingExpired
+        : userStories.sortedStories;
     return UserContent(
       oderId: userStories.userId,
       oderName: userStories.userName,
       oderPhotoURL: userStories.userPhotoURL,
-      items: userStories.sortedStories.map(ViewerItem.story).toList(),
+      items: source.map(ViewerItem.story).toList(),
       hasUnviewed: userStories.hasUnviewed,
     );
   }
@@ -102,12 +113,16 @@ class UserContent {
   /// Factory desde UserStories con trivias intercaladas
   factory UserContent.fromUserStoriesAndTrivias(
     UserStories userStories,
-    List<Trivia> trivias,
-  ) {
+    List<Trivia> trivias, {
+    bool includeUnpublished = false,
+  }) {
     final items = <ViewerItem>[];
 
+    final storySource = includeUnpublished
+        ? userStories.allUserStoriesIncludingExpired
+        : userStories.sortedStories;
     // Agregar historias
-    for (final story in userStories.sortedStories) {
+    for (final story in storySource) {
       items.add(ViewerItem.story(story));
     }
 

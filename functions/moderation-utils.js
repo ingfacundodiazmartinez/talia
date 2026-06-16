@@ -118,6 +118,13 @@ async function getParticipantsInfo(db, participantIds) {
  * @returns {string} - Preview del mensaje
  */
 function getMessagePreview(messageData) {
+  // Ubicación (estática o en vivo)
+  if (messageData.type === 'location' ||
+      (messageData.latitude != null && messageData.longitude != null)) {
+    return messageData.isLiveLocation
+      ? '📍 Ubicación en tiempo real'
+      : '📍 Ubicación';
+  }
   // Prioridad: audio > imagen > video > texto
   if (messageData.audioUrl) {
     return '🎤 Audio';

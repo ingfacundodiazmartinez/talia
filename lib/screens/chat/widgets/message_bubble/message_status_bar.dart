@@ -20,6 +20,8 @@ class MessageStatusBar extends StatefulWidget {
   /// Timestamp local de creación del mensaje. Necesario para detectar timeout.
   final DateTime? localTimestamp;
   final VoidCallback? onRetry;
+  /// Si el upload sigue en curso, NO mostrar "error" por el timeout visual.
+  final bool isUploading;
   final double size;
   /// Color base para sent/delivered. Si null, usa el del tema. Útil cuando
   /// se renderiza adentro del bubble propio (blanco semi-transparente).
@@ -34,6 +36,7 @@ class MessageStatusBar extends StatefulWidget {
     this.moderationStatus,
     this.localTimestamp,
     this.onRetry,
+    this.isUploading = false,
     this.size = 16,
     this.baseColor,
   });
@@ -93,7 +96,11 @@ class _MessageStatusBarState extends State<MessageStatusBar> {
   }
 
   MessageStatus get _effectiveStatus {
-    if (_hasTimedOut && widget.status == MessageStatus.sending) {
+    // ✅ Si el upload sigue EN CURSO, el timeout visual de 30s NO significa que
+    // falló: seguir mostrando "enviando" en vez de "error".
+    if (_hasTimedOut &&
+        widget.status == MessageStatus.sending &&
+        !widget.isUploading) {
       return MessageStatus.error;
     }
     return widget.status ?? MessageStatus.sent;

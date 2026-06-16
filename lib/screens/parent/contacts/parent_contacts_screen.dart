@@ -740,7 +740,7 @@ class _ParentContactsScreenState extends State<ParentContactsScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Ahora son amigos'),
+            content: Text('Ahora está en tu círculo'),
             backgroundColor: Colors.green,
             duration: Duration(seconds: 2),
           ),

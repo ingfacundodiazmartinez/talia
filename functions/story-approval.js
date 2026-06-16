@@ -678,6 +678,24 @@ async function createNotification({ userId, type, title, message, data }) {
  * SEGURIDAD: Cloud Function para crear historias con rate limiting
  * Reemplaza la creación directa client-side para mayor seguridad
  */
+/**
+ * Sanitiza el timing de la letra (karaoke) que envía el cliente. Aceptamos solo
+ * un array acotado de líneas {text, startMs, endMs} para evitar payloads abusivos.
+ */
+function _sanitizeLyricTimings(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const lines = [];
+  for (const item of raw.slice(0, 200)) {
+    if (!item || typeof item !== 'object') continue;
+    const text = (item.text || '').toString().slice(0, 200);
+    const startMs = Number(item.startMs);
+    const endMs = Number(item.endMs);
+    if (!text.trim() || !Number.isFinite(startMs) || !Number.isFinite(endMs)) continue;
+    lines.push({ text, startMs: Math.round(startMs), endMs: Math.round(endMs) });
+  }
+  return lines.length > 0 ? lines : null;
+}
+
 exports.createStory = onCall({
   region: 'us-central1',
   cors: true,
@@ -689,7 +707,16 @@ exports.createStory = onCall({
     caption,
     filter,
     localMediaPath,
-    tempStoryId
+    tempStoryId,
+    aiGenerated,
+    musicUrl,
+    musicPrompt,
+    musicLyrics,
+    musicStartMs,
+    musicClipMs,
+    musicTitle,
+    musicDisplayMode,
+    musicLyricsTimings
   } = data;
 
   console.log(`📝 [CreateStory] Iniciando creación: ${tempStoryId} por ${auth?.uid}`);
@@ -700,12 +727,21 @@ exports.createStory = onCall({
   }
 
   // 2. Validar parámetros obligatorios
-  if (!mediaType || !mediaUrl) {
-    throw new HttpsError('invalid-argument', 'mediaType y mediaUrl son requeridos');
+  if (!mediaType) {
+    throw new HttpsError('invalid-argument', 'mediaType es requerido');
   }
 
-  if (!['image', 'video'].includes(mediaType)) {
-    throw new HttpsError('invalid-argument', 'mediaType debe ser image o video');
+  if (!['image', 'video', 'music'].includes(mediaType)) {
+    throw new HttpsError('invalid-argument', 'mediaType debe ser image, video o music');
+  }
+
+  // Historias de solo-música no tienen foto/video; el resto sí requiere mediaUrl.
+  if (mediaType === 'music') {
+    if (!musicUrl) {
+      throw new HttpsError('invalid-argument', 'musicUrl es requerido para historias de música');
+    }
+  } else if (!mediaUrl) {
+    throw new HttpsError('invalid-argument', 'mediaUrl es requerido');
   }
 
   try {
@@ -727,7 +763,9 @@ exports.createStory = onCall({
     let multimediaModerationResult = null;
     const { isPremiumPlus } = await _checkUserPremiumPlus(auth.uid);
 
-    if (isPremiumPlus) {
+    // Las historias de solo-música no tienen imagen/video que moderar acá; el
+    // prompt y la letra ya pasaron por moderación en generateStoryMusic.
+    if (isPremiumPlus && mediaType !== 'music') {
       console.log(`🖼️ [CreateStory] User is Premium+ - running multimedia moderation for ${mediaType}...`);
 
       try {
@@ -784,9 +822,14 @@ exports.createStory = onCall({
 
           if (parentSettingsDoc.exists) {
             const settings = parentSettingsDoc.data();
-            if (settings.autoApproveRequests === true) {
+            // Config por hijo (auth.uid = hijo autor) con fallback al flag global.
+            const perChild = settings.childAutoApproveRequests || {};
+            const enabled = Object.prototype.hasOwnProperty.call(perChild, auth.uid)
+              ? perChild[auth.uid] === true
+              : settings.autoApproveRequests === true;
+            if (enabled) {
               anyParentHasAutoApprove = true;
-              console.log(`✅ [CreateStory] Parent ${parentId} tiene auto-aprobación habilitada`);
+              console.log(`✅ [CreateStory] Parent ${parentId} tiene auto-aprobación habilitada para hijo ${auth.uid}`);
               break;
             }
           }
@@ -873,8 +916,16 @@ exports.createStory = onCall({
       userName: userData.name || 'Usuario',
       userPhotoURL: userData.photoURL || null,
       mediaType: mediaType,
-      mediaUrl: mediaUrl,
+      mediaUrl: mediaUrl || '',
       caption: sanitizedCaption,
+      musicUrl: musicUrl || null, // 🎵 canción generada con IA (opcional)
+      musicPrompt: musicPrompt || null, // descripción usada para generarla
+      musicLyrics: musicLyrics || null, // letra de la canción (para mostrar)
+      musicStartMs: musicStartMs || null, // inicio del recorte de la canción (ms)
+      musicClipMs: musicClipMs || null, // duración del clip de la canción (ms)
+      musicTitle: musicTitle || null, // título de la canción (modo 'title')
+      musicDisplayMode: musicDisplayMode || null, // 'title' | 'lyrics'
+      musicLyricsTimings: _sanitizeLyricTimings(musicLyricsTimings), // líneas con timing para karaoke
       filter: filter || null,
       localMediaPath: localMediaPath || null,
       status: initialStatus,
@@ -886,6 +937,7 @@ exports.createStory = onCall({
       availableFor: availableFor, // IDs de usuarios que pueden ver esta historia
       parentViewers: parentViewers, // ✅ PERFORMANCE: IDs de padres para queries optimizadas
       childViewers: childViewers, // ✅ FIX: IDs de hijos para queries optimizadas
+      aiGenerated: aiGenerated === true, // ✨ Historia generada con face-swap / IA
       updatedAt: FieldValue.serverTimestamp(),
     };
 

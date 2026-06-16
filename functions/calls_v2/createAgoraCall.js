@@ -242,12 +242,24 @@ exports.createAgoraCall = onCall(
         // ✅ PHASE 1: VoIP Token Validation
         // Prepare push notifications for participant
         const voipToken = participantData.voipToken;
-        const fcmToken = participantData.fcmToken;
+
+        // ✅ FIX multidispositivo: usar el array fcmTokens (todos los devices)
+        // con fallback al campo legacy fcmToken. Antes la llamada solo
+        // despertaba al device cuyo token quedó en el campo viejo.
+        let participantFcmTokens = [];
+        if (Array.isArray(participantData.fcmTokens) && participantData.fcmTokens.length > 0) {
+          participantFcmTokens = participantData.fcmTokens.filter(
+            (t) => t && typeof t === 'string' && t.trim().length > 0
+          );
+        }
+        if (participantFcmTokens.length === 0 && participantData.fcmToken) {
+          participantFcmTokens = [String(participantData.fcmToken)];
+        }
 
         // 🔍 DEBUG: Log token values to diagnose notification issues
         console.log(`🔍 [TOKEN CHECK] Participant ${participantId}:`);
         console.log(`   - voipToken: ${voipToken ? `EXISTS (${voipToken.substring(0, 20)}...)` : 'NULL/UNDEFINED'}`);
-        console.log(`   - fcmToken: ${fcmToken ? `EXISTS (${fcmToken.substring(0, 30)}...)` : 'NULL/UNDEFINED'}`);
+        console.log(`   - fcmTokens: ${participantFcmTokens.length}`);
 
         // ✅ FIX: Usar sendVoIPPush de helpers.js (APNs directo, no Firebase Messaging)
         // Los tokens VoIP de iOS NO son tokens FCM, requieren APNs
@@ -301,7 +313,7 @@ exports.createAgoraCall = onCall(
         // ✅ FIX: Android needs high priority FCM to wake from killed state
         // Android: data-only con priority high - el background handler mostrará CallKit
         // iOS: content-available para fallback (VoIP push es el principal)
-        if (fcmToken) {
+        if (participantFcmTokens.length > 0) {
           const message = {
             // ✅ Data payload for background processing (ambas plataformas)
             data: {
@@ -317,7 +329,7 @@ exports.createAgoraCall = onCall(
               isGroup: isGroup.toString(),
               timestamp: timestamp.toString()
             },
-            token: fcmToken,
+            tokens: participantFcmTokens,
             android: {
               priority: 'high',
               // ✅ FIX: Usar direct_boot_ok para que funcione con pantalla bloqueada
@@ -337,11 +349,11 @@ exports.createAgoraCall = onCall(
             }
           };
 
-          console.log(`📲 Sending FCM notification to ${participantId}...`);
+          console.log(`📲 Sending FCM notification to ${participantId} (${participantFcmTokens.length} devices)...`);
           notificationPromises.push(
-            admin.messaging().send(message)
-              .then(() => {
-                console.log(`✅ FCM notification sent successfully to ${participantId}`);
+            admin.messaging().sendEachForMulticast(message)
+              .then((response) => {
+                console.log(`✅ FCM notification sent to ${participantId}: ${response.successCount}/${participantFcmTokens.length}`);
               })
               .catch(error => {
                 console.error(`❌ Failed to send FCM notification to ${participantId}:`, error);

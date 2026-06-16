@@ -51,6 +51,19 @@ function isExtraChildProduct(productId) {
   return productId.includes("extra_child");
 }
 
+// Jerarquía de tiers de suscripción. Sirve para NO degradar a un usuario que ya
+// tiene un plan superior activo (ej. re-verificación de una compra vieja en
+// sandbox, o webhooks con datos incompletos).
+const TIER_RANK = { free: 0, premium: 1, premium_plus: 2 };
+
+/// ¿El premium del usuario está activo (no expirado)?
+function _isUserPremiumActive(u) {
+  if (!u || u.isPremium !== true) return false;
+  const exp = u.premiumExpiresAt;
+  if (exp && typeof exp.toMillis === "function" && exp.toMillis() <= Date.now()) return false;
+  return true;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // GOOGLE PLAY STORE VERIFICATION
 // ═══════════════════════════════════════════════════════════════
@@ -136,7 +149,7 @@ exports.verifyPlayStorePurchase = onCall(async (request) => {
       if (isExtraChildProduct(productId)) {
         await activateExtraChildForUser(userId, expiryTimeMillis, "play_store", productId);
       } else {
-        await activatePremiumForUser(userId, tier, expiryTimeMillis, "play_store", productId);
+        await activatePremiumForUser(userId, tier, expiryTimeMillis, "play_store", productId, purchaseToken);
       }
     }
 
@@ -532,7 +545,19 @@ async function handleSubscriptionActive(userId, subscriptionId, subscriptionData
   const newExpiresAt = new Date();
   newExpiresAt.setDate(newExpiresAt.getDate() + 30);
 
-  const tier = subscriptionData.tier || "premium";
+  // Resolver el tier SIN degradar a ciegas:
+  // 1) el tier guardado en el doc de la suscripción,
+  // 2) derivado del productId de la suscripción,
+  // 3) el tier actual del usuario (nunca defaultear a "premium").
+  const userSnap = await userRef.get();
+  const cur = userSnap.data() || {};
+  let tier = subscriptionData.tier;
+  if (!tier && subscriptionData.productId) tier = getTierFromProductId(subscriptionData.productId);
+  if (!tier) tier = cur.subscriptionTier || "premium_plus";
+  // Y si el usuario ya tiene un tier superior, conservarlo (no degradar).
+  if ((TIER_RANK[cur.subscriptionTier] || 0) > (TIER_RANK[tier] || 0)) {
+    tier = cur.subscriptionTier;
+  }
 
   await Promise.all([
     userRef.update({
@@ -626,26 +651,39 @@ exports.handleAppStoreNotification = onRequest(async (req, res) => {
 /**
  * Activar premium para un usuario
  */
-async function activatePremiumForUser(userId, tier, expiryTimeMillis, platform, productId) {
+async function activatePremiumForUser(userId, tier, expiryTimeMillis, platform, productId, purchaseToken) {
   const db = getFirestore();
   const expiresAt = Timestamp.fromMillis(expiryTimeMillis);
+
+  // 🔒 No degradar: si el usuario YA tiene un tier superior activo, conservarlo.
+  // Evita que una re-verificación de una compra vieja (sandbox contaminado) o un
+  // cambio de plan rebaje premium_plus → premium por error.
+  const userSnap = await db.collection("users").doc(userId).get();
+  const cur = userSnap.data() || {};
+  let effectiveTier = tier;
+  if (_isUserPremiumActive(cur) && (TIER_RANK[cur.subscriptionTier] || 0) > (TIER_RANK[tier] || 0)) {
+    console.log(`⚠️ [activatePremium] ${userId}: tier actual "${cur.subscriptionTier}" supera a "${tier}". No se degrada.`);
+    effectiveTier = cur.subscriptionTier;
+  }
 
   // Actualizar usuario
   await db.collection("users").doc(userId).update({
     isPremium: true,
-    subscriptionTier: tier,
+    subscriptionTier: effectiveTier,
     premiumExpiresAt: expiresAt,
     subscriptionType: "iap",
     subscriptionPlatform: platform,
     lastSubscriptionUpdate: FieldValue.serverTimestamp(),
   });
 
-  // Registrar suscripción
+  // Registrar suscripción (con purchaseToken para que el webhook de renovación
+  // pueda encontrar este registro en Play Store).
   await db.collection("subscriptions").add({
     userId,
-    tier,
+    tier: effectiveTier,
     platform,
     productId,
+    purchaseToken: purchaseToken || null,
     status: "active",
     expiresAt,
     createdAt: FieldValue.serverTimestamp(),
@@ -653,7 +691,7 @@ async function activatePremiumForUser(userId, tier, expiryTimeMillis, platform, 
 
   // Grant créditos mensuales del wallet (idempotente por mes).
   try {
-    const result = await wallet._internal.grantPremiumMonthly(userId, tier);
+    const result = await wallet._internal.grantPremiumMonthly(userId, effectiveTier);
     if (result.granted) {
       console.log(
         `💰 [Wallet] Granteados ${result.amount} créditos a ${userId} ` +
@@ -668,7 +706,7 @@ async function activatePremiumForUser(userId, tier, expiryTimeMillis, platform, 
     console.error(`⚠️ [Wallet] Error en grant Premium para ${userId}: ${e.message}`);
   }
 
-  console.log(`✅ Premium activado para ${userId}: ${tier} hasta ${expiresAt.toDate().toISOString()}`);
+  console.log(`✅ Premium activado para ${userId}: ${effectiveTier} hasta ${expiresAt.toDate().toISOString()}`);
 }
 
 /**
@@ -830,17 +868,38 @@ exports.applyDiscountCode = onCall(async (request) => {
 
     const codeDoc = codesQuery.docs[0];
 
-    // Registrar uso
-    await db.collection("discount_code_uses").add({
-      codeId: codeDoc.id,
-      code: code.toUpperCase(),
-      userId,
-      plan,
-      discountApplied: validation.discountPercent,
-      usedAt: FieldValue.serverTimestamp(),
-    });
+    // 🔒 SEGURIDAD: idempotencia por (codeId, userId). Sin esto, un atacante
+    // puede llamar applyDiscountCode N veces para el MISMO código y inflar
+    // `currentUses` artificialmente, lo que rompe el cap `maxUses` que es la
+    // protección anti-fraude del programa. Usamos doc ID determinístico
+    // `${codeId}__${userId}` y un `.create()` que falla si ya existe.
+    const useId = `${codeDoc.id}__${userId}`;
+    const useRef = db.collection("discount_code_uses").doc(useId);
 
-    // Incrementar contador
+    try {
+      await useRef.create({
+        codeId: codeDoc.id,
+        code: code.toUpperCase(),
+        userId,
+        plan,
+        discountApplied: validation.discountPercent,
+        usedAt: FieldValue.serverTimestamp(),
+      });
+    } catch (createErr) {
+      // ALREADY_EXISTS (code 6 en Firestore): el user ya aplicó este código.
+      // Devolvemos success idempotente sin tocar currentUses.
+      if (createErr && (createErr.code === 6 || createErr.code === "already-exists")) {
+        console.log(`ℹ️ Código ${code} ya fue aplicado por ${userId} — no se incrementa contador`);
+        return {
+          success: true,
+          discountPercent: validation.discountPercent,
+          alreadyApplied: true,
+        };
+      }
+      throw createErr;
+    }
+
+    // Solo incrementar si el .create() recién pasó (primer uso por este user).
     await codeDoc.ref.update({
       currentUses: FieldValue.increment(1),
     });

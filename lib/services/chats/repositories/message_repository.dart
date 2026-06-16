@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 
 import '../../../models/chat_message.dart';
+import '../../../utils/init_diagnostics.dart';
 import '../../../utils/release_logger.dart';
 
 /// Repository especializado para operaciones de mensajes en Firestore
@@ -66,9 +70,50 @@ class MessageRepository {
 
       // ✅ FIX: Verificar si el chat document existe antes de intentar actualizarlo
       // Solo Cloud Functions pueden crear chats, así que si no existe, solo creamos el mensaje
+      //
+      // ✅ FIX cold-start lag: leer SOLO de cache (Source.cache). El doc
+      // del chat está en cache local de Firestore en la mayoría de los casos
+      // — un get() normal en cold start espera ~5s a que se establezca la
+      // conexión gRPC + AppCheck. Source.cache es instantáneo o no-op.
       final chatRef = _firestore.collection(collection).doc(chatId);
-      final chatDoc = await chatRef.get();
-      final chatExists = chatDoc.exists;
+      bool chatExists;
+      try {
+        final chatDoc = await chatRef
+            .get(const GetOptions(source: Source.cache))
+            .timeout(const Duration(seconds: 2));
+        chatExists = chatDoc.exists;
+      } on FirebaseException catch (e) {
+        // Cache miss → asumir que existe (caso normal). Si realmente no
+        // existe, el batch.update() lo va a fallar y propagamos el error.
+        if (e.code == 'unavailable' || e.code == 'not-found') {
+          ReleaseLogger.log(
+            'ℹ️ Chat $chatId no en cache — asumiendo existente',
+            tag: 'MessageRepository',
+          );
+        } else {
+          FirebaseCrashlytics.instance.recordError(
+            e,
+            StackTrace.current,
+            reason: 'createOptimisticMessage: cache read FirebaseException',
+            information: ['chatId=$chatId', 'code=${e.code}'],
+            fatal: false,
+          );
+        }
+        chatExists = true;
+      } on TimeoutException catch (e, st) {
+        ReleaseLogger.warning(
+          'Timeout cache get para $chatId — asumiendo chat existente',
+          tag: 'MessageRepository',
+        );
+        FirebaseCrashlytics.instance.recordError(
+          e,
+          st,
+          reason: 'createOptimisticMessage: cache get timeout',
+          information: ['chatId=$chatId', 'isGroup=$isGroup'],
+          fatal: false,
+        );
+        chatExists = true;
+      }
 
       // ✅ Usar batch write para operación atómica
       final batch = _firestore.batch();
@@ -133,8 +178,17 @@ class MessageRepository {
         batch.update(chatRef, chatUpdateData);
       }
 
-      // 3. Commit batch (atómico)
-      await batch.commit();
+      // 3. Commit batch (atómico) con timeout + 1 retry.
+      // El primer send tras cold start puede hangearse esperando el token de
+      // AppCheck o el handshake gRPC. Sin retry, si el primer intento timeoutea
+      // el user ve "pending → error" sin razón aparente. Con un retry de 500ms
+      // de delay, el segundo intento suele encontrar todo caliente.
+      await _commitBatchWithRetry(
+        batch,
+        chatId: chatId,
+        isGroup: isGroup,
+        messageId: messageId,
+      );
 
       if (!chatExists) {
         ReleaseLogger.warning('Chat document no existía - mensaje creado sin actualizar metadata', tag: 'MessageRepository');
@@ -143,9 +197,95 @@ class MessageRepository {
       ReleaseLogger.log('✅ Mensaje creado${chatExists ? " Y chat actualizado" : ""} con ID: $messageId', tag: 'MessageRepository');
 
       return messageId;
-    } catch (e) {
+    } catch (e, st) {
       ReleaseLogger.error('Error creando mensaje optimista: $e', tag: 'MessageRepository');
+      FirebaseCrashlytics.instance.recordError(
+        e,
+        st,
+        reason: 'createOptimisticMessage failed',
+        information: ['chatId=$chatId', 'isGroup=$isGroup'],
+        fatal: false,
+      );
       throw Exception('Error creando mensaje optimista: $e');
+    }
+  }
+
+  /// Commit con timeout (12s) + 1 retry tras 500ms. Si ambos timeoutean
+  /// reporta a Crashlytics como non-fatal y propaga el error para que el UI
+  /// marque el mensaje como failed.
+  Future<void> _commitBatchWithRetry(
+    WriteBatch batch, {
+    required String chatId,
+    required bool isGroup,
+    required String messageId,
+  }) async {
+    const attemptTimeout = Duration(seconds: 12);
+    final firstAttempt = Stopwatch()..start();
+    try {
+      await batch.commit().timeout(attemptTimeout);
+      firstAttempt.stop();
+      // Si el primer attempt fue rápido (<1s), no reportamos. Si tardó más,
+      // surface en el banner — sugiere que Firestore estaba esperando algo
+      // (AppCheck token, gRPC handshake) y eso es lo que hace lento al
+      // primer send.
+      if (firstAttempt.elapsed.inMilliseconds > 1000) {
+        InitDiagnostics.instance.recordEvent(
+          name: 'Send: batch.commit (primera)',
+          duration: firstAttempt.elapsed,
+        );
+      }
+      return;
+    } on TimeoutException catch (e, st) {
+      firstAttempt.stop();
+      ReleaseLogger.warning(
+        '⏱️ batch.commit() timeout (12s) — reintentando una vez',
+        tag: 'MessageRepository',
+      );
+      FirebaseCrashlytics.instance.recordError(
+        e,
+        st,
+        reason: 'createOptimisticMessage: batch.commit() timeout (retrying)',
+        information: ['chatId=$chatId', 'isGroup=$isGroup', 'messageId=$messageId'],
+        fatal: false,
+      );
+      InitDiagnostics.instance.recordEvent(
+        name: 'Send: batch.commit TIMEOUT (retry needed)',
+        duration: firstAttempt.elapsed,
+        failed: true,
+        errorMessage: 'Primera commit timeoutó, hay retry en curso',
+      );
+    } catch (e, st) {
+      firstAttempt.stop();
+      // Cualquier otro error (PERMISSION_DENIED, network) no se retraea acá —
+      // que el outer catch lo propague al user.
+      FirebaseCrashlytics.instance.recordError(
+        e,
+        st,
+        reason: 'createOptimisticMessage: batch.commit() failed (no retry)',
+        information: ['chatId=$chatId', 'isGroup=$isGroup', 'messageId=$messageId'],
+        fatal: false,
+      );
+      rethrow;
+    }
+
+    // Retry tras 500ms — suficiente para que AppCheck/gRPC terminen de
+    // warmupear si esa era la causa del timeout.
+    await Future.delayed(const Duration(milliseconds: 500));
+    try {
+      await batch.commit().timeout(attemptTimeout);
+    } catch (e, st) {
+      ReleaseLogger.error(
+        '❌ batch.commit() falló también en el retry: $e',
+        tag: 'MessageRepository',
+      );
+      FirebaseCrashlytics.instance.recordError(
+        e,
+        st,
+        reason: 'createOptimisticMessage: batch.commit() retry exhausted',
+        information: ['chatId=$chatId', 'isGroup=$isGroup', 'messageId=$messageId'],
+        fatal: false,
+      );
+      rethrow;
     }
   }
 

@@ -241,9 +241,15 @@ class CharacterService {
       onProgress?.call(0.05);
       onStatusUpdate?.call('Iniciando transformación...');
 
+      // ⏱️ Timeout 180s: nano_banana (gpt-image-2 low) NO usa polling async —
+      // la CF hace la llamada sync a Replicate y solo retorna cuando completa.
+      // Esa llamada puede tardar 60-120s, así que 60s del cliente era muy
+      // ajustado y rompía con DEADLINE_EXCEEDED en cualquier transformación
+      // que durara > 60s. La CF está configurada con timeoutSeconds=300, así
+      // que tenemos espacio. 180s es buen balance UX/safety.
       final createCallable = _functions.httpsCallable(
         'createCharacterTransformation',
-        options: HttpsCallableOptions(timeout: Duration(seconds: 60)),
+        options: HttpsCallableOptions(timeout: Duration(seconds: 180)),
       );
 
       final createResult = await createCallable.call({

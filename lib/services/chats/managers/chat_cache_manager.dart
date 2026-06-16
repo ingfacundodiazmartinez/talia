@@ -369,8 +369,32 @@ class ChatCacheManager {
       }
     }
 
+    // ✅ Dedup por localId también entre mensajes principales: si un optimista
+    // quedó en el cache principal junto a su versión confirmada, o si dos docs
+    // confirmados comparten localId (doble envío), solo uno debe renderizarse
+    // (la UI usa localId como key estable de la burbuja).
+    // localIds que ya tienen versión confirmada (doc real, id != localId):
+    final confirmedLocalIds = <String>{};
+    for (final m in mainMessages) {
+      if (m.localId != null && m.localId != m.id) {
+        confirmedLocalIds.add(m.localId!);
+      }
+    }
+
     // Agregar mensajes del cache principal PRIMERO (tienen precedencia - son los reales de Firestore)
+    final seenConfirmedLocalIds = <String>{};
     for (final message in mainMessages) {
+      final localId = message.localId;
+      if (localId != null) {
+        // Optimista cuya versión confirmada ya está en la lista — skip.
+        if (message.id == localId && confirmedLocalIds.contains(localId)) {
+          continue;
+        }
+        // Segundo doc confirmado con el mismo localId — skip.
+        if (message.id != localId && !seenConfirmedLocalIds.add(localId)) {
+          continue;
+        }
+      }
       if (!seenIds.contains(message.id)) {
         allMessages.add(message);
         seenIds.add(message.id);
@@ -392,16 +416,21 @@ class ChatCacheManager {
       }
     }
 
-    // ✅ V4: Ordenar por timestamp del servidor SIEMPRE
-    // Mensajes sin timestamp (pending) van al principio (más recientes)
+    // ✅ Ordenar por tiempo EFECTIVO (timestamp del servidor, o localTimestamp
+    // si todavía no tiene). Antes los mensajes sin timestamp de servidor iban
+    // SIEMPRE primero (= abajo en la lista reverse), así que un mensaje fallido
+    // (que nunca obtiene timestamp de servidor) quedaba clavado abajo de todo
+    // para siempre, debajo de los mensajes nuevos. Usando localTimestamp como
+    // fallback, el fallido queda en su lugar cronológico y los mensajes nuevos
+    // (más recientes) se ubican debajo. Un mensaje recién enviado sigue yendo
+    // abajo porque su localTimestamp es ~ahora.
     allMessages.sort((a, b) {
-      // Mensajes sin timestamp del servidor van primero (son los más recientes/pending)
-      if (a.timestamp == null && b.timestamp == null) return 0;
-      if (a.timestamp == null) return -1; // a va primero (más reciente)
-      if (b.timestamp == null) return 1;  // b va primero (más reciente)
-
-      // Ambos tienen timestamp del servidor - ordenar descendente
-      return b.timestamp!.compareTo(a.timestamp!);
+      final aTime = a.timestamp?.toDate() ?? a.localTimestamp;
+      final bTime = b.timestamp?.toDate() ?? b.localTimestamp;
+      if (aTime == null && bTime == null) return 0;
+      if (aTime == null) return 1;  // sin ningún tiempo → al final (arriba)
+      if (bTime == null) return -1;
+      return bTime.compareTo(aTime); // descendente: más reciente primero (index 0)
     });
 
     return allMessages;

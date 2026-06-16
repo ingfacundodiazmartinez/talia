@@ -1,15 +1,20 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/character.dart';
 import '../services/ad_service.dart';
+import '../services/app_config_service.dart';
 import '../services/character_service.dart';
 import '../services/credit_wallet_service.dart';
 import '../services/subscription_service.dart';
 import '../theme_service.dart';
 import '../utils/release_logger.dart';
 import '../widgets/premium_paywall_dialog.dart';
+import '../link_parent_child.dart';
 
 /// Pantalla fullscreen para elegir personaje (face-swap / IA).
 ///
@@ -46,6 +51,10 @@ class _CharacterSelectorScreenState extends State<CharacterSelectorScreen> {
   /// que se cargue el rol — evita mostrar copy adulto fugazmente al niño.
   bool _isParent = false;
 
+  /// Si el hijo tiene al menos un padre vinculado. Define el CTA del modal de
+  /// sin-créditos: con padre → "Avisar a mi familia"; sin padre → "Vincular".
+  bool _hasLinkedParent = false;
+
   @override
   void initState() {
     super.initState();
@@ -64,13 +73,48 @@ class _CharacterSelectorScreenState extends State<CharacterSelectorScreen> {
           .get();
       if (!doc.exists) return;
       final role = doc.data()?['role'] as String?;
+      final linkedParents = doc.data()?['linkedParentIds'];
       if (mounted) {
         setState(() {
           _isParent = role == 'parent' || role == 'adult';
+          _hasLinkedParent = linkedParents is List && linkedParents.isNotEmpty;
         });
       }
     } catch (e) {
       ReleaseLogger.log('No se pudo cargar rol: $e');
+    }
+  }
+
+  /// El hijo pide a sus padres vinculados que carguen créditos (CF manda push).
+  Future<void> _requestCreditsFromParents() async {
+    try {
+      final res = await FirebaseFunctions.instance
+          .httpsCallable('requestCreditsFromParents')
+          .call();
+      final count = (res.data?['parentsNotified'] as int?) ?? 0;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(count > 1
+            ? 'Les avisamos a tu familia ✨'
+            : 'Le avisamos a tu familia ✨'),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 2),
+      ));
+    } on FirebaseFunctionsException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.code == 'resource-exhausted'
+            ? (e.message ?? 'Ya avisaste recién, esperá un rato.')
+            : 'No se pudo avisar. Intentá de nuevo.'),
+        backgroundColor: Colors.orange,
+        duration: const Duration(seconds: 2),
+      ));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('No se pudo avisar. Intentá de nuevo.'),
+        backgroundColor: Colors.orange,
+      ));
     }
   }
 
@@ -177,36 +221,156 @@ class _CharacterSelectorScreenState extends State<CharacterSelectorScreen> {
     if (mounted) Navigator.of(context).pop(character);
   }
 
-  /// Padre dispara un rewarded ad para ganar 1 crédito.
-  /// Se llama desde el banner de disponibilidad y desde el modal de bloqueo.
-  Future<void> _onWatchAdPressed() async {
-    // Asegurar que hay un ad pre-cargado
-    if (!_adService.isRewardedAdLoaded) {
-      await _adService.loadRewardedAd();
-      await Future.delayed(const Duration(milliseconds: 500));
-    }
-    if (!_adService.isRewardedAdLoaded) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No hay videos disponibles. Intentá en un rato.'),
-            duration: Duration(seconds: 2),
-          ),
-        );
+  /// Padre dispara un rewarded ad para ganar 1 crédito (atajo del banner).
+  Future<void> _onWatchAdPressed() => _watchAdsForCredits(1);
+
+  /// Padre mira [count] videos seguidos para ganar [count] créditos.
+  /// Se usa con count=1 desde el banner y con count=créditos_faltantes desde
+  /// el modal de bloqueo (ej: si una transformación cuesta 2 y tiene 0).
+  ///
+  /// Al terminar los videos NO asumimos que el crédito ya está: el grant es
+  /// async (CF con throttle/tope diario), así que mostramos un spinner y
+  /// esperamos a que el saldo realmente suba en el wallet (stream de Firestore)
+  /// antes de confirmar. Así el usuario nunca ve "ganaste" sin que se acredite.
+  Future<void> _watchAdsForCredits(int count) async {
+    final startBalance = await _currentBalance();
+
+    int videosCompleted = 0;
+    bool everShowed = false;
+    for (var i = 0; i < count; i++) {
+      if (!_adService.isRewardedAdLoaded) {
+        await _adService.loadRewardedAd();
+        await Future.delayed(const Duration(milliseconds: 500));
       }
+      if (!_adService.isRewardedAdLoaded) break;
+      everShowed = true;
+      final ok = await _adService.showRewardedAd();
+      if (!mounted) return;
+      if (!ok) break; // el usuario cerró antes de completar el video
+      videosCompleted++;
+      // Respiro entre videos: deja precargar el siguiente.
+      if (i < count - 1) {
+        await Future.delayed(const Duration(seconds: 1));
+      }
+    }
+
+    if (!mounted) return;
+
+    if (videosCompleted == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(everShowed
+            ? 'Necesitás ver el video completo para ganar el crédito.'
+            : 'No hay videos disponibles. Intentá en un rato.'),
+        duration: const Duration(seconds: 3),
+      ));
       return;
     }
-    final earned = await _adService.showRewardedAd();
+
+    // Spinner hasta que el saldo realmente suba en el wallet (o timeout).
+    _showProcessingSpinner(videosCompleted > 1
+        ? 'Acreditando $videosCompleted créditos...'
+        : 'Acreditando crédito...');
+    final finalBalance =
+        await _waitForCredits(startBalance + videosCompleted);
     if (!mounted) return;
-    if (earned) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('¡Ganaste 1 crédito!'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
+    Navigator.of(context, rootNavigator: true).pop(); // cerrar spinner
+
+    final landed = finalBalance - startBalance;
+    if (landed > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(landed == 1
+            ? '¡Ganaste 1 crédito!'
+            : '¡Ganaste $landed créditos!'),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 2),
+      ));
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(
+            'No se pudo acreditar todavía. Esperá unos segundos e intentá de nuevo.'),
+        backgroundColor: Colors.orange,
+        duration: Duration(seconds: 3),
+      ));
     }
+  }
+
+  /// Lee el saldo actual del wallet (un solo valor del stream).
+  Future<int> _currentBalance() async {
+    try {
+      final c = await _walletService
+          .watchMaxAvailableCredits()
+          .first
+          .timeout(const Duration(seconds: 3));
+      return c ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// Espera a que el saldo del wallet alcance [target] (los créditos recién
+  /// acreditados por la CF). Si no llega en [timeout], devuelve el saldo actual.
+  Future<int> _waitForCredits(int target,
+      {Duration timeout = const Duration(seconds: 8)}) async {
+    try {
+      return await _walletService
+          .watchMaxAvailableCredits()
+          .map((c) => c ?? 0)
+          .firstWhere((c) => c >= target)
+          .timeout(timeout);
+    } catch (_) {
+      return _currentBalance();
+    }
+  }
+
+  /// Overlay no descartable con [message] mientras se procesa algo (acreditar
+  /// créditos de un video o de una compra).
+  void _showProcessingSpinner(String message) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.8),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  message,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+
+  /// CTA secundario de la modal de sin-créditos: abre el paywall para
+  /// suscribirse y recibir créditos cada mes (Premium 75 / Premium+ 200).
+  void _showSubscribeForCredits() {
+    PremiumPaywallDialog.show(
+      context,
+      feature: const PremiumFeature(
+        id: 'credits_subscription',
+        name: 'Créditos todos los meses',
+        description:
+            'Suscribite y recibí créditos cada mes para transformar fotos '
+            'con IA, sin tener que mirar videos.',
+        requiredTier: SubscriptionTier.premium,
+        iconName: '✨',
+      ),
+    );
   }
 
   void _showPremiumPaywall(Character character) {
@@ -228,17 +392,56 @@ class _CharacterSelectorScreenState extends State<CharacterSelectorScreen> {
     );
   }
 
-  /// Modal cuando no hay créditos suficientes. Diferencia copy y CTA según rol:
-  /// - Hijo: pide ayuda al padre, CTA neutral "Entendido".
-  /// - Padre: ofrece acción directa "Ver video ahora".
+  /// Modal cuando no hay créditos suficientes. 3 casos con CTA accionable:
+  /// - Padre: "Ver video ahora" (rewarded ad).
+  /// - Hijo CON padre vinculado: "Avisar a mi familia" (push al padre).
+  /// - Hijo SIN padre vinculado: "Vincular a mi familia" (pantalla de vínculo).
   void _showInsufficientCreditsModal(Character character,
       {required int cost, required int balance}) {
     final colorScheme = Theme.of(context).colorScheme;
-    final title = _isParent ? '¡Casi listo!' : '¡Estás a un paso!';
-    final body = _isParent
-        ? 'Mirá un video corto para desbloquear ${character.name}.'
-        : 'Pedile a papá o mamá que vea unos videos cortos '
-            'para que puedas transformarte en ${character.name}.';
+
+    // El caller garantiza balance < cost, así que missing >= 1.
+    final missing = cost - balance;
+
+    final String title;
+    final String body;
+    final IconData headerIcon;
+    final IconData btnIcon;
+    final String btnLabel;
+    final VoidCallback onAction;
+
+    if (_isParent) {
+      title = '¡Casi listo!';
+      body = missing == 1
+          ? 'Te falta 1 crédito para desbloquear ${character.name}. '
+              'Mirá un video corto para conseguirlo.'
+          : 'Te faltan $missing créditos para desbloquear ${character.name}. '
+              'Mirá $missing videos cortos para conseguirlos.';
+      headerIcon = Icons.play_circle_outline;
+      btnIcon = Icons.play_arrow;
+      btnLabel = missing == 1 ? 'Ver video ahora' : 'Ver $missing videos';
+      onAction = () => _watchAdsForCredits(missing);
+    } else if (_hasLinkedParent) {
+      title = '¡Estás a un paso!';
+      body = 'Avisale a tu familia para que mire unos videos y cargue créditos, '
+          'así podés transformarte en ${character.name}.';
+      headerIcon = Icons.celebration_outlined;
+      btnIcon = Icons.notifications_active_outlined;
+      btnLabel = 'Avisar a mi familia';
+      onAction = _requestCreditsFromParents;
+    } else {
+      title = '¡Estás a un paso!';
+      body = 'Vinculá a tu mamá o papá para seguir generando historias con IA '
+          'y transformarte en ${character.name}.';
+      headerIcon = Icons.family_restroom;
+      btnIcon = Icons.link;
+      btnLabel = 'Vincular a mi familia';
+      onAction = () {
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const GenerateLinkCodeScreen()),
+        );
+      };
+    }
 
     showDialog(
       context: context,
@@ -256,13 +459,7 @@ class _CharacterSelectorScreenState extends State<CharacterSelectorScreen> {
                   color: Colors.orange.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(
-                  _isParent
-                      ? Icons.play_circle_outline
-                      : Icons.celebration_outlined,
-                  color: Colors.orange[700],
-                  size: 40,
-                ),
+                child: Icon(headerIcon, color: Colors.orange[700], size: 40),
               ),
               const SizedBox(height: 20),
               Text(
@@ -284,12 +481,11 @@ class _CharacterSelectorScreenState extends State<CharacterSelectorScreen> {
                 child: ElevatedButton.icon(
                   onPressed: () {
                     Navigator.of(dialogCtx).pop();
-                    if (_isParent) _onWatchAdPressed();
+                    onAction();
                   },
-                  icon: Icon(
-                      _isParent ? Icons.play_arrow : Icons.check, size: 20),
+                  icon: Icon(btnIcon, size: 20),
                   label: Text(
-                    _isParent ? 'Ver video ahora' : 'Entendido',
+                    btnLabel,
                     style: const TextStyle(
                         fontSize: 15, fontWeight: FontWeight.w600),
                   ),
@@ -301,6 +497,23 @@ class _CharacterSelectorScreenState extends State<CharacterSelectorScreen> {
                   ),
                 ),
               ),
+              // CTA secundario (solo padre): suscribirse para créditos mensuales.
+              if (_isParent && AppConfigService().premiumEnabled) ...[
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: () {
+                    Navigator.of(dialogCtx).pop();
+                    _showSubscribeForCredits();
+                  },
+                  icon: const Icon(Icons.star_rounded, size: 18),
+                  label: const Text(
+                    'o suscribite y recibí créditos todos los meses',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -445,29 +658,46 @@ class _AvailabilityIndicator extends StatelessWidget {
     IconData icon;
     bool isActionable = false;
 
-    if (c >= 20) {
-      label = isParent
-          ? 'Tenés muchos créditos disponibles'
-          : 'Podés transformarte muchas veces';
-      bgColor = colorScheme.primary.withValues(alpha: 0.10);
-      fgColor = colorScheme.primary;
-      icon = Icons.auto_awesome;
-    } else if (c >= 4) {
-      label = 'Te quedan algunas transformaciones';
-      bgColor = Colors.orange.withValues(alpha: 0.12);
-      fgColor = Colors.orange[800]!;
-      icon = Icons.tips_and_updates_outlined;
-    } else {
-      if (isParent) {
-        label = 'Mirá un video para ganar 1 crédito';
+    if (isParent) {
+      // Padres ven el número real de créditos, así el +1 tras un video es
+      // visible al instante (el saldo viene de un stream de Firestore en vivo).
+      final plural = c == 1 ? 'crédito' : 'créditos';
+      if (c >= 4) {
+        label = 'Tenés $c $plural disponibles';
+        bgColor = colorScheme.primary.withValues(alpha: 0.10);
+        fgColor = colorScheme.primary;
+        icon = Icons.auto_awesome;
+      } else if (c >= 1) {
+        label = 'Tenés $c $plural. Mirá un video para ganar 1 más';
         isActionable = onTapEarn != null;
         icon = Icons.play_circle_outline;
+        bgColor = Colors.orange.withValues(alpha: 0.12);
+        fgColor = Colors.orange[800]!;
+      } else {
+        label = 'No te quedan créditos. Mirá un video para ganar 1';
+        isActionable = onTapEarn != null;
+        icon = Icons.play_circle_outline;
+        bgColor = Colors.red.withValues(alpha: 0.10);
+        fgColor = Colors.red[700]!;
+      }
+    } else {
+      // Niños: lenguaje cualitativo, sin números (decisión de diseño).
+      if (c >= 20) {
+        label = 'Podés transformarte muchas veces';
+        bgColor = colorScheme.primary.withValues(alpha: 0.10);
+        fgColor = colorScheme.primary;
+        icon = Icons.auto_awesome;
+      } else if (c >= 4) {
+        label = 'Te quedan algunas transformaciones';
+        bgColor = Colors.orange.withValues(alpha: 0.12);
+        fgColor = Colors.orange[800]!;
+        icon = Icons.tips_and_updates_outlined;
       } else {
         label = 'Pedile a papá/mamá que vea videos';
         icon = Icons.notifications_active_outlined;
+        bgColor = Colors.red.withValues(alpha: 0.10);
+        fgColor = Colors.red[700]!;
       }
-      bgColor = Colors.red.withValues(alpha: 0.10);
-      fgColor = Colors.red[700]!;
     }
 
     final content = Container(
@@ -650,9 +880,13 @@ class _CharacterCard extends StatelessWidget {
                 child: _CostChip(cost: cost),
               ),
 
-              // 7. Badge IA (top-left) si usa modelo generativo
-              if (character.usesGenerativeAi)
-                const Positioned(top: 8, left: 8, child: _AiBadge()),
+              // 7. Badge IA (top-left): TODOS los personajes usan IA (Replicate).
+              //    Los generativos (p_image_edit / nano_banana) muestran "IA+".
+              Positioned(
+                top: 8,
+                left: 8,
+                child: _AiBadge(isPlus: character.usesGenerativeAi),
+              ),
 
               // 8. Badge Premium (top-right)
               if (isPremiumChar)
@@ -723,37 +957,49 @@ class _BottomGradient extends StatelessWidget {
 }
 
 class _AiBadge extends StatelessWidget {
-  const _AiBadge();
+  /// true para modelos generativos (p_image_edit / nano_banana): muestra "IA+"
+  /// con gradiente dorado. false para face_swap: "IA" con gradiente rosa-violeta.
+  final bool isPlus;
 
-  static const _gradientStart = Color(0xFFFF6B9D);
-  static const _gradientEnd = Color(0xFFA855F7);
+  const _AiBadge({this.isPlus = false});
+
+  // Básico (face_swap): rosa → violeta
+  static const _basicStart = Color(0xFFFF6B9D);
+  static const _basicEnd = Color(0xFFA855F7);
+
+  // Plus (generativo): dorado
+  static const _plusStart = Color(0xFFFFD54F);
+  static const _plusEnd = Color(0xFFFF8F00);
 
   @override
   Widget build(BuildContext context) {
+    final end = isPlus ? _plusEnd : _basicEnd;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [_gradientStart, _gradientEnd],
+          colors: isPlus
+              ? const [_plusStart, _plusEnd]
+              : const [_basicStart, _basicEnd],
         ),
         borderRadius: BorderRadius.circular(8),
         boxShadow: [
           BoxShadow(
-            color: _gradientEnd.withValues(alpha: 0.4),
+            color: end.withValues(alpha: 0.4),
             blurRadius: 6,
           ),
         ],
       ),
-      child: const Row(
+      child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.auto_awesome, color: Colors.white, size: 12),
-          SizedBox(width: 3),
+          const Icon(Icons.auto_awesome, color: Colors.white, size: 12),
+          const SizedBox(width: 3),
           Text(
-            'IA',
-            style: TextStyle(
+            isPlus ? 'IA+' : 'IA',
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 11,
               fontWeight: FontWeight.w700,

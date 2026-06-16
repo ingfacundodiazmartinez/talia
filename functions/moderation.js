@@ -17,6 +17,35 @@ const {
 } = require("./moderation-constants");
 
 // ═══════════════════════════════════════════════════════════════
+// PUSH IDEMPOTENCY - evita push duplicado en retries del trigger
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Adquirir el "lock" de push para un mensaje. Cloud Functions puede
+ * reintentar el evento si la función falla DESPUÉS de enviar el push
+ * (ej. error posterior en updateChatLastMessageIfNewer) — sin este guard
+ * el receptor recibía el mismo banner dos veces. Se marca ANTES de enviar
+ * (optimista): preferimos perder un push en el caso rarísimo de crash
+ * justo después de marcar, antes que duplicar.
+ */
+async function acquirePushLock(messageRef) {
+  try {
+    const fresh = await messageRef.get();
+    if (fresh.exists && fresh.get("pushSentByModeration") === true) {
+      console.log(`⏭️ [PushLock] Push ya enviado para ${messageRef.id} (retry) — skip`);
+      return false;
+    }
+    await messageRef.update({ pushSentByModeration: true });
+    return true;
+  } catch (e) {
+    // Fail-open: ante un error transitorio preferimos riesgo de duplicado
+    // a perder la notificación.
+    console.log(`⚠️ [PushLock] Error adquiriendo lock (${e.message}) — continuando`);
+    return true;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // CONTEXT CACHE - Reduce Firestore reads for moderation
 // ═══════════════════════════════════════════════════════════════
 
@@ -415,9 +444,12 @@ exports.moderateMessage = onDocumentCreated(
   {
     document: "chats/{chatId}/messages/{messageId}",
     region: "us-central1",
-    // ✅ OPTIMIZACIÓN: minInstances: 0 para ahorrar costos (~$15-30/mes)
-    // El cold start de ~2-3s es aceptable para moderación asíncrona
-    minInstances: 0,
+    // ⚡ minInstances: 1 → función SIEMPRE caliente (sin cold start). Procesa
+    // todo mensaje (incl. multimedia): modera y dispara el push al receptor.
+    // El cold start de ~2-3s retrasaba la entrega/moderación. Costo: ~$3-6/mes
+    // (1 instancia idle, solo memoria). NOTA: esto NO afecta el "pending" del
+    // que envía (el envío es escritura directa cliente→Storage→Firestore).
+    minInstances: 1,
     maxInstances: 100,
   },
   async (event) => {
@@ -465,19 +497,24 @@ exports.moderateMessage = onDocumentCreated(
             const senderPhotoUrl = senderDoc.exists ? (senderDoc.data().photoURL || null) : null;
 
             // ✅ FIX: Enviar push notification para mensajes aprobados
+            // 🔒 visibleTo: si el receptor bloqueó al sender, el cliente
+            // escribe visibleTo=[sender] — el push se suprime adentro.
             try {
-              await sendDirectPushNotification({
-                userId: receiverId,
-                type: "chat_message",
-                title: senderName,
-                body: messagePreview,
-                chatId: chatId,
-                messageId: messageId,
-                senderId: senderId,
-                senderName: senderName,
-                senderPhotoUrl: senderPhotoUrl,
-              });
-              console.log(`✅ [Pre-aprobado] Push enviado a ${receiverId}`);
+              if (await acquirePushLock(event.data.ref)) {
+                await sendDirectPushNotification({
+                  userId: receiverId,
+                  type: "chat_message",
+                  title: senderName,
+                  body: messagePreview,
+                  chatId: chatId,
+                  messageId: messageId,
+                  senderId: senderId,
+                  senderName: senderName,
+                  senderPhotoUrl: senderPhotoUrl,
+                  visibleTo: messageData.visibleTo,
+                });
+                console.log(`✅ [Pre-aprobado] Push enviado a ${receiverId}`);
+              }
             } catch (pushError) {
               console.error(`❌ [Pre-aprobado] Error enviando push:`, pushError);
             }
@@ -534,18 +571,21 @@ exports.moderateMessage = onDocumentCreated(
           // Crear preview del mensaje - usando función utilitaria
           const messagePreview = getMessagePreview(messageData);
 
-          // Enviar push directo
-          await sendDirectPushNotification({
-            userId: receiverId,
-            type: "chat_message",
-            title: senderName,
-            body: messagePreview,
-            chatId: chatId,
-            messageId: messageId,
-            senderId: senderId,
-            senderName: senderName,
-            senderPhotoUrl: senderPhotoUrl,
-          });
+          // Enviar push directo (con guard de visibleTo e idempotencia)
+          if (await acquirePushLock(event.data.ref)) {
+            await sendDirectPushNotification({
+              userId: receiverId,
+              type: "chat_message",
+              title: senderName,
+              body: messagePreview,
+              chatId: chatId,
+              messageId: messageId,
+              senderId: senderId,
+              senderName: senderName,
+              senderPhotoUrl: senderPhotoUrl,
+              visibleTo: messageData.visibleTo,
+            });
+          }
 
           // ✅ FIX: Actualizar lastMessage también para mensajes pre-moderados
           // sendChatMessage no lo hace cuando requiresModeration=true
@@ -855,15 +895,27 @@ exports.moderateMessage = onDocumentCreated(
       // solo con [senderId] sin moderación activa) la CF no se ejecuta o no
       // hay nada que expandir, así que el destinatario queda invisible.
       if (moderationStatus === "approved" || moderationStatus === "blocked") {
+        // 🔒 Respetar bloqueo unidireccional: si el chat está bloqueado por
+        // el RECEPTOR (no parent_revoked), el mensaje aprobado queda visible
+        // SOLO para el sender — misma semántica que firestore.rules
+        // (needsRestrictedVisibility). Antes la expansión ignoraba el
+        // bloqueo cuando moderación + bloqueo coexistían y el receptor veía
+        // mensajes de alguien que había bloqueado.
+        const blocker = chatData.blockedBy || "";
+        const blockedByReceiver = chatData.isBlocked === true &&
+          chatData.blockedReason !== "parent_revoked" &&
+          blocker !== "" && blocker !== senderId;
+
         const currentVisible = Array.isArray(messageData.visibleTo)
           ? messageData.visibleTo
           : null;
-        const expanded = [senderId, receiverId];
+        const expanded = blockedByReceiver
+          ? [senderId]
+          : [senderId, receiverId];
         // Solo escribir si cambia algo (evita writes redundantes)
         const changed = currentVisible === null ||
-          currentVisible.length !== 2 ||
-          !currentVisible.includes(senderId) ||
-          !currentVisible.includes(receiverId);
+          currentVisible.length !== expanded.length ||
+          !expanded.every((id) => currentVisible.includes(id));
         if (changed) {
           updateData.visibleTo = expanded;
         }
@@ -888,17 +940,22 @@ exports.moderateMessage = onDocumentCreated(
 
         // ✅ OPTIMIZACIÓN: Enviar push directo SIN guardar en DB
         // Esto evita el crecimiento ilimitado de la colección 'notifications'
-        await sendDirectPushNotification({
-          userId: receiverId,
-          type: "chat_message",
-          title: senderName,
-          body: messagePreview,
-          chatId: chatId,
-          messageId: messageId,
-          senderId: senderId,
-          senderName: senderName,
-          senderPhotoUrl: senderPhotoUrl || null,
-        });
+        // 🔒 visibleTo efectivo: la CF acaba de expandirlo en updateData al
+        // aprobar — usar ese, no el del snapshot (que era [sender] pending).
+        if (await acquirePushLock(event.data.ref)) {
+          await sendDirectPushNotification({
+            userId: receiverId,
+            type: "chat_message",
+            title: senderName,
+            body: messagePreview,
+            chatId: chatId,
+            messageId: messageId,
+            senderId: senderId,
+            senderName: senderName,
+            senderPhotoUrl: senderPhotoUrl || null,
+            visibleTo: updateData.visibleTo || messageData.visibleTo,
+          });
+        }
 
         console.log(`✅ Push enviado directamente a ${receiverId} (mensaje aprobado)`);
         if (isStoryReply) {
@@ -963,16 +1020,48 @@ exports.moderateMessage = onDocumentCreated(
 
       // En caso de error, aprobar el mensaje para no interrumpir la conversación
       try {
+        const senderId = messageData?.senderId;
+
+        // 🔒 FIX: al aprobar por error hay que EXPANDIR visibleTo también.
+        // Antes quedaba [senderId] (lo escribió el cliente con moderación
+        // activa) → el mensaje quedaba "approved" pero invisible para el
+        // receptor para siempre (el stream filtra por visibleTo).
+        let errorReceiverId = null;
+        let errorBlockedByReceiver = false;
+        try {
+          if (chatId && senderId) {
+            const chatSnap = await db.collection("chats").doc(chatId).get();
+            if (chatSnap.exists) {
+              const chatSnapData = chatSnap.data();
+              const participants = chatSnapData.participants || [];
+              errorReceiverId = participants.find((p) => p !== senderId) || null;
+              // Mismo criterio de bloqueo que la rama normal
+              const blocker = chatSnapData.blockedBy || "";
+              errorBlockedByReceiver = chatSnapData.isBlocked === true &&
+                chatSnapData.blockedReason !== "parent_revoked" &&
+                blocker !== "" && blocker !== senderId;
+            }
+          }
+        } catch (e) {
+          console.log(`⚠️ No se pudo leer chat para expandir visibleTo: ${e.message}`);
+        }
+
         await event.data.ref.update({
           moderationStatus: "approved",
           moderatedAt: new Date(),
           moderationReason: "Error en análisis",
           moderationError: error.message,
+          ...(errorReceiverId && senderId
+            ? {
+                visibleTo: errorBlockedByReceiver
+                  ? [senderId]
+                  : [senderId, errorReceiverId],
+              }
+            : {}),
         });
 
         // ✅ FIX: Actualizar lastMessage también en caso de error
         // para que el receptor pueda ver el mensaje en su lista de chats
-        const senderId = messageData?.senderId;
         if (chatId && senderId) {
           const messagePreview = getMessagePreview(messageData || {});
 
@@ -986,6 +1075,34 @@ exports.moderateMessage = onDocumentCreated(
           console.log(updated
             ? `📝 Chat ${chatId} actualizado con lastMessage (después de error en moderación)`
             : `⏭️ Chat ${chatId} NO actualizado tras error (mensaje más nuevo ya existe)`);
+
+          // ✅ FIX: enviar push también en este camino. Antes el mensaje se
+          // aprobaba pero el receptor nunca recibía notificación (mensajes
+          // legítimos "mudos" cada vez que la API de moderación fallaba).
+          if (errorReceiverId && !errorBlockedByReceiver) {
+            try {
+              const senderSnap = await db.collection("users").doc(senderId).get();
+              const senderName = senderSnap.exists ? (senderSnap.data().name || "Usuario") : "Usuario";
+              const senderPhotoUrl = senderSnap.exists ? (senderSnap.data().photoURL || null) : null;
+              if (await acquirePushLock(event.data.ref)) {
+                await sendDirectPushNotification({
+                  userId: errorReceiverId,
+                  type: "chat_message",
+                  title: senderName,
+                  body: messagePreview,
+                  chatId: chatId,
+                  messageId: messageId,
+                  senderId: senderId,
+                  senderName: senderName,
+                  senderPhotoUrl: senderPhotoUrl,
+                  visibleTo: [senderId, errorReceiverId],
+                });
+                console.log(`✅ Push enviado a ${errorReceiverId} (aprobado tras error de moderación)`);
+              }
+            } catch (pushError) {
+              console.error(`⚠️ Error enviando push tras fallo de moderación:`, pushError);
+            }
+          }
         }
       } catch (updateError) {
         console.error(`❌ Error actualizando mensaje después de fallo:`, updateError);

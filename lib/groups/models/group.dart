@@ -37,6 +37,9 @@ class Group {
   final DateTime? moderationUpdatedAt;
   final String? moderationUpdatedBy;
 
+  // Solo administradores pueden enviar mensajes (modo "anuncios")
+  final bool adminOnlyMessages;
+
   const Group({
     required this.id,
     required this.name,
@@ -61,6 +64,7 @@ class Group {
     this.moderationLevel,
     this.moderationUpdatedAt,
     this.moderationUpdatedBy,
+    this.adminOnlyMessages = false,
   });
 
   /// Create from Firestore document
@@ -119,6 +123,7 @@ class Group {
       moderationLevel: data['moderationLevel'] as String?,
       moderationUpdatedAt: (data['moderationUpdatedAt'] as Timestamp?)?.toDate(),
       moderationUpdatedBy: data['moderationUpdatedBy'] as String?,
+      adminOnlyMessages: data['adminOnlyMessages'] as bool? ?? false,
     );
   }
 
@@ -147,6 +152,7 @@ class Group {
       if (moderationLevel != null) 'moderationLevel': moderationLevel,
       if (moderationUpdatedAt != null) 'moderationUpdatedAt': Timestamp.fromDate(moderationUpdatedAt!),
       if (moderationUpdatedBy != null) 'moderationUpdatedBy': moderationUpdatedBy,
+      'adminOnlyMessages': adminOnlyMessages,
     };
   }
 
@@ -158,6 +164,10 @@ class Group {
 
   /// Check if user is an admin
   bool isAdmin(String userId) => adminIds.contains(userId);
+
+  /// Check if user can send messages (admin-only mode restricts to admins)
+  bool canSendMessages(String userId) =>
+      !adminOnlyMessages || isAdmin(userId);
 
   /// Check if moderation is enabled
   bool get hasModeration => moderationEnabled;
@@ -199,6 +209,7 @@ class Group {
     String? moderationLevel,
     DateTime? moderationUpdatedAt,
     String? moderationUpdatedBy,
+    bool? adminOnlyMessages,
   }) {
     return Group(
       id: id ?? this.id,
@@ -224,6 +235,7 @@ class Group {
       moderationLevel: moderationLevel ?? this.moderationLevel,
       moderationUpdatedAt: moderationUpdatedAt ?? this.moderationUpdatedAt,
       moderationUpdatedBy: moderationUpdatedBy ?? this.moderationUpdatedBy,
+      adminOnlyMessages: adminOnlyMessages ?? this.adminOnlyMessages,
     );
   }
 

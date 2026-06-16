@@ -1,0 +1,54 @@
+default_platform(:android)
+
+AAB_PATH = "../build/app/outputs/bundle/productionRelease/app-production-release.aab"
+
+platform :android do
+  desc "Verify the service account has publishing permissions"
+  lane :validate do
+    validate_play_store_json_key(
+      json_key: "../functions/play-store-service-account.json"
+    )
+  end
+
+  desc "Upload AAB to internal testing track"
+  lane :internal do
+    upload_to_play_store(
+      track: "internal",
+      aab: AAB_PATH,
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_changelogs: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      release_status: "draft"
+    )
+  end
+
+  desc "Upload AAB to production track as draft (review the release in Play Console before rollout)"
+  lane :production_draft do
+    upload_to_play_store(
+      track: "production",
+      aab: AAB_PATH,
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_changelogs: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      release_status: "draft"
+    )
+  end
+
+  desc "Upload AAB to production and immediately submit for review"
+  lane :production_submit do
+    upload_to_play_store(
+      track: "production",
+      aab: AAB_PATH,
+      skip_upload_apk: true,
+      skip_upload_metadata: true,
+      skip_upload_changelogs: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      release_status: "completed"
+    )
+  end
+end

@@ -78,10 +78,11 @@ class StoryViewerController {
 
       final isCurrentUser = userId == userStories.userId;
 
-      // Para el usuario actual, mostrar todas las historias (incluyendo pendientes/rechazadas)
-      // Para otros usuarios, mostrar solo historias aprobadas
+      // Para el usuario actual, mostrar TODAS las historias (pendientes,
+      // rechazadas y expiradas — para que "Mis historias" sea un histórico
+      // completo). Para otros usuarios, solo historias aprobadas y vigentes.
       final stories = isCurrentUser
-          ? userStories.allUserStories
+          ? userStories.allUserStoriesIncludingExpired
           : userStories.sortedStories;
 
       // Mantener orden cronológico (NO reorganizar por vistas/no vistas)

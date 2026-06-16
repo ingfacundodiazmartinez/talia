@@ -8,6 +8,8 @@ import '../services/contact_alias_service.dart';
 import '../services/search_service.dart';
 import '../services/user_profile_cache_service.dart';
 import '../services/user_cache_service.dart';
+import '../services/message_cache_service.dart';
+import '../groups/services/group_message_cache_service.dart';
 import '../services/share_extension_cache_service.dart';
 import '../utils/release_logger.dart';
 
@@ -161,7 +163,14 @@ class ChildChatsController extends BaseChatsController with ChangeNotifier {
     // Set de IDs de grupos activos para evitar duplicados
     final activeGroupIds = groups.map((g) => g.id).toSet();
 
-    // Agregar chats a la lista con su timestamp
+    // 🔒 SST = Hive. Orden por timestamp del último mensaje en cache.
+    // Fallback a Firestore `createdAt` si el chat no tiene mensajes en cache
+    // todavía (cold start, primer install). NO leemos `lastMessageTime` ni
+    // `lastActivity` de Firestore para ordenar.
+    final msgCache = MessageCacheService();
+    final groupMsgCache = GroupMessageCacheService();
+
+    // Agregar chats a la lista con su timestamp desde Hive.
     for (final chatDoc in chatDocs) {
       final chatData = chatDoc.data() as Map<String, dynamic>;
       final participants = List<String>.from(chatData['participants'] ?? []);
@@ -171,23 +180,30 @@ class ChildChatsController extends BaseChatsController with ChangeNotifier {
       );
 
       if (otherUserId.isNotEmpty) {
-        final timestamp = chatData['lastMessageTime'] as Timestamp? ??
-            chatData['createdAt'] as Timestamp?;
+        final hiveLast = msgCache.getLastMessage(chatDoc.id);
+        final hiveTs = hiveLast?.timestamp?.toDate() ?? hiveLast?.localTimestamp;
+        final fallbackCreatedAt = chatData['createdAt'] as Timestamp?;
+        final ts = hiveTs != null
+            ? Timestamp.fromDate(hiveTs)
+            : fallbackCreatedAt;
         sortableItems.add(_SortableItem(
           item: ChatItem(userId: otherUserId, userData: {}, chatDoc: chatDoc),
-          timestamp: timestamp,
+          timestamp: ts,
         ));
       }
     }
 
-    // Agregar grupos activos a la lista con su timestamp
+    // Agregar grupos activos a la lista con su timestamp desde Hive.
     for (final groupDoc in groups) {
       final groupData = groupDoc.data() as Map<String, dynamic>;
-      final timestamp = groupData['lastActivity'] as Timestamp? ??
-          groupData['createdAt'] as Timestamp?;
+      final hiveLast = groupMsgCache.getLastMessage(groupDoc.id);
+      final fallbackCreatedAt = groupData['createdAt'] as Timestamp?;
+      final ts = hiveLast != null
+          ? Timestamp.fromDate(hiveLast.timestamp)
+          : fallbackCreatedAt;
       sortableItems.add(_SortableItem(
         item: GroupItem(groupId: groupDoc.id, groupData: groupData, isPending: false),
-        timestamp: timestamp,
+        timestamp: ts,
       ));
     }
 

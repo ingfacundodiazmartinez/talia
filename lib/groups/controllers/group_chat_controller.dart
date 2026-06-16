@@ -1,15 +1,16 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 import '../models/models.dart';
 import '../services/services.dart';
-import '../services/group_message_cache_service.dart';
 import '../../services/reaction_service.dart';  // ✅ NEW: For reactions
 import '../../services/media_compression_service.dart';
+import '../../services/sound_service.dart';
 // ✅ Nuevos servicios atómicos
 import '../../services/chats/chat_services.dart';
 import '../../utils/release_logger.dart';
@@ -40,6 +41,10 @@ class GroupChatController {
   String? _error;
   bool _isDisposed = false;  // ✅ NEW: Para ignorar errores después de dispose
 
+  /// Tracking para el sonido de recepción (mensaje entrante con chat abierto).
+  final Set<String> _seenMessageIds = {};
+  bool _receiveSoundBaselineSet = false;
+
   // Subscriptions
   StreamSubscription? _groupSubscription;
   StreamSubscription? _messagesSubscription;
@@ -49,6 +54,18 @@ class GroupChatController {
   // ✅ Track message IDs that failed to mark as read (prevent infinite retry loop)
   final Set<String> _failedMarkAsReadIds = {};
 
+  // ═══════════════════════════════════════════════════════════════════
+  // RESUMEN IA DE MENSAJES SIN LEER
+  // ═══════════════════════════════════════════════════════════════════
+  // Cuando el user entra al grupo con muchos mensajes sin leer (≥20),
+  // ofrecemos un resumen IA. Snapshot ANTES de marcar como leído.
+  static const int summaryThreshold = 20;
+  List<String> _initialUnreadMessageIds = const [];
+  bool _initialUnreadCaptured = false;
+  String? _aiSummary;
+  bool _isSummarizing = false;
+  bool _summaryDismissed = false;
+
   // Callbacks
   Function(Group?)? onGroupChanged;
   Function(List<GroupMessage>)? onMessagesChanged;
@@ -56,6 +73,10 @@ class GroupChatController {
   Function(bool)? onSendingChanged;
   Function(GroupMessage?)? onReplyingToChanged;
   Function(String)? onError;
+  /// Disparado cuando cambia algo del flujo de resumen IA (mensajes unread
+  /// capturados, summary cargando, summary listo, summary descartado).
+  /// La UI lo escucha para rebuildear el banner.
+  Function()? onSummaryStateChanged;
 
   GroupChatController({
     required this.groupId,
@@ -72,6 +93,15 @@ class GroupChatController {
 
   // Getters
   Group? get group => _group;
+
+  /// True si el usuario actual puede enviar mensajes en este grupo.
+  /// Con "solo administradores" activo, solo los admins pueden.
+  /// Default true mientras el grupo no cargó (las rules igual refuerzan).
+  bool get canSendMessages {
+    final currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUserId == null) return false;
+    return _group?.canSendMessages(currentUserId) ?? true;
+  }
   /// Combined list of optimistic + real messages, sorted by timestamp
   /// ✅ FIX: Filtra mensajes anteriores a clearedAt (cuando el usuario "limpia" el grupo)
   List<GroupMessage> get messages {
@@ -336,6 +366,10 @@ class GroupChatController {
           .toList();
     }
 
+    // ✅ Sonido de recepción: mensaje entrante nuevo (de otro, fresco) con el
+    // grupo abierto. Se evalúa contra los mensajes ya filtrados por visibleTo.
+    _maybePlayReceiveSound(firestoreMessages, currentUid);
+
     // Guardar mensajes nuevos en cache
     _cacheService.saveMessages(groupId, firestoreMessages);
 
@@ -369,6 +403,42 @@ class GroupChatController {
     );
   }
 
+  /// Detecta mensajes ENTRANTES nuevos (de otros, frescos) y reproduce el
+  /// sonido de recepción una sola vez por mensaje. La primera emisión es el
+  /// historial → solo fija baseline. El filtro de frescura (15s) evita sonar
+  /// en backfill de mensajes viejos.
+  void _maybePlayReceiveSound(List<GroupMessage> incoming, String? currentUid) {
+    final incomingIds = incoming.map((m) => m.id).toSet();
+
+    if (!_receiveSoundBaselineSet) {
+      _seenMessageIds.addAll(incomingIds);
+      _receiveSoundBaselineSet = true;
+      return;
+    }
+
+    final now = DateTime.now();
+    bool hasFreshIncoming = false;
+    for (final m in incoming) {
+      if (_seenMessageIds.contains(m.id)) continue;
+      if (currentUid != null && m.senderId == currentUid) continue;
+      if (m.isDeleted) continue;
+      if (now.difference(m.timestamp).abs() < const Duration(seconds: 15)) {
+        hasFreshIncoming = true;
+      }
+    }
+
+    _seenMessageIds.addAll(incomingIds);
+    if (_seenMessageIds.length > 2000) {
+      _seenMessageIds
+        ..clear()
+        ..addAll(incomingIds);
+    }
+
+    if (hasFreshIncoming) {
+      SoundService().playReceiveSound();
+    }
+  }
+
   /// Automatically mark unread messages as read
   /// ✅ FIX: Track failed IDs to prevent infinite retry loop on PERMISSION_DENIED
   Future<void> _autoMarkMessagesAsRead(List<GroupMessage> newMessages) async {
@@ -384,6 +454,20 @@ class GroupChatController {
             !_failedMarkAsReadIds.contains(m.id))
         .map((m) => m.id)
         .toList();
+
+    // 📝 Snapshot del primer lote de unreads para el feature de resumen IA.
+    // Solo la PRIMERA vez que entramos al chat — después no contamos los
+    // nuevos que llegan en tiempo real (esos no son "lo que me perdí").
+    if (!_initialUnreadCaptured && unreadMessageIds.isNotEmpty) {
+      _initialUnreadCaptured = true;
+      _initialUnreadMessageIds = List.unmodifiable(unreadMessageIds);
+      onSummaryStateChanged?.call();
+    } else if (!_initialUnreadCaptured && newMessages.isNotEmpty) {
+      // Llegó un batch sin unreads (ya está todo leído) — marcamos para no
+      // capturar más adelante (evita confundir "mensajes nuevos en vivo" con
+      // "lo que me perdí").
+      _initialUnreadCaptured = true;
+    }
 
     if (unreadMessageIds.isNotEmpty) {
       try {
@@ -416,6 +500,11 @@ class GroupChatController {
 
     final currentUserId = FirebaseAuth.instance.currentUser?.uid;
     if (currentUserId == null) return false;
+
+    // Solo admins pueden enviar si adminOnlyMessages está activo.
+    // Guard temprano: evita crear el mensaje optimista que las rules
+    // rechazarían igual server-side.
+    if (!canSendMessages) return false;
 
     // Generate local ID for optimistic matching
     final localId = const Uuid().v4();
@@ -452,6 +541,7 @@ class GroupChatController {
 
     // Add optimistic message immediately
     _optimisticMessages.add(optimisticMessage);
+    SoundService().playSendSound(); // ✅ sonido corto de envío
     onMessagesChanged?.call(messages);
 
     // Clear reply immediately for better UX
@@ -511,6 +601,9 @@ class GroupChatController {
     String? senderPhotoURL,
     String? localId, // For optimistic UI matching
   }) async {
+    // Solo admins pueden enviar si adminOnlyMessages está activo
+    if (!canSendMessages) return false;
+
     _setSending(true);
 
     try {
@@ -815,6 +908,7 @@ class GroupChatController {
   /// Add an optimistic message (shows immediately while uploading)
   void addOptimisticMessage(GroupMessage message) {
     _optimisticMessages.insert(0, message);
+    SoundService().playSendSound(); // ✅ sonido corto de envío (media)
     onMessagesChanged?.call(messages);
     ReleaseLogger.log('Optimistic message added: ${message.id}', tag: 'GroupChatController');
   }
@@ -865,5 +959,65 @@ class GroupChatController {
     _messagesSubscription?.cancel();
     _reactionsSubscription?.cancel();
     _deletedMessagesSubscription?.cancel();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // RESUMEN IA — getters y acciones
+  // ═══════════════════════════════════════════════════════════════════
+
+  /// Cantidad de mensajes sin leer cuando el user entró al chat.
+  int get initialUnreadCount => _initialUnreadMessageIds.length;
+
+  /// ID del mensaje no leído más viejo (o null si no hay). Para scroll-to.
+  String? get firstUnreadMessageId =>
+      _initialUnreadMessageIds.isEmpty ? null : _initialUnreadMessageIds.first;
+
+  /// ¿Debería mostrarse el banner de resumen?
+  bool get shouldOfferSummary =>
+      !_summaryDismissed &&
+      _initialUnreadMessageIds.length >= summaryThreshold;
+
+  /// Resumen ya generado por la CF (null si todavía no se pidió).
+  String? get aiSummary => _aiSummary;
+
+  /// ¿Está corriendo la llamada a la CF?
+  bool get isSummarizing => _isSummarizing;
+
+  /// Generar el resumen llamando a la CF.
+  Future<void> generateSummary() async {
+    if (_isSummarizing) return;
+    if (_initialUnreadMessageIds.isEmpty) return;
+
+    _isSummarizing = true;
+    _aiSummary = null;
+    onSummaryStateChanged?.call();
+
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable('summarizeGroupUnread');
+      final result = await callable.call({
+        'groupId': groupId,
+        'messageIds': _initialUnreadMessageIds,
+      });
+      final data = Map<String, dynamic>.from(result.data as Map);
+      _aiSummary = data['summary'] as String?;
+      ReleaseLogger.log(
+        '✅ Resumen IA generado (${data['messagesIncluded']} msgs)',
+        tag: 'GroupChatController',
+      );
+    } catch (e) {
+      ReleaseLogger.error('Error generando resumen IA: $e', tag: 'GroupChatController');
+      _aiSummary = null;
+      onError?.call('No se pudo generar el resumen');
+    } finally {
+      _isSummarizing = false;
+      onSummaryStateChanged?.call();
+    }
+  }
+
+  /// El user cerró el banner. No volver a mostrarlo en esta sesión del chat.
+  void dismissSummaryBanner() {
+    _summaryDismissed = true;
+    _aiSummary = null;
+    onSummaryStateChanged?.call();
   }
 }

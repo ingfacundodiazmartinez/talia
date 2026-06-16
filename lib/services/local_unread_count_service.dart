@@ -47,7 +47,22 @@ class LocalUnreadCountService extends ChangeNotifier {
         final Map<String, dynamic> decoded = json.decode(jsonString);
         _unreadCounts = decoded.map((key, value) => MapEntry(key, value as int));
       }
-      _currentChatId = _prefs?.getString(_currentChatKey);
+      // 🔒 FIX: NO cargar current_chat_id de prefs en cold start. En cold
+      // start ningún chat está abierto por definición — el valor en prefs es
+      // residuo de una sesión donde la app fue killed con un chat abierto
+      // (dispose nunca corre). Cargarlo hacía que incrementUnreadCount
+      // saltara ese chat y el badge quedara subcontado hasta entrar/salir
+      // del chat. La clave en prefs además quedaba stale para el lado nativo,
+      // así que la limpiamos acá (este servicio inicializa temprano, antes
+      // que NotificationService que hacía esta limpieza demasiado tarde).
+      _currentChatId = null;
+      if (_prefs?.getString(_currentChatKey) != null) {
+        await _prefs?.remove(_currentChatKey);
+        ReleaseLogger.log(
+          '🧹 [LocalUnreadCount] current_chat_id stale limpiado en cold start',
+          tag: 'LocalUnreadCount',
+        );
+      }
     } catch (e) {
       _unreadCounts = {};
     }

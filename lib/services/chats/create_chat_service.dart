@@ -1,6 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../../models/chat.dart';
 import '../../utils/release_logger.dart';
 import '../../utils/chat_utils.dart';
 
@@ -51,22 +51,27 @@ class CreateChatService {
         );
       }
 
-      // Buscar chat existente
-      final existingChat = await _findExistingChat(currentUserId, otherUserId);
-      if (existingChat != null) {
+      // Lookup determinístico: la CF y todo el sistema usan
+      // `{userA}_{userB}` ordenado alfabéticamente como chatId. Un solo
+      // get() doc es mucho más rápido que un query a la collection.
+      final deterministicId = ChatUtils.getChatId(currentUserId, otherUserId);
+      final doc = await _firestore.collection('chats').doc(deterministicId).get();
+      if (doc.exists) {
         ReleaseLogger.log(
-          'Chat existente encontrado: ${existingChat.id}',
+          'Chat existente encontrado: $deterministicId',
           tag: 'CreateChat',
         );
         return (
           success: true,
-          chatId: existingChat.id,
+          chatId: deterministicId,
           message: 'Chat existente',
           isNew: false,
         );
       }
 
-      // Crear nuevo chat
+      // No existe: llamar CF (las rules prohíben write directo a chats/).
+      // La CF valida contacto aprobado, bloqueos bidireccionales,
+      // restricciones parentales y rate limit (10/h).
       final chatId = await _createNewChat(currentUserId, otherUserId);
 
       ReleaseLogger.log('Chat creado: $chatId', tag: 'CreateChat');
@@ -88,46 +93,28 @@ class CreateChatService {
     }
   }
 
-  /// Buscar chat existente entre dos usuarios
-  Future<Chat?> _findExistingChat(
-    String userId1,
-    String userId2,
-  ) async {
-    final query = await _firestore
-        .collection('chats')
-        .where('type', isEqualTo: 'individual')
-        .where('participants', arrayContains: userId1)
-        .get();
-
-    for (final doc in query.docs) {
-      final chat = Chat.fromFirestore(doc);
-      if (chat.participants.contains(userId2) &&
-          chat.participants.length == 2) {
-        return chat;
-      }
-    }
-    return null;
-  }
-
-  /// Crear nuevo chat individual
+  /// Crear nuevo chat individual.
+  ///
+  /// Llama a la Cloud Function `createChat` porque los Firestore rules
+  /// prohíben escritura directa a `chats/{chatId}` desde clientes (la CF
+  /// valida contactos aprobados, bloqueos, restricciones parentales y
+  /// rate limit).
   Future<String> _createNewChat(
     String currentUserId,
     String otherUserId,
   ) async {
-    final participants = [currentUserId, otherUserId]..sort();
-
-    final chatData = {
-      'type': 'individual',
-      'participants': participants,
-      'createdAt': FieldValue.serverTimestamp(),
-      'lastActivity': FieldValue.serverTimestamp(),
-      'lastMessage': null,
-      'lastMessageTime': null,
-      'lastMessageSenderId': null,
-    };
-
-    final docRef = await _firestore.collection('chats').add(chatData);
-    return docRef.id;
+    final functions = FirebaseFunctions.instanceFor(region: 'us-central1');
+    final result = await functions.httpsCallable('createChat').call({
+      'otherUserId': otherUserId,
+    });
+    final data = result.data;
+    if (data is Map) {
+      final chatId = data['chatId'];
+      if (chatId is String && chatId.isNotEmpty) {
+        return chatId;
+      }
+    }
+    throw Exception('CF createChat retornó respuesta inválida: $data');
   }
 
   /// Obtener ID de chat entre dos usuarios (sin crear)
@@ -142,8 +129,8 @@ class CreateChatService {
   Future<bool> existsBetweenUsers(String otherUserId) async {
     final currentUserId = _auth.currentUser?.uid;
     if (currentUserId == null) return false;
-
-    final existing = await _findExistingChat(currentUserId, otherUserId);
-    return existing != null;
+    final chatId = ChatUtils.getChatId(currentUserId, otherUserId);
+    final doc = await _firestore.collection('chats').doc(chatId).get();
+    return doc.exists;
   }
 }

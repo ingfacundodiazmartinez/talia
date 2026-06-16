@@ -307,19 +307,24 @@ class SubscriptionService {
         );
       }
 
-      // Solo Premium+ puede vincular hijos
-      if (status.tier != SubscriptionTier.premiumPlus) {
-        return ChildLimitResult(
-          canAddChild: false,
-          currentChildren: 0,
-          maxChildren: 0,
-          message: 'Necesitas Premium+ para vincular hijos',
-        );
+      // El límite base depende del tier. Todos los tiers permiten vincular
+      // hijos (free=3, premium=3, premiumPlus=3). Compras extras suben el cap.
+      final int baseLimit;
+      switch (status.tier) {
+        case SubscriptionTier.free:
+          baseLimit = _freeChildLimit;
+          break;
+        case SubscriptionTier.premium:
+          baseLimit = _premiumChildLimit;
+          break;
+        case SubscriptionTier.premiumPlus:
+          baseLimit = _premiumPlusChildLimit;
+          break;
       }
 
       final currentChildren = await getLinkedChildrenCount();
       final extraChildren = await getExtraChildrenPurchased();
-      final maxChildren = _premiumPlusChildLimit + extraChildren;
+      final maxChildren = baseLimit + extraChildren;
 
       if (currentChildren >= maxChildren) {
         return ChildLimitResult(
@@ -475,11 +480,11 @@ enum SubscriptionTier {
   String get description {
     switch (this) {
       case SubscriptionTier.free:
-        return '3 face-swaps/día, personajes básicos';
+        return 'Ganá créditos viendo videos, personajes básicos';
       case SubscriptionTier.premium:
-        return '50 face-swaps/mes, personajes exclusivos, sin anuncios';
+        return '75 créditos por mes, personajes exclusivos, sin anuncios';
       case SubscriptionTier.premiumPlus:
-        return '100 face-swaps/mes, todos los personajes, family plan';
+        return '200 créditos por mes, todos los personajes, family plan';
     }
   }
 
@@ -488,24 +493,24 @@ enum SubscriptionTier {
     switch (this) {
       case SubscriptionTier.free:
         return [
-          '3 face-swaps por día',
+          'Ganás créditos viendo videos',
           'Personajes básicos',
-          'Reportes con anuncios',
+          'Reportes de actividad',
         ];
       case SubscriptionTier.premium:
         return [
-          '50 face-swaps por mes',
+          '75 créditos por mes',
+          'Para transformaciones con IA y reportes',
           'Personajes exclusivos',
           'Sin anuncios',
-          '30 reportes por mes',
           'Moderación de audio*',
         ];
       case SubscriptionTier.premiumPlus:
         return [
-          '100 face-swaps por mes',
+          '200 créditos por mes',
+          'Para transformaciones con IA y reportes',
           'Todos los personajes',
           'Sin anuncios',
-          '100 reportes por mes',
           'Moderación de audio, imágenes y videos*',
           'Family plan (3 hijos incluidos)',
           'Soporte prioritario',
@@ -533,8 +538,8 @@ class PremiumFeature {
   // Features reales del plan
   static const moreFaceSwaps = PremiumFeature(
     id: 'more_face_swaps',
-    name: 'Más Face Swaps',
-    description: '50 transformaciones por mes (vs 3/día en plan gratis)',
+    name: 'Créditos mensuales',
+    description: '75 créditos por mes para transformaciones con IA y reportes',
     requiredTier: SubscriptionTier.premium,
     iconName: '🎭',
   );
@@ -557,16 +562,16 @@ class PremiumFeature {
 
   static const monthlyReports = PremiumFeature(
     id: 'monthly_reports',
-    name: 'Reportes Mensuales',
-    description: 'Hasta 30 reportes de actividad por mes',
+    name: 'Reportes de actividad',
+    description: 'Generá reportes de actividad usando tus créditos',
     requiredTier: SubscriptionTier.premium,
     iconName: '📊',
   );
 
   static const maxFaceSwaps = PremiumFeature(
     id: 'max_face_swaps',
-    name: 'Más Face Swaps',
-    description: '100 transformaciones por mes',
+    name: 'Créditos mensuales',
+    description: '200 créditos por mes para transformaciones con IA y reportes',
     requiredTier: SubscriptionTier.premiumPlus,
     iconName: '🎭',
   );
@@ -581,8 +586,8 @@ class PremiumFeature {
 
   static const maxReports = PremiumFeature(
     id: 'max_reports',
-    name: 'Más Reportes',
-    description: 'Hasta 100 reportes de actividad por mes',
+    name: 'Reportes de actividad',
+    description: 'Generá reportes de actividad usando tus créditos',
     requiredTier: SubscriptionTier.premiumPlus,
     iconName: '📈',
   );

@@ -39,6 +39,9 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
   final FavoriteService _favoriteService = FavoriteService();
   final GroupModerationService _moderationService = GroupModerationService();
 
+  /// True mientras se guarda el toggle "solo administradores"
+  bool _updatingAdminOnly = false;
+
   Group? _group;
   bool _isLoading = true;
   bool _isUpdating = false;
@@ -1691,6 +1694,30 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
                   height: 1.4,
                 ),
               ),
+              if (_group?.adminOnlyMessages == true) ...[
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.lock_outline,
+                      size: 16,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        'Solo los administradores pueden enviar mensajes',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: colorScheme.onSurfaceVariant,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -1837,9 +1864,73 @@ class _GroupProfileScreenV2State extends State<GroupProfileScreenV2>
               ),
             ),
           ),
+
+          const SizedBox(height: 32),
+
+          // Configuración de mensajes (solo admins ven esta vista)
+          const Text(
+            'Mensajes',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: colorScheme.outlineVariant.withValues(alpha: 0.3),
+              ),
+            ),
+            child: SwitchListTile(
+              secondary: Icon(
+                Icons.lock_outline,
+                color: colorScheme.onSurfaceVariant,
+              ),
+              title: const Text(
+                'Solo administradores pueden enviar mensajes',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              ),
+              subtitle: Text(
+                'Los demás miembros podrán leer pero no escribir',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              value: _group?.adminOnlyMessages ?? false,
+              onChanged: _updatingAdminOnly ? null : _onAdminOnlyMessagesChanged,
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  /// Cambiar el toggle "solo administradores pueden enviar mensajes".
+  /// El valor del switch refleja el stream del grupo; mientras se guarda,
+  /// el switch queda deshabilitado y al confirmar Firestore el stream lo
+  /// actualiza solo.
+  Future<void> _onAdminOnlyMessagesChanged(bool value) async {
+    setState(() => _updatingAdminOnly = true);
+
+    final success = await _groupService.setAdminOnlyMessages(
+      groupId: widget.groupId,
+      enabled: value,
+    );
+
+    if (!mounted) return;
+    setState(() => _updatingAdminOnly = false);
+
+    if (!success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo actualizar la configuración'),
+        ),
+      );
+    }
   }
 
   String _getLevelLabel(String level) {

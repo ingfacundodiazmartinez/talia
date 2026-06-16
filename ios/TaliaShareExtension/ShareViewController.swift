@@ -211,7 +211,7 @@ class ShareViewController: UIViewController {
 
         guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) else {
             NSLog("❌ [ShareExt] App Group container not available - check entitlements!")
-            return [CachedChat(id: "test", name: "App Group no disponible", photoURL: nil, isGroup: false, lastMessage: "Verifica los entitlements", lastMessageTime: nil)]
+            return []
         }
 
         NSLog("📁 [ShareExt] Container URL: \(containerURL.path)")
@@ -224,7 +224,7 @@ class ShareViewController: UIViewController {
             if let files = try? FileManager.default.contentsOfDirectory(atPath: containerURL.path) {
                 NSLog("📁 [ShareExt] Files in container: \(files)")
             }
-            return [CachedChat(id: "test", name: "Abre la app primero", photoURL: nil, isGroup: false, lastMessage: "Ve a Chats para sincronizar", lastMessageTime: nil)]
+            return []
         }
 
         do {
@@ -240,7 +240,7 @@ class ShareViewController: UIViewController {
             return chats
         } catch {
             NSLog("❌ [ShareExt] Error loading cached chats: \(error)")
-            return [CachedChat(id: "test", name: "Error cargando cache", photoURL: nil, isGroup: false, lastMessage: "\(error.localizedDescription)", lastMessageTime: nil)]
+            return []
         }
     }
 
@@ -288,10 +288,31 @@ class ShareViewController: UIViewController {
                     self?.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
                 case .error(let error):
                     NSLog("❌ [ShareExt] Direct send failed: \(error)")
-                    self?.showError("Error: \(error)")
+                    // El envío directo falló (token vencido, red, etc.). Ofrecer
+                    // guardar como pendiente para que la app principal lo envíe
+                    // al abrirse — antes el botón "Reintentar" no hacía nada y
+                    // el share se perdía.
+                    self?.offerFallbackSave(chatIds: chatIds, items: items, reason: error)
                 }
             }
         }
+    }
+
+    /// Cuando el envío directo falla, ofrecer guardar el contenido como
+    /// pendiente en el App Group para que la app principal lo envíe.
+    private func offerFallbackSave(chatIds: [String], items: [SharedItem], reason: String) {
+        let alert = UIAlertController(
+            title: "No se pudo enviar ahora",
+            message: "Podemos guardarlo y enviarlo automáticamente cuando abras Talia.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Guardar y enviar luego", style: .default) { [weak self] _ in
+            self?.sendToChats(chatIds: chatIds, items: items)
+        })
+        alert.addAction(UIAlertAction(title: "Cancelar", style: .cancel) { [weak self] _ in
+            self?.cancel()
+        })
+        present(alert, animated: true)
     }
 
     /// Crear historia directamente usando Firebase REST API
@@ -400,7 +421,17 @@ class ShareViewController: UIViewController {
             userDefaults.set(jsonData, forKey: "pending_share")
             userDefaults.synchronize()
             NSLog("✅ [ShareExt] Saved pending share for \(chatIds.count) chats with \(savedItems.count) items")
-            extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
+            // Avisar al usuario: antes se cerraba en silencio y parecía que el
+            // contenido se había enviado cuando en realidad quedaba pendiente.
+            let alert = UIAlertController(
+                title: "Guardado",
+                message: "Se enviará automáticamente cuando abras Talia.",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+                self?.extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
+            })
+            present(alert, animated: true)
         } else {
             NSLog("❌ [ShareExt] Failed to save pending share")
             showError("Error guardando contenido")
@@ -453,7 +484,6 @@ struct ShareExtensionView: View {
     @State private var selectedChatIds: Set<String> = []
     @State private var selectedDestination: ShareDestination = .chat
     @State private var isSending = false
-    @State private var debugMessage: String = ""
 
     enum ShareDestination {
         case chat
@@ -565,33 +595,8 @@ struct ShareExtensionView: View {
                         .cornerRadius(12)
                 }
             }
-            // Debug banner - siempre visible con info útil
-            .safeAreaInset(edge: .top) {
-                HStack {
-                    Text("📊 \(state.sharedItems.count) items | \(selectedChatIds.count) chats | Auth: \(isAuthenticated ? "✓" : "✗")")
-                    Spacer()
-                    if !debugMessage.isEmpty {
-                        Text(debugMessage)
-                            .fontWeight(.medium)
-                    }
-                }
-                .font(.caption)
-                .foregroundColor(.white)
-                .padding(8)
-                .frame(maxWidth: .infinity)
-                .background(isSending ? Color.orange : (isAuthenticated ? Color.green : Color.red))
-            }
             .onAppear {
                 NSLog("👁 [ShareExt] View appeared - items: \(state.sharedItems.count), loading: \(state.isLoading)")
-            }
-            .onChange(of: state.sharedItems.count) { newCount in
-                NSLog("📦 [ShareExt] Items changed to: \(newCount)")
-                if !isSending {
-                    debugMessage = "Loaded \(newCount) items"
-                }
-            }
-            .onChange(of: selectedChatIds.count) { newCount in
-                NSLog("✅ [ShareExt] Selected chats changed to: \(newCount)")
             }
         }
     }
@@ -815,53 +820,35 @@ struct ShareExtensionView: View {
         }
 
         NSLog("🔘 [ShareExt] After: \(selectedChatIds)")
-        debugMessage = "Selected: \(selectedChatIds.count) chats"
     }
 
     // MARK: - Actions
 
     private func sendToSelectedChats() {
-        // Debug: mostrar estado actual
-        let authStatus = isAuthenticated
-
-        // ✅ STEP 1: Log que se presionó el botón
-        debugMessage = "⏳ STEP1: Botón presionado..."
         NSLog("📤 [ShareExt] ========== SEND BUTTON PRESSED ==========")
         NSLog("📤 [ShareExt] selectedChatIds: \(Array(selectedChatIds))")
         NSLog("📤 [ShareExt] state.sharedItems.count: \(state.sharedItems.count)")
-        NSLog("📤 [ShareExt] isAuthenticated: \(authStatus)")
+        NSLog("📤 [ShareExt] isAuthenticated: \(isAuthenticated)")
 
         guard !selectedChatIds.isEmpty else {
-            debugMessage = "❌ ERROR: No hay chats seleccionados"
             NSLog("❌ [ShareExt] No chats selected when send pressed")
             return
         }
 
         guard !state.sharedItems.isEmpty else {
-            debugMessage = "❌ ERROR: No hay items para enviar"
             NSLog("❌ [ShareExt] No items when send pressed")
             return
         }
-
-        // ✅ STEP 2: Validación pasó
-        debugMessage = "⏳ STEP2: Validación OK. Auth=\(authStatus)"
-        NSLog("📤 [ShareExt] Sending to \(selectedChatIds.count) chats with \(state.sharedItems.count) items")
 
         // Capturar items AHORA
         let itemsToSend = state.sharedItems
         let chatsToSend = Array(selectedChatIds)
 
-        NSLog("📤 [ShareExt] Captured \(itemsToSend.count) items and \(chatsToSend.count) chats")
-        NSLog("📤 [ShareExt] Auth status: \(authStatus)")
-
         isSending = true
 
-        // Llamar directamente
-        if authStatus {
-            debugMessage = "⏳ Subiendo..."
+        if isAuthenticated {
             onSendToChats(chatsToSend, itemsToSend)
         } else {
-            debugMessage = "⚠️ Sin auth, guardando..."
             onFallbackSend(chatsToSend, itemsToSend)
         }
     }

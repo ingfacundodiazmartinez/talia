@@ -68,11 +68,11 @@ class Character {
         return 1;
       case 'p_image_edit':
       case 'nano_banana': // key Firestore; el backend invoca gpt-image-2 low
-        return 4;
+        return 2;
       case 'auto':
       default:
-        // Fallback conservador: si no se sabe, asumir caro (edit con prompt).
-        return 4;
+        // Fallback conservador: si no se sabe, asumir el caro (edit con prompt).
+        return 2;
     }
   }
 

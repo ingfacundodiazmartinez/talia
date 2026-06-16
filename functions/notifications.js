@@ -3,6 +3,7 @@ const { onCall, onRequest, HttpsError } = require("firebase-functions/v2/https")
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { getMessaging } = require("firebase-admin/messaging");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { cleanupInvalidFcmTokens } = require("./helpers");
 
 // ✅ VoIP Support: Import APNs for iOS VoIP push notifications
 const apn = require('apn');
@@ -89,9 +90,14 @@ exports.sendNotificationOnCreate = onDocumentCreated(
             }
           }
         } catch (visibleCheckError) {
+          // 🔒 Fail-closed: si no pudimos verificar la visibilidad de un
+          // mensaje de chat, NO notificamos. Antes era fail-open y un error
+          // transitorio de Firestore podía notificar un mensaje
+          // moderado-pendiente o de un usuario bloqueado.
           console.log(
-            `⚠️ [NotificationTrigger] No se pudo verificar visibleTo (continuando): ${visibleCheckError.message}`
+            `⚠️ [NotificationTrigger] No se pudo verificar visibleTo — skip push (fail-closed): ${visibleCheckError.message}`
           );
+          return null;
         }
       }
 
@@ -126,6 +132,26 @@ exports.sendNotificationOnCreate = onDocumentCreated(
             await event.data.ref.update({ pushSent: true, skippedDueToMute: true });
             return null;
           }
+        }
+      }
+
+      // 🔒 Server-side archived filter. Si el chat está archivado para este
+      // user, no mandamos push (ni system banner ni custom banner en
+      // foreground). El user igual ve el unread count en la chat list al
+      // abrir la app — la archivación es "lo escondo de mi feed principal,
+      // no me notifiques más".
+      if (
+        (type === "chat_message" || type === "group_message") &&
+        chatId &&
+        userData.archivedChats &&
+        typeof userData.archivedChats === "object"
+      ) {
+        if (userData.archivedChats[chatId] != null) {
+          console.log(
+            `📦 [NotificationTrigger] Chat ${chatId} archived por ${userId} — skip push`
+          );
+          await event.data.ref.update({ pushSent: true, skippedDueToArchive: true });
+          return null;
         }
       }
 
@@ -208,6 +234,12 @@ exports.sendNotificationOnCreate = onDocumentCreated(
         'parent_child_link',           // Vinculación padre-hijo
         'friend_request',              // Solicitud de amistad
         'story_fomo',                  // Notificación FOMO de historias
+        'load_credits_request',        // El hijo pide créditos al padre
+        // ✅ FIX: estos tres salían como push silencioso (content-available)
+        // y en iOS background/killed el usuario nunca veía el banner.
+        'new_story',                   // Un contacto subió una historia
+        'story_approved',              // El padre aprobó tu historia
+        'story_rejected',              // El padre rechazó tu historia
       ];
 
       const shouldShowAlert = ALERT_NOTIFICATION_TYPES.includes(type);
@@ -257,6 +289,11 @@ exports.sendNotificationOnCreate = onDocumentCreated(
 
       console.log(`📦 [NotificationTrigger] ${shouldShowAlert ? 'ALERT+NSE' : 'DATA-ONLY'} message (type: ${type})`);
 
+      // ✅ Idempotencia: marcar como enviada ANTES del envío. Si la instancia
+      // muere entre el envío y el update, el retry duplicaba el push.
+      // Preferimos el riesgo (mínimo) de perder un push al de duplicarlo.
+      await event.data.ref.update({ pushSent: true });
+
       // Enviar notificación
       const response = await getMessaging().sendEachForMulticast(message);
 
@@ -270,15 +307,14 @@ exports.sendNotificationOnCreate = onDocumentCreated(
             console.error(`  - Token ${idx}: ${resp.error?.code} - ${resp.error?.message}`);
           }
         });
+        // 🧹 Remover tokens FCM muertos del usuario
+        await cleanupInvalidFcmTokens(userId, fcmTokens, response.responses);
       }
 
       // NOTA: `lastReceivedAt_{recipient}` NO se actualiza acá. El receipt
       // se marca client-side cuando el device REALMENTE recibe la push
       // (Dart background handler / chat docs listener). Esto evita falsos
       // ✓✓ cuando el device está apagado y FCM solo encola la push.
-
-      // Marcar como enviada
-      await event.data.ref.update({ pushSent: true });
 
       return null;
     } catch (error) {
@@ -528,7 +564,7 @@ exports.sendInstantPushNotification = onCall(
         ...(chatId && { chatId }),
         ...(senderId && { senderId }),
         ...(senderPhotoUrl && { senderPhotoUrl }),  // ✅ Usar variable validada
-        ...(isGroup && { isGroup: 'true' }),
+        ...(isGroup === true || String(isGroup) === 'true' ? { isGroup: 'true' } : {}),
         ...(request.data.messageId && { messageId: request.data.messageId }),
         ...(senderName && { senderName }),  // ✅ Usar variable validada
         ...(request.data.groupName && { groupName: request.data.groupName }),
@@ -559,6 +595,12 @@ exports.sendInstantPushNotification = onCall(
         'parent_child_link',
         'friend_request',              // Solicitud de amistad
         'story_fomo',                  // Notificación FOMO de historias
+        'load_credits_request',        // El hijo pide créditos al padre
+        // ✅ FIX: estos tres salían como push silencioso (content-available)
+        // y en iOS background/killed el usuario nunca veía el banner.
+        'new_story',                   // Un contacto subió una historia
+        'story_approved',              // El padre aprobó tu historia
+        'story_rejected',              // El padre rechazó tu historia
       ];
 
       const shouldShowAlert = ALERT_NOTIFICATION_TYPES.includes(type);
@@ -605,7 +647,7 @@ exports.sendInstantPushNotification = onCall(
             ...(senderName && { senderName }),
             ...(senderPhotoUrl && { senderPhotoUrl }),
             ...(chatId && { chatId }),
-            ...(isGroup && { isGroup: 'true' }),
+            ...(isGroup === true || String(isGroup) === 'true' ? { isGroup: 'true' } : {}),
             type: type || "notification",
           },
         },

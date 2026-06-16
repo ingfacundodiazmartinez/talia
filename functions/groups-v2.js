@@ -9,7 +9,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
-const { sendPushNotification } = require("./helpers");
+const { sendPushNotification, sendDirectPushNotification } = require("./helpers");
 const { analyzeMessageWithGemini } = require("./gemini-analyzer");
 const { _moderateMultimediaInternal, _checkUserPremiumPlus } = require("./moderation");
 
@@ -69,13 +69,18 @@ async function getParentIds(childId) {
  * Esto reduce fricción: el hijo entra al grupo automáticamente y el padre
  * recibe notificación + puede remover si no le gusta.
  */
-async function hasAutoApproveEnabled(userId) {
-  const userDoc = await db.collection("users").doc(userId).get();
+async function hasAutoApproveEnabled(parentId, childId) {
+  const userDoc = await db.collection("users").doc(parentId).get();
   if (!userDoc.exists) return true; // Default ON
 
-  const userData = userDoc.data();
+  const groupSettings = userDoc.data().groupSettings || {};
+  // Config por hijo (si el padre tiene >1 hijo) con fallback al flag global.
   // Default ON salvo que el padre lo haya desactivado explícitamente.
-  return userData.groupSettings?.autoApproveGroups !== false;
+  const perChild = groupSettings.childAutoApproveGroups || {};
+  if (childId && Object.prototype.hasOwnProperty.call(perChild, childId)) {
+    return perChild[childId] !== false;
+  }
+  return groupSettings.autoApproveGroups !== false;
 }
 
 /**
@@ -346,7 +351,7 @@ exports.createGroupV2 = onCall(
           let autoApproved = false;
           let approvingParentId = null;
           for (const parentId of creatorParentIds) {
-            if (await hasAutoApproveEnabled(parentId)) {
+            if (await hasAutoApproveEnabled(parentId, creatorId)) {
               autoApproved = true;
               approvingParentId = parentId;
               break;
@@ -413,7 +418,7 @@ exports.createGroupV2 = onCall(
             let approvingParentId = null;
 
             for (const parentId of parentIds) {
-              if (await hasAutoApproveEnabled(parentId)) {
+              if (await hasAutoApproveEnabled(parentId, memberId)) {
                 autoApproved = true;
                 approvingParentId = parentId;
                 break;
@@ -473,6 +478,10 @@ exports.createGroupV2 = onCall(
         memberCount: approvedMembers.length,
         pendingCount: pendingChildren.length,
         lastActivity: now,
+
+        // Solo administradores pueden enviar mensajes (modo "anuncios").
+        // Default off; las rules tratan el campo ausente como false (grupos viejos).
+        adminOnlyMessages: false,
       };
 
       // Build memberDetails
@@ -926,7 +935,7 @@ exports.addGroupMembersV2 = onCall(
             // Check auto-approve
             let autoApproved = false;
             for (const parentId of parentIds) {
-              if (await hasAutoApproveEnabled(parentId)) {
+              if (await hasAutoApproveEnabled(parentId, memberId)) {
                 autoApproved = true;
                 break;
               }
@@ -1459,7 +1468,14 @@ exports.onGroupV2MessageCreated = onDocumentCreated(
 
       // ✅ FIX Issue #2: Skip moderation if message was already moderated by sendGroupV2Message
       const existingModerationStatus = messageData.moderationStatus;
-      if (existingModerationStatus) {
+      // 🔒 IMPORTANTE: 'pending' del cliente NO cuenta como "ya moderado". El
+      // cliente nuevo (group_service.dart) escribe 'pending' optimistamente
+      // junto con visibleTo=[sender] mientras espera el veredicto de la CF.
+      // Si saltamos moderación cuando vemos 'pending', el mensaje queda con
+      // visibleTo=[sender] para siempre y nadie más del grupo lo ve.
+      const alreadyModerated = existingModerationStatus &&
+        existingModerationStatus !== "pending";
+      if (alreadyModerated) {
         console.log(`ℹ️ [onGroupV2MessageCreated] Mensaje ya moderado (${existingModerationStatus}), saltando moderación de texto`);
         moderationStatus = existingModerationStatus;
         moderationReason = messageData.moderationReason;
@@ -1538,23 +1554,44 @@ exports.onGroupV2MessageCreated = onDocumentCreated(
           moderationStatus = "approved";
         }
 
-        // Update message with moderation status
+        // 🔒 Expandir visibleTo según veredicto:
+        // - approved → todos los miembros pueden ver el mensaje.
+        // - blocked → solo el sender (mensaje queda silenciado, B no lo ve).
+        // El cliente nuevo escribe visibleTo=[sender] como pre-render
+        // optimista; acá lo confirmamos o lo dejamos restringido.
+        const visibleToOnApproved = members.slice();
         await event.data.ref.update({
           moderationStatus: moderationStatus,
           moderatedAt: new Date(),
+          visibleTo: moderationStatus === "blocked"
+            ? [senderId]
+            : visibleToOnApproved,
           ...(moderationReason && { moderationReason: moderationReason }),
         });
       } else if (moderationEnabled) {
         // Media without text - only approve if not already moderated
         // ✅ FIX Issue #2: Don't overwrite moderationStatus set by sendGroupV2Message
         const existingModerationStatus = messageData.moderationStatus;
-        if (!existingModerationStatus) {
+        if (!existingModerationStatus || existingModerationStatus === "pending") {
           await event.data.ref.update({
             moderationStatus: "approved",
             moderatedAt: new Date(),
+            visibleTo: members.slice(), // 🔒 Expandir para todos
           });
         } else {
           console.log(`ℹ️ [onGroupV2MessageCreated] Mensaje ya moderado (${existingModerationStatus}), saltando actualización`);
+        }
+      } else {
+        // 🔒 Grupo SIN moderación: garantizar que visibleTo cubre a todos los
+        // miembros incluso si el cliente lo dejó vacío o stale (defensa en
+        // profundidad — el cliente ya lo setea, pero acá lo confirmamos).
+        const currentVisibleTo = Array.isArray(messageData.visibleTo) ? messageData.visibleTo : [];
+        const missingMembers = members.filter((m) => !currentVisibleTo.includes(m));
+        if (missingMembers.length > 0) {
+          console.log(`🔧 [onGroupV2MessageCreated] Expandiendo visibleTo (faltaban ${missingMembers.length} miembros)`);
+          await event.data.ref.update({
+            visibleTo: members.slice(),
+          });
         }
       }
 
@@ -1612,23 +1649,35 @@ exports.onGroupV2MessageCreated = onDocumentCreated(
         `📨 [onGroupV2MessageCreated] Enviando notificaciones a ${recipientIds.length} miembros del grupo ${groupName}`
       );
 
-      // Get sender photo URL for rich notifications
+      // Get sender + group photos for rich notifications.
+      // 🔒 Bug fix: faltaba groupPhotoUrl en el payload FCM. El cliente
+      // Android (MyFirebaseMessagingService.kt:693) lo busca y si no
+      // viene cae al senderPhoto, por eso siempre se veía la del sender.
       const senderPhotoUrl = messageData.senderPhotoURL || "";
+      const groupPhotoUrl = groupData.avatar || "";
 
       // Send notifications to all recipients
+      // ✅ FIX: usar sendDirectPushNotification (mismo emisor que chat 1:1):
+      // - Android: data-only → MyFirebaseMessagingService renderiza con foto
+      //   circular y MessagingStyle (antes el root `notification` lo pisaba).
+      // - iOS: mutable-content → invoca el NSE (antes content-available no
+      //   mostraba banner consistente).
+      // - Respeta mute/archivado server-side por destinatario.
       const notificationPromises = recipientIds.map((recipientId) =>
-        sendPushNotification(recipientId, groupName, notificationBody, {
+        sendDirectPushNotification({
+          userId: recipientId,
           type: "group_message",
-          groupId: groupId,
-          chatId: groupId, // Also send as chatId for consistency with frontend
-          groupName: groupName,
+          title: groupName,
+          body: notificationBody,
+          chatId: groupId, // chatId = groupId para consistencia con el cliente
+          groupId: groupId, // backward compat: clientes viejos navegan con groupId
+          messageId: messageId,
           senderId: senderId,
           senderName: senderName,
           senderPhotoUrl: senderPhotoUrl,
-          messageId: messageId,
-          isGroup: "true",
-          body: notificationBody, // For frontend display
-          messagePreview: notificationBody, // Alternative field
+          groupPhotoUrl: groupPhotoUrl, // ✅ Foto del grupo para notif Android
+          groupName: groupName,
+          isGroup: true,
         })
       );
 

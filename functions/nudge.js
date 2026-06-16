@@ -151,9 +151,21 @@ exports.sendNudge = onCall(
         throw new HttpsError("not-found", "Usuario receptor no encontrado");
       }
       const receiverData = receiverDoc.data();
-      const fcmToken = receiverData.fcmToken;
 
-      if (!fcmToken) {
+      // ✅ FIX multidispositivo: usar el array fcmTokens (todos los devices)
+      // con fallback al campo legacy fcmToken. Antes solo se notificaba al
+      // device cuyo token quedó en el campo viejo.
+      let fcmTokens = [];
+      if (Array.isArray(receiverData.fcmTokens) && receiverData.fcmTokens.length > 0) {
+        fcmTokens = receiverData.fcmTokens.filter(
+          (t) => t && typeof t === "string" && t.trim().length > 0
+        );
+      }
+      if (fcmTokens.length === 0 && receiverData.fcmToken) {
+        fcmTokens = [String(receiverData.fcmToken)];
+      }
+
+      if (fcmTokens.length === 0) {
         console.warn(`⚠️ [Nudge] Usuario ${toUserId} no tiene token FCM`);
         return { success: false, error: "no_fcm_token" };
       }
@@ -165,7 +177,7 @@ exports.sendNudge = onCall(
       // Data-only para Android (MyFirebaseMessagingService maneja largeIcon circular)
       // Notification solo para iOS (en apns.payload.aps.alert)
       const message = {
-        token: fcmToken,
+        tokens: fcmTokens,
         data: {
           type: "nudge",
           nudgeType: type,
@@ -200,11 +212,16 @@ exports.sendNudge = onCall(
         },
       };
 
-      // Enviar FCM
-      console.log(`📳 [Nudge] Enviando ${type} de ${senderName} (${senderId}) a ${toUserId}`);
-      await messaging.send(message);
+      // Enviar FCM a todos los dispositivos
+      console.log(`📳 [Nudge] Enviando ${type} de ${senderName} (${senderId}) a ${toUserId} (${fcmTokens.length} devices)`);
+      const response = await messaging.sendEachForMulticast(message);
 
-      console.log(`✅ [Nudge] Enviado exitosamente`);
+      if (response.successCount === 0) {
+        console.warn(`⚠️ [Nudge] Ningún device recibió el nudge`);
+        return { success: false, error: "all_tokens_failed" };
+      }
+
+      console.log(`✅ [Nudge] Enviado exitosamente (${response.successCount}/${fcmTokens.length})`);
       return { success: true };
     } catch (error) {
       console.error(`❌ [Nudge] Error:`, error);

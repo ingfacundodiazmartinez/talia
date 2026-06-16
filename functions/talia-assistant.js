@@ -118,8 +118,10 @@ const TALIA_APP_KNOWLEDGE = `
 App de mensajería familiar con control parental. Los menores chatean con supervisión de padres.
 
 ### Navegación principal
-**Niños (3 pestañas abajo):** Chats | Contactos | Perfil
-**Padres (5 pestañas abajo):** Dashboard | Chats | Contactos | Lista Blanca | Perfil
+**Niños (2 pestañas abajo):** Chats | Perfil
+**Padres (4 pestañas abajo):** Dashboard | Chats | Familia | Perfil
+- Para iniciar un chat nuevo: en la pestaña Chats hay un botón flotante con un lápiz ✏️ abajo a la derecha.
+- "Mi círculo" y "Mis historias" viven dentro de la pestaña Perfil.
 
 ---
 
@@ -159,22 +161,13 @@ App de mensajería familiar con control parental. Los menores chatean con superv
 4. Durante la llamada: podés silenciar, apagar cámara, poner altavoz
 
 ### CÓMO AGREGAR UN CONTACTO
-**Opción 1 - Escanear QR:**
-1. Pestaña Contactos → botón +
-2. Pestaña "Escanear"
-3. Apuntá al QR de la otra persona
+Punto de entrada: en la pestaña **Chats**, tocá el botón flotante con un lápiz ✏️ (abajo a la derecha). Se abre la lista de contactos; arriba hay un botón con el ícono de persona+ para agregar uno nuevo. Te aparecen 3 pestañas:
 
-**Opción 2 - Ingresar código:**
-1. Pestaña Contactos → botón +
-2. Pestaña "Ingresar"
-3. Escribí o pegá el código del contacto
+**Opción 1 - Mi Código:** Mostrá tu QR o copiá tu código y compartilo por WhatsApp.
+**Opción 2 - Escanear:** Apuntá al QR de la otra persona.
+**Opción 3 - Ingresar:** Escribí o pegá el código del contacto.
 
-**Opción 3 - Compartir tu código:**
-1. Pestaña Contactos → botón +
-2. Pestaña "Mi Código"
-3. Mostrá tu QR o compartí el código por WhatsApp
-
-Si sos menor, tu padre tiene que aprobar el contacto.
+Si sos menor, tu padre tiene que aprobar el contacto (lo verá en su pestaña **Familia → Pendientes**).
 
 ### CÓMO CREAR UN GRUPO
 1. En Chats, tocá el botón + o mantené presionado
@@ -194,11 +187,40 @@ El botón SOS activa una emergencia: llama automáticamente a los padres y compa
 - **Premium:** 50 face swaps/mes, sin publicidad, personajes exclusivos
 - **Premium+:** 100 face swaps/mes, todos los personajes, vincular hasta 3 hijos
 
+### MI CÍRCULO (historias)
+Tu "círculo" son las personas con las que comparten historias en ambos sentidos. Tener a alguien como contacto NO alcanza para ver sus historias — hay que invitarlo al círculo.
+
+**Cómo ver tu círculo:** Pestaña Perfil → "Mi círculo".
+
+**Cómo invitar a alguien:** Entrá al perfil del contacto → tocá "Invitar a mi círculo". Cuando acepte, se ven las historias mutuamente.
+
+**Invitaciones pendientes:** Aparecen en "Mi círculo" arriba de la lista, con botones Aceptar/Rechazar.
+
+**Quitar a alguien del círculo:** Perfil del contacto → menú (⋮) → "Quitar de mi círculo". Dejan de verse las historias.
+
+### MIS HISTORIAS
+Pestaña Perfil → "Mis historias". Es un grid con las historias que subiste: activas, pendientes de aprobación, rechazadas. Las activas duran 24h.
+
+### FAVORITOS
+Para marcar un mensaje como favorito: mantené presionado el mensaje → "Marcar como favorito".
+
+Para ver los favoritos de un chat: tocá el header del chat (foto/nombre del contacto) → tab "Favoritos" en el perfil.
+
+Los favoritos son privados — solo los ves vos.
+
+### FAMILIA (solo padres)
+La pestaña **Familia** es donde los padres aprueban o rechazan los contactos de sus hijos. Tiene 4 sub-pestañas:
+- **Pendientes:** Solicitudes esperando tu decisión.
+- **Aprobados:** Contactos ya autorizados.
+- **Rechazados:** Contactos que rechazaste.
+- **Revocados:** Aprobados que después diste de baja.
+
 ### PROBLEMAS COMUNES
 - **No llegan mensajes:** Revisá internet y permisos de notificaciones
 - **No puedo agregar contacto:** El otro debe tener Talia, y si sos menor tu padre aprueba
 - **Face swap no funciona:** Verificá el límite, buena luz, cara de frente
-- **No veo stories:** Deben ser contactos mutuos aprobados, las stories duran 24h`;
+- **No veo stories:** Tienen que estar en tu círculo (no alcanza con tenerlo como contacto), y las stories duran 24h
+- **No aparecen mis favoritos:** Son locales al dispositivo, no se sincronizan entre celulares`;
 
 // Keywords que activan el conocimiento de la app
 const APP_KNOWLEDGE_KEYWORDS = [
@@ -206,17 +228,24 @@ const APP_KNOWLEDGE_KEYWORDS = [
   'cómo', 'como', 'qué es', 'que es', 'para qué', 'para que', 'sirve',
   'premium', 'gratis', 'pago', 'suscripción', 'suscripcion',
   'face swap', 'faceswap', 'transformar', 'personaje', 'cara',
-  'historia', 'story', 'stories', 'publicar',
+  'historia', 'historias', 'story', 'stories', 'publicar',
+  'mis historias',
   'llamada', 'videollamada', 'llamar', 'video',
   'grupo', 'grupos', 'crear grupo',
-  'contacto', 'agregar', 'añadir', 'bloquear', 'desbloquear',
+  'contacto', 'contactos', 'agregar', 'añadir', 'bloquear', 'desbloquear',
+  'círculo', 'circulo', 'mi círculo', 'mi circulo',
+  'invitación', 'invitacion', 'invitar', 'invitaciones',
+  'amigo', 'amigos', 'amistad',
+  'favorito', 'favoritos', 'marcar mensaje',
+  'familia', 'lista blanca', 'whitelist', 'aprobar contacto', 'pendientes',
   'trivia', 'preguntas', 'juego',
   'emergencia', 'sos', 'ayuda urgente', 'ubicación', 'ubicacion',
   'nudge', 'latido', 'zumbido', 'saludo', 'psst',
   'padre', 'madre', 'hijo', 'hija', 'niño', 'niña', 'control parental', 'supervisar',
   'notificación', 'notificacion', 'no me llega', 'no funciona', 'error', 'problema',
   'mensaje', 'audio', 'foto', 'video', 'imagen',
-  'privacidad', 'seguridad', 'eliminar cuenta', 'borrar'
+  'privacidad', 'seguridad', 'eliminar cuenta', 'borrar',
+  'perfil'
 ];
 
 /**
@@ -942,6 +971,12 @@ exports.onMessageToTalia = onDocumentCreated(
     if (senderId === TALIA_ID) return null;
     if (messageData?.moderationStatus === "blocked") return null;
 
+    // 🔄 El usuario respondió: resetear el contador de mensajes proactivos sin
+    // contestar (circuit breaker de "no insistir tras 5 sin respuesta").
+    try {
+      await updateTaliaMemory(senderId, { unansweredProactiveCount: 0 });
+    } catch (_) {}
+
     // Detectar mensajes multimedia (audio, imagen, video)
     const isAudio = messageType === "audio" || messageData?.audioUrl;
     const isImage = messageType === "image" || messageData?.imageUrl;
@@ -1058,11 +1093,21 @@ exports.processTaliaPendingReactions = onSchedule(
     const db = getFirestore();
     const now = Timestamp.now();
 
+    // Una reacción "sana" se dispara 5–30 min después de publicarse la story
+    // (ver STORY_REACTION). Si executeAt quedó vencido hace MÁS de este umbral,
+    // es backlog de una caída del scheduler (ej: índice faltante): enviarla ahora
+    // sería comentar una historia vieja y, en bloque, spamear al usuario. Esas se
+    // descartan en silencio (processed: true, skipped: "stale") sin enviar nada.
+    // NOTA: las reacciones postergadas por horario refrescan executeAt hacia
+    // adelante, así que nunca caen en esta ventana por error.
+    const STALE_REACTION_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 horas
+
     // Obtener reacciones pendientes que ya deben ejecutarse
+    // limit alto para drenar rápido cualquier backlog (las stale no envían msg).
     const pendingSnapshot = await db.collection("talia_pending_reactions")
       .where("processed", "==", false)
       .where("executeAt", "<=", now)
-      .limit(10)
+      .limit(50)
       .get();
 
     if (pendingSnapshot.empty) {
@@ -1073,11 +1118,25 @@ exports.processTaliaPendingReactions = onSchedule(
 
     let processed = 0;
     let postponed = 0;
+    let discarded = 0;
+
+    // Usuarios a los que YA les comentamos una historia en este run, para no
+    // mandar varias cuando se procesan varias reacciones del mismo user juntas
+    // (ej: subió 5 historias seguidas).
+    const commentedUsersThisRun = new Set();
 
     for (const doc of pendingSnapshot.docs) {
       const reaction = doc.data();
 
       try {
+        // 🗑️ Descartar reacciones vencidas hace rato (backlog de una caída).
+        const executeAtMs = reaction.executeAt?.toMillis?.() ?? 0;
+        if (Date.now() - executeAtMs > STALE_REACTION_THRESHOLD_MS) {
+          await doc.ref.update({ processed: true, skipped: "stale" });
+          discarded++;
+          continue;
+        }
+
         // ⏰ VERIFICAR HORARIO DEL USUARIO (9 AM - 9 PM hora local)
         const timeCheck = await isAppropriateTimeForUser(reaction.userId);
         if (!timeCheck.allowed) {
@@ -1100,6 +1159,28 @@ exports.processTaliaPendingReactions = onSchedule(
           continue;
         }
 
+        // 🔢 Límite: MÁXIMO 1 comentario de historia por día por usuario, y
+        // circuit breaker (no insistir si ignoró 5 mensajes proactivos).
+        const memory = await getTaliaMemory(reaction.userId);
+        const unanswered = memory.unansweredProactiveCount || 0;
+        if (unanswered >= 5) {
+          await doc.ref.update({ processed: true, skipped: "unanswered_limit" });
+          discarded++;
+          continue;
+        }
+        if (commentedUsersThisRun.has(reaction.userId)) {
+          await doc.ref.update({ processed: true, skipped: "daily_story_limit" });
+          discarded++;
+          continue;
+        }
+        const lastStoryReactionAt =
+          memory.lastStoryReactionAt?.toMillis?.() ?? 0;
+        if (Date.now() - lastStoryReactionAt < 24 * 60 * 60 * 1000) {
+          await doc.ref.update({ processed: true, skipped: "daily_story_limit" });
+          discarded++;
+          continue;
+        }
+
         // Obtener chat con el usuario
         const participants = [reaction.userId, TALIA_ID].sort();
         const chatId = participants.join("_");
@@ -1115,6 +1196,13 @@ exports.processTaliaPendingReactions = onSchedule(
         const storyComment = await generateStoryComment(reaction.storyType, reaction.userId);
         await sendTaliaMessage(chatId, storyComment);
 
+        // Marcar: comentario de historia enviado hoy + 1 proactivo sin responder.
+        commentedUsersThisRun.add(reaction.userId);
+        await updateTaliaMemory(reaction.userId, {
+          lastStoryReactionAt: Timestamp.now(),
+          unansweredProactiveCount: FieldValue.increment(1),
+        });
+
         await doc.ref.update({ processed: true, processedAt: Timestamp.now() });
         processed++;
         console.log(`✅ [Talia] Reacción enviada a ${reaction.userId} (hora local: ${timeCheck.currentHour}:00)`);
@@ -1124,7 +1212,11 @@ exports.processTaliaPendingReactions = onSchedule(
       }
     }
 
-    return { processed, postponed };
+    if (discarded > 0) {
+      console.log(`🗑️ [Talia] ${discarded} reacciones descartadas por vencidas (backlog)`);
+    }
+
+    return { processed, postponed, discarded };
   }
 );
 
@@ -1195,6 +1287,11 @@ exports.taliaDailyProactiveMessages = onSchedule(
       const userId = memoryDoc.id;
       const memory = memoryDoc.data();
 
+      // 🛑 Circuit breaker: si ignoró 5 mensajes proactivos seguidos, no insistir.
+      if ((memory.unansweredProactiveCount || 0) >= 5) {
+        continue;
+      }
+
       // No enviar si ya mandamos proactivo hoy
       if (memory.lastProactiveMessage) {
         const lastProactive = memory.lastProactiveMessage.toDate?.() || memory.lastProactiveMessage;
@@ -1225,9 +1322,11 @@ exports.taliaDailyProactiveMessages = onSchedule(
       const message = proactiveMessages[Math.floor(Math.random() * proactiveMessages.length)];
       await sendTaliaMessage(chatId, message);
 
-      // Actualizar memoria
+      // Actualizar memoria: proactivo enviado + 1 sin responder (se resetea
+      // cuando el usuario le escribe a Talia).
       await db.collection("talia_memory").doc(userId).update({
         lastProactiveMessage: Timestamp.now(),
+        unansweredProactiveCount: FieldValue.increment(1),
       });
 
       sent++;

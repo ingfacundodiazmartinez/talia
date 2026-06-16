@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart' as firebase_auth;
-import 'package:firebase_database/firebase_database.dart';
+import '../utils/server_time_offset.dart';
 import '../notification_service.dart';
 import '../services/contacts_sync_service.dart';
 import '../services/app_state_service.dart';
@@ -396,20 +396,9 @@ class ParentMainShellController {
             // Optimización: si todas están vistas, retornar 0 sin más
             return 0;
           }
-          // Obtener offset del servidor desde RTDB
-          // Envuelto en try-catch porque puede fallar en algunos dispositivos
-          // y el SDK lanza una excepción mal formateada
-          int offset = 0;
-          try {
-            final offsetSnapshot = await FirebaseDatabase.instance
-                .ref('.info/serverTimeOffset')
-                .get();
-            offset = (offsetSnapshot.value as int?) ?? 0;
-          } catch (e) {
-            // Si falla, usar offset 0 (tiempo local)
-            // Esto es seguro porque el offset solo se usa para filtrar
-            // solicitudes expiradas, y usar tiempo local es una aproximación válida
-          }
+          // Obtener offset del servidor (helper compartido: onValue en vez
+          // de get(), que las rules de RTDB rechazan; nunca lanza)
+          final offset = await ServerTimeOffset.fetchMs();
 
           // Calcular tiempo del servidor
           final serverNow = DateTime.now().add(Duration(milliseconds: offset));

@@ -62,6 +62,12 @@ class ReleaseLogger {
     if (error != null) {
       stderr.writeln('🔴    Error: $error');
     }
+    // ✅ MÉTODO 3: debugPrint → llega al os_log/syslog del device (stderr solo
+    // no aparece en idevicesyslog). Necesario para diagnosticar en release.
+    debugPrint('🔴 $consoleWithTime');
+    if (error != null) {
+      debugPrint('🔴    Error: $error');
+    }
   }
 
   static void info(String message, {String? tag}) {

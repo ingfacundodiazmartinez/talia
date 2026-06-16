@@ -341,10 +341,27 @@ import Intents  // ✅ Necesario para INPerson e INImage
           return
         }
 
+        // ✅ Enriquecer con refreshToken + apiKey (solo accesibles desde el
+        // SDK nativo). Con esto la Share Extension puede renovar el idToken
+        // vencido vía securetoken.googleapis.com y enviar SIEMPRE de forma
+        // directa, sin depender de que la app se haya abierto hace <1h.
+        var finalJSON = jsonString
+        if var dict = (try? JSONSerialization.jsonObject(
+              with: Data(jsonString.utf8))) as? [String: Any] {
+          if let refreshToken = Auth.auth().currentUser?.refreshToken {
+            dict["refreshToken"] = refreshToken
+          }
+          dict["apiKey"] = FirebaseApp.app()?.options.apiKey
+          if let enriched = try? JSONSerialization.data(withJSONObject: dict),
+             let enrichedString = String(data: enriched, encoding: .utf8) {
+            finalJSON = enrichedString
+          }
+        }
+
         let credentialsURL = containerURL.appendingPathComponent("firebase_credentials.json")
         do {
-          try jsonString.write(to: credentialsURL, atomically: true, encoding: .utf8)
-          NSLog("✅ [ShareCache] Credentials saved to App Group")
+          try finalJSON.write(to: credentialsURL, atomically: true, encoding: .utf8)
+          NSLog("✅ [ShareCache] Credentials saved to App Group (refreshToken: \(finalJSON.contains("refreshToken")))")
           result(true)
         } catch {
           NSLog("❌ [ShareCache] Error saving credentials: \(error)")
@@ -1252,12 +1269,25 @@ import Intents  // ✅ Necesario para INPerson e INImage
           if let controller = self.window?.rootViewController as? FlutterViewController {
             let channel = FlutterMethodChannel(name: "com.talia.chat/notifications", binaryMessenger: controller.binaryMessenger)
 
+            // ✅ FIX: isGroup llega como String "true"/"false" desde la CF
+            // (todos los data fields de FCM son strings). El cast `as? Bool`
+            // siempre daba nil → false, y el tap de una notificación de
+            // grupo navegaba como chat 1:1.
+            let isGroupValue: Bool
+            if let boolValue = userInfo["isGroup"] as? Bool {
+              isGroupValue = boolValue
+            } else if let stringValue = userInfo["isGroup"] as? String {
+              isGroupValue = stringValue == "true"
+            } else {
+              isGroupValue = false
+            }
+
             let payload: [String: Any] = [
               "chatId": chatId,
               "senderId": senderId,
               "senderName": senderName,
               "type": type,
-              "isGroup": userInfo["isGroup"] as? Bool ?? false,
+              "isGroup": isGroupValue,
               "messagePreview": userInfo["messagePreview"] as? String ?? "",
               "groupName": userInfo["groupName"] as? String ?? ""
             ]

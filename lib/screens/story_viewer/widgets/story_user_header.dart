@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../../services/contact_photo_cache_service.dart';
 import '../../../widgets/synced_user_widgets.dart';
+import '../../../utils/official.dart';
 
 /// Header con información del usuario que publicó la historia
 /// Usa lazy/on-demand listeners para mantener la foto actualizada en tiempo real
@@ -43,6 +44,9 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
   StreamSubscription<PhotoUpdateEvent>? _photoSubscription;
   String? _currentPhotoUrl;
 
+  // Cuenta oficial de Talia (bienvenida / comunicados): no tiene doc en `users`.
+  bool get _isOfficial => Official.isOfficialUser(widget.userId);
+
   // ✅ Sombras para texto e iconos (visibilidad en fondos claros)
   static const List<Shadow> _textShadows = [
     Shadow(
@@ -58,16 +62,20 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
     // Inicializar con la URL del story (fallback)
     _currentPhotoUrl = widget.userPhotoURL;
 
-    // Iniciar listener lazy para este usuario
-    _photoCacheService.startWatching(widget.userId);
+    // Iniciar listener lazy para este usuario.
+    // La cuenta oficial de Talia no tiene doc en `users`: no observar.
+    if (!_isOfficial) {
+      _photoCacheService.startWatching(widget.userId);
 
-    // Verificar si ya hay una foto más reciente en cache
-    final cachedUrl = _photoCacheService.getPhotoUrl(widget.userId);
-    if (cachedUrl != null) {
-      _currentPhotoUrl = cachedUrl;
+      // Verificar si ya hay una foto más reciente en cache
+      final cachedUrl = _photoCacheService.getPhotoUrl(widget.userId);
+      if (cachedUrl != null) {
+        _currentPhotoUrl = cachedUrl;
+      }
     }
 
-    // Suscribirse a cambios de foto
+    // Suscribirse a cambios de foto (siempre: el userId puede cambiar a uno
+    // no-oficial vía didUpdateWidget)
     _photoSubscription = _photoCacheService.onPhotoUpdated.listen((event) {
       if (event.userId == widget.userId && mounted) {
         setState(() {
@@ -81,10 +89,15 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
   void didUpdateWidget(StoryUserHeader oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    // Si cambió el userId, actualizar listeners
+    // Si cambió el userId, actualizar listeners (start/stop simétricos:
+    // los ids oficiales nunca se observan, así no se desbalancea el refcount)
     if (oldWidget.userId != widget.userId) {
-      _photoCacheService.stopWatching(oldWidget.userId);
-      _photoCacheService.startWatching(widget.userId);
+      if (!Official.isOfficialUser(oldWidget.userId)) {
+        _photoCacheService.stopWatching(oldWidget.userId);
+      }
+      if (!_isOfficial) {
+        _photoCacheService.startWatching(widget.userId);
+      }
 
       // Actualizar foto con la del nuevo usuario
       _currentPhotoUrl = _photoCacheService.getPhotoUrl(widget.userId) ?? widget.userPhotoURL;
@@ -94,7 +107,9 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
   @override
   void dispose() {
     _photoSubscription?.cancel();
-    _photoCacheService.stopWatching(widget.userId);
+    if (!_isOfficial) {
+      _photoCacheService.stopWatching(widget.userId);
+    }
     super.dispose();
   }
 
@@ -118,8 +133,11 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
             ),
             child: CircleAvatar(
               radius: 20,
-              backgroundColor: Colors.white.withValues(alpha: 0.3),
-              child: _currentPhotoUrl != null
+              backgroundColor: _isOfficial ? Colors.white : Colors.white.withValues(alpha: 0.3),
+              backgroundImage: _isOfficial ? const AssetImage(Official.logoAsset) : null,
+              child: _isOfficial
+                  ? null
+                  : _currentPhotoUrl != null
                   ? ClipOval(
                       child: CachedNetworkImage(
                         imageUrl: _currentPhotoUrl!,
@@ -145,15 +163,32 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SyncedUserName(
-                  userId: widget.userId,
-                  fallbackName: widget.userName,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    shadows: _textShadows,
+                if (_isOfficial)
+                  const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        Official.userName,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          shadows: _textShadows,
+                        ),
+                      ),
+                      SizedBox(width: 4),
+                      Icon(Icons.verified, color: Colors.white, size: 16, shadows: _textShadows),
+                    ],
+                  )
+                else
+                  SyncedUserName(
+                    userId: widget.userId,
+                    fallbackName: widget.userName,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      shadows: _textShadows,
+                    ),
                   ),
-                ),
                 Text(
                   widget.timeAgo,
                   style: TextStyle(

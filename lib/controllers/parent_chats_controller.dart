@@ -7,6 +7,8 @@ import '../services/search_service.dart';
 import '../services/user_profile_cache_service.dart';
 import '../services/user_cache_service.dart';
 import '../services/share_extension_cache_service.dart';
+import '../services/message_cache_service.dart';
+import '../groups/services/group_message_cache_service.dart';
 import '../utils/release_logger.dart';
 
 /// Controller para manejar la lógica de negocio de Parent Chats
@@ -161,7 +163,10 @@ class ParentChatsController extends BaseChatsController {
     // Crear lista combinada de items con timestamps para ordenar
     final List<_SortableItem> sortableItems = [];
 
-    // Agregar chats a la lista con su timestamp
+    // 🔒 SST = Hive. Ver child_chats_controller para nota completa.
+    final msgCache = MessageCacheService();
+    final groupMsgCache = GroupMessageCacheService();
+
     for (final chatDoc in chatDocs) {
       final chatData = chatDoc.data() as Map<String, dynamic>;
       final participants = List<String>.from(chatData['participants'] ?? []);
@@ -171,23 +176,29 @@ class ParentChatsController extends BaseChatsController {
       );
 
       if (otherUserId.isNotEmpty) {
-        final timestamp = chatData['lastMessageTime'] as Timestamp? ??
-            chatData['createdAt'] as Timestamp?;
+        final hiveLast = msgCache.getLastMessage(chatDoc.id);
+        final hiveTs = hiveLast?.timestamp?.toDate() ?? hiveLast?.localTimestamp;
+        final fallbackCreatedAt = chatData['createdAt'] as Timestamp?;
+        final ts = hiveTs != null
+            ? Timestamp.fromDate(hiveTs)
+            : fallbackCreatedAt;
         sortableItems.add(_SortableItem(
           item: ChatItem(userId: otherUserId, userData: {}, chatDoc: chatDoc),
-          timestamp: timestamp,
+          timestamp: ts,
         ));
       }
     }
 
-    // Agregar grupos a la lista con su timestamp
     for (final groupDoc in groups) {
       final groupData = groupDoc.data() as Map<String, dynamic>;
-      final timestamp = groupData['lastActivity'] as Timestamp? ??
-          groupData['createdAt'] as Timestamp?;
+      final hiveLast = groupMsgCache.getLastMessage(groupDoc.id);
+      final fallbackCreatedAt = groupData['createdAt'] as Timestamp?;
+      final ts = hiveLast != null
+          ? Timestamp.fromDate(hiveLast.timestamp)
+          : fallbackCreatedAt;
       sortableItems.add(_SortableItem(
         item: GroupItem(groupId: groupDoc.id, groupData: groupData),
-        timestamp: timestamp,
+        timestamp: ts,
       ));
     }
 

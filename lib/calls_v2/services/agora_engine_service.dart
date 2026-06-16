@@ -444,6 +444,24 @@ class AgoraEngineService {
     });
   }
 
+  /// Libera el engine SOLO si no hay una llamada activa.
+  ///
+  /// Pensado para llamarse cuando la app va a background real: el engine de
+  /// Agora retiene el pipeline de video/cámara nativo (mucha memoria), y si no
+  /// estás en una llamada no tiene sentido mantenerlo vivo en background — hace
+  /// que el OS mate la app antes. Se re-inicializa solo (lazy) en la próxima
+  /// llamada vía initialize()/joinChannel().
+  ///
+  /// 🔒 NUNCA toca el engine durante una llamada activa.
+  Future<void> releaseIfIdle() async {
+    if (_isInChannel) return; // Llamada activa: no tocar.
+    if (!_isInitialized && _engine == null) return; // Ya liberado.
+    ReleaseLogger.log(
+      'AgoraEngineService: 🧹 Liberando engine idle en background (sin llamada activa)',
+    );
+    await dispose();
+  }
+
   /// Llamar cuando la app vuelve a foreground
   void onAppForeground() {
     if (!_isInChannel) {

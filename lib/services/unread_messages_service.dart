@@ -209,16 +209,31 @@ class UnreadMessagesService {
     }
   }
 
+  /// ✅ FIX: idempotencia del listener de badge. startBadgeListener se llama
+  /// en CADA evento de authStateChanges (incluye refresh de token) y antes
+  /// apilaba un listener nuevo cada vez — tras N eventos, cada mensaje
+  /// disparaba N updateBadgeCount() con 3-4 reads de Firestore cada uno.
+  static bool _badgeListenerStarted = false;
+
   /// Configurar listener automático para actualizar badge
   /// ✅ OPTIMIZADO: Usa LocalUnreadCountService en lugar de Firestore
   void startBadgeListener() {
     final user = _auth.currentUser;
     if (user == null) return;
 
-    // Escuchar cambios en LocalUnreadCountService
-    LocalUnreadCountService().addListener(() {
-      updateBadgeCount();
-    });
+    // Escuchar cambios en LocalUnreadCountService (solo una vez por proceso)
+    if (!_badgeListenerStarted) {
+      _badgeListenerStarted = true;
+      LocalUnreadCountService().addListener(() {
+        updateBadgeCount();
+      });
+    }
+
+    // ✅ Recalc inmediato al inicializar el listener — cubre el caso cold
+    // start (lifecycle.resumed no dispara en frío, así que sin esto el badge
+    // queda con el valor que dejó la última sesión o la última push notif).
+    // Fire-and-forget para no bloquear el setup.
+    updateBadgeCount();
   }
 
   /// Limpiar el badge del icono de la app (poner en 0)

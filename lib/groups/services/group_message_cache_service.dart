@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../models/group_message.dart';
 
@@ -17,6 +18,93 @@ class GroupMessageCacheService {
   Box? _messagesBox;
   bool _isInitialized = false;
 
+  // ═══════════════════════════════════════════════════════════════════
+  // LAST MESSAGE INDEX (in-memory) — para preview en chat list.
+  // ═══════════════════════════════════════════════════════════════════
+  final Map<String, GroupMessage> _lastMessageByGroup = {};
+  final StreamController<String> _lastMessageChangeController =
+      StreamController<String>.broadcast();
+
+  Stream<String> get lastMessageChanges => _lastMessageChangeController.stream;
+
+  /// Obtener el último mensaje cacheado para un grupo (O(1)).
+  GroupMessage? getLastMessage(String groupId) => _lastMessageByGroup[groupId];
+
+  /// Seed IDEMPOTENTE del preview (solo índice en memoria, sin tocar el box).
+  /// Siembra/emite solo si es un mensaje genuinamente más nuevo; no-op si el
+  /// último ya es este mismo id. Se usa para sembrar desde el payload del FCM
+  /// (que llega antes que el listener de la subcolección).
+  void seedLastMessageIfNewer(String groupId, GroupMessage message) {
+    final current = _lastMessageByGroup[groupId];
+    if (current != null && current.id == message.id) return; // ya está
+    if (current == null || message.timestamp.isAfter(current.timestamp)) {
+      _lastMessageByGroup[groupId] = message;
+      if (!_lastMessageChangeController.isClosed) {
+        _lastMessageChangeController.add(groupId);
+      }
+    }
+  }
+
+  /// Stream del último mensaje. Emite el valor actual y luego cambios.
+  Stream<GroupMessage?> watchLastMessage(String groupId) async* {
+    yield getLastMessage(groupId);
+    yield* lastMessageChanges
+        .where((id) => id == groupId)
+        .map((_) => getLastMessage(groupId));
+  }
+
+  void _maybeUpdateLastMessage(String groupId, GroupMessage msg, {bool notify = true}) {
+    final current = _lastMessageByGroup[groupId];
+
+    // 🗑️ Un mensaje eliminado no debe quedar como "último mensaje".
+    if (msg.isDeleted) {
+      if (current != null && current.id == msg.id) {
+        _recomputeLastMessageExcludingDeleted(groupId, notify: notify);
+      }
+      return;
+    }
+
+    if (current == null ||
+        msg.timestamp.isAfter(current.timestamp) ||
+        msg.id == current.id) {
+      _lastMessageByGroup[groupId] = msg;
+      if (notify && !_lastMessageChangeController.isClosed) {
+        _lastMessageChangeController.add(groupId);
+      }
+    }
+  }
+
+  /// Recalcular (sync) el último mensaje NO eliminado del grupo.
+  void _recomputeLastMessageExcludingDeleted(String groupId, {bool notify = true}) {
+    if (_messagesBox == null) {
+      _lastMessageByGroup.remove(groupId);
+      return;
+    }
+    GroupMessage? best;
+    final prefix = '${groupId}_';
+    for (final raw in _messagesBox!.keys) {
+      final key = raw.toString();
+      if (key.startsWith('_') || !key.startsWith(prefix)) continue;
+      final data = _messagesBox!.get(raw) as Map<dynamic, dynamic>?;
+      if (data == null) continue;
+      if (data['isDeleted'] == true) continue;
+      final msgId = data['id'] as String?;
+      if (msgId == null || !key.endsWith('_$msgId')) continue;
+      try {
+        final m = _messageFromMap(data);
+        if (best == null || m.timestamp.isAfter(best.timestamp)) best = m;
+      } catch (_) {}
+    }
+    if (best != null) {
+      _lastMessageByGroup[groupId] = best;
+    } else {
+      _lastMessageByGroup.remove(groupId);
+    }
+    if (notify && !_lastMessageChangeController.isClosed) {
+      _lastMessageChangeController.add(groupId);
+    }
+  }
+
   /// Inicializar Hive y abrir la box
   Future<void> initialize() async {
     if (_isInitialized) return;
@@ -25,11 +113,38 @@ class GroupMessageCacheService {
       _messagesBox = await Hive.openBox(_boxName);
       _isInitialized = true;
 
+      _rebuildLastMessageIndex();
+
       // Ejecutar limpieza de mensajes viejos (máximo una vez al día)
       await _checkAndCleanupOldMessages();
     } catch (e) {
       // Silently fail - cache is optional
     }
+  }
+
+  void _rebuildLastMessageIndex() {
+    if (_messagesBox == null) return;
+    _lastMessageByGroup.clear();
+    try {
+      for (final raw in _messagesBox!.keys) {
+        final key = raw.toString();
+        if (key.startsWith('_')) continue; // metadata
+        final data = _messagesBox!.get(raw) as Map<dynamic, dynamic>?;
+        if (data == null) continue;
+        // Derivar groupId quitando el sufijo '_<id>' (mismo criterio que
+        // MessageCacheService: no cortar en el primer '_').
+        final msgId = data['id'] as String?;
+        if (msgId == null || msgId.isEmpty || !key.endsWith('_$msgId')) continue;
+        final groupId = key.substring(0, key.length - msgId.length - 1);
+        if (groupId.isEmpty) continue;
+        try {
+          final msg = _messageFromMap(data);
+          _maybeUpdateLastMessage(groupId, msg, notify: false);
+        } catch (_) {
+          // mensaje corrupto en cache — saltar.
+        }
+      }
+    } catch (_) {}
   }
 
   /// Verifica si es necesario ejecutar limpieza y la ejecuta (máximo una vez al día)
@@ -60,6 +175,7 @@ class GroupMessageCacheService {
       final key = '${groupId}_${message.id}';
       final data = _messageToMap(message);
       await _messagesBox!.put(key, data);
+      _maybeUpdateLastMessage(groupId, message);
     } catch (e) {
       // Silently fail
     }
@@ -79,6 +195,9 @@ class GroupMessageCacheService {
       }
 
       await _messagesBox!.putAll(entries);
+      for (final m in messages) {
+        _maybeUpdateLastMessage(groupId, m);
+      }
     } catch (e) {
       // Silently fail
     }
@@ -223,6 +342,12 @@ class GroupMessageCacheService {
       'localId': message.localId,
       // ✅ Visibilidad por destinatario
       'visibleTo': message.visibleTo,
+      // ✅ Ubicación
+      'latitude': message.latitude,
+      'longitude': message.longitude,
+      'isLiveLocation': message.isLiveLocation,
+      'liveLocationExpiresAt':
+          message.liveLocationExpiresAt?.millisecondsSinceEpoch,
     };
   }
 
@@ -286,6 +411,14 @@ class GroupMessageCacheService {
       // ✅ Visibilidad por destinatario
       visibleTo: data['visibleTo'] != null
           ? List<String>.from(data['visibleTo'] as List)
+          : null,
+      // ✅ Ubicación
+      latitude: (data['latitude'] as num?)?.toDouble(),
+      longitude: (data['longitude'] as num?)?.toDouble(),
+      isLiveLocation: data['isLiveLocation'] as bool? ?? false,
+      liveLocationExpiresAt: data['liveLocationExpiresAt'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(
+              data['liveLocationExpiresAt'] as int)
           : null,
     );
   }

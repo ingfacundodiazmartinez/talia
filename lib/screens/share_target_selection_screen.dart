@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../models/shared_content.dart';
 import '../controllers/share_target_controller.dart';
+import '../utils/release_logger.dart';
 
 /// Pantalla para seleccionar destino del contenido compartido (chat o story)
 class ShareTargetSelectionScreen extends StatefulWidget {
@@ -37,7 +38,8 @@ class _ShareTargetSelectionScreenState
           );
         } catch (e) {
           // Si falla, al menos loguear
-          debugPrint('Error showing success snackbar: $e');
+          ReleaseLogger.error('Error showing success snackbar: $e',
+              tag: 'ShareTarget');
         }
       }
     };
@@ -61,7 +63,8 @@ class _ShareTargetSelectionScreenState
             ),
           );
         } catch (e) {
-          debugPrint('Error showing error dialog: $e');
+          ReleaseLogger.error('Error showing error dialog: $e',
+              tag: 'ShareTarget');
         }
       }
     };
@@ -133,17 +136,18 @@ class _ShareTargetSelectionScreenState
   }
 
   Widget _buildEmptyState(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Compartir')),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.share_outlined, size: 64, color: Colors.grey[400]),
+            Icon(Icons.share_outlined, size: 64, color: colorScheme.outline),
             const SizedBox(height: 16),
             Text(
               'No hay contenido para compartir',
-              style: TextStyle(color: Colors.grey[600], fontSize: 16),
+              style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 16),
             ),
             const SizedBox(height: 24),
             ElevatedButton(
@@ -158,11 +162,12 @@ class _ShareTargetSelectionScreenState
 
   Widget _buildPreviewSection(
       BuildContext context, List<SharedContent> content) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Container(
       margin: const EdgeInsets.all(16),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        color: colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
@@ -170,13 +175,13 @@ class _ShareTargetSelectionScreenState
         children: [
           Row(
             children: [
-              Icon(Icons.share, size: 16, color: Colors.grey[600]),
+              Icon(Icons.share, size: 16, color: colorScheme.onSurfaceVariant),
               const SizedBox(width: 8),
               Text(
                 '${content.length} ${content.length == 1 ? "elemento" : "elementos"} para compartir',
                 style: TextStyle(
                   fontSize: 12,
-                  color: Colors.grey[600],
+                  color: colorScheme.onSurfaceVariant,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -199,6 +204,7 @@ class _ShareTargetSelectionScreenState
   }
 
   Widget _buildPreviewItem(SharedContent item) {
+    final colorScheme = Theme.of(context).colorScheme;
     if (item.isMedia && item.mediaPath != null) {
       return Container(
         width: 60,
@@ -206,7 +212,7 @@ class _ShareTargetSelectionScreenState
         margin: const EdgeInsets.only(right: 8),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
-          color: Colors.grey[300],
+          color: colorScheme.surfaceContainerHigh,
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(8),
@@ -220,7 +226,7 @@ class _ShareTargetSelectionScreenState
                   item.type == SharedContentType.video
                       ? Icons.video_file
                       : Icons.image,
-                  color: Colors.grey[600],
+                  color: colorScheme.onSurfaceVariant,
                 ),
               ),
               if (item.type == SharedContentType.video)
@@ -251,7 +257,7 @@ class _ShareTargetSelectionScreenState
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(8),
-        color: Colors.grey[200],
+        color: colorScheme.surfaceContainerHigh,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -259,7 +265,7 @@ class _ShareTargetSelectionScreenState
           Icon(
             item.isUrl ? Icons.link : Icons.text_fields,
             size: 14,
-            color: Colors.grey[600],
+            color: colorScheme.onSurfaceVariant,
           ),
           const SizedBox(height: 4),
           Expanded(
@@ -267,7 +273,7 @@ class _ShareTargetSelectionScreenState
               item.text ?? item.url ?? '',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 10, color: Colors.grey[700]),
+              style: TextStyle(fontSize: 10, color: colorScheme.onSurfaceVariant),
             ),
           ),
         ],
@@ -283,15 +289,17 @@ class _ShareTargetSelectionScreenState
     }
 
     if (!chatsController.hasChatsOrGroups) {
+      final colorScheme = Theme.of(context).colorScheme;
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.chat_bubble_outline, size: 64, color: Colors.grey[400]),
+            Icon(Icons.chat_bubble_outline,
+                size: 64, color: colorScheme.outline),
             const SizedBox(height: 16),
             Text(
               'No hay chats disponibles',
-              style: TextStyle(color: Colors.grey[600], fontSize: 16),
+              style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 16),
             ),
           ],
         ),
@@ -343,7 +351,7 @@ class _ShareTargetSelectionScreenState
         style: TextStyle(
           fontSize: 14,
           fontWeight: FontWeight.bold,
-          color: Colors.grey[600],
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );
@@ -363,11 +371,11 @@ class _ShareTargetSelectionScreenState
       leading: CircleAvatar(
         backgroundImage:
             photoUrl != null ? CachedNetworkImageProvider(photoUrl) : null,
-        backgroundColor: Colors.grey[300],
+        backgroundColor: colorScheme.surfaceContainerHigh,
         child: photoUrl == null
             ? Icon(
                 isGroup ? Icons.group : Icons.person,
-                color: Colors.grey[600],
+                color: colorScheme.onSurfaceVariant,
               )
             : null,
       ),
@@ -375,7 +383,7 @@ class _ShareTargetSelectionScreenState
       subtitle: subtitle != null ? Text(subtitle) : null,
       trailing: isSelected
           ? Icon(Icons.check_circle, color: colorScheme.primary)
-          : Icon(Icons.circle_outlined, color: Colors.grey[400]),
+          : Icon(Icons.circle_outlined, color: colorScheme.outline),
       selected: isSelected,
       selectedTileColor: colorScheme.primaryContainer.withValues(alpha: 0.3),
       onTap: () => _controller.selectChat(chatId, isGroup: isGroup),
@@ -514,8 +522,9 @@ class _ShareTargetSelectionScreenState
                         errorBuilder: (context, error, stackTrace) => Container(
                           width: 200,
                           height: 300,
-                          color: Colors.grey[300],
-                          child: Icon(Icons.image, size: 64, color: Colors.grey[600]),
+                          color: colorScheme.surfaceContainerHigh,
+                          child: Icon(Icons.image,
+                              size: 64, color: colorScheme.onSurfaceVariant),
                         ),
                       ),
                     ),

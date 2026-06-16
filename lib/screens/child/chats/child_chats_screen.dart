@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:talia/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -9,6 +10,7 @@ import '../../../widgets/stories_section.dart';
 import '../../../widgets/emergency_button.dart';
 import '../../../groups/groups.dart'; // Groups V2
 import '../../../services/chats/chat_services.dart';
+import '../../../services/message_cache_service.dart';
 import '../../../services/message_status_helper.dart';
 import '../../../services/local_unread_count_service.dart';
 import '../../../services/search_service.dart';
@@ -49,7 +51,8 @@ class ChildChatsScreen extends StatefulWidget {
   State<ChildChatsScreen> createState() => _ChildChatsScreenState();
 }
 
-class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepAliveClientMixin {
+class _ChildChatsScreenState extends State<ChildChatsScreen>
+    with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
   late ChildChatsController _chatsController;
   final LeaveGroupService _leaveGroupService = LeaveGroupService();
   final UserCacheService _userCacheService = UserCacheService();
@@ -58,6 +61,8 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   // Búsqueda
   final TextEditingController _searchController = TextEditingController();
   final ValueNotifier<String> _searchQuery = ValueNotifier<String>('');
+  // Scroll de la lista de chats — usado para volver al tope al reabrir la app.
+  final ScrollController _chatListScrollController = ScrollController();
 
   /// ✅ Contador para forzar rebuild cuando cambia estado de archivado/silenciado/limpiado
   int _preferencesVersion = 0;
@@ -68,6 +73,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _chatsController = ChildChatsController(userId: widget.childId);
     _chatsController.initialize();
 
@@ -84,7 +90,20 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
     // ✅ Escuchar cambios en alias para actualizar nombres en la lista
     _userCacheService.aliasChangedNotifier.addListener(_onAliasChanged);
+
+    // 🔒 Hive como SST: rebuildear la chat list cuando llega un mensaje
+    // nuevo a cache (cualquier chat o grupo). Esto reordena la lista por
+    // el nuevo timestamp del último mensaje.
+    _lastMessageSub = MessageCacheService().lastMessageChanges.listen((_) {
+      if (mounted) setState(() {});
+    });
+    _groupLastMessageSub = GroupMessageCacheService().lastMessageChanges.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
+
+  StreamSubscription<String>? _lastMessageSub;
+  StreamSubscription<String>? _groupLastMessageSub;
 
   void _onAliasChanged() {
     if (mounted) {
@@ -105,12 +124,32 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Al volver a la app desde background, resetear scroll de la chat list
+    // al tope. El user pidió ese comportamiento — la sesión nueva empieza
+    // desde el chat más reciente, no donde quedó.
+    if (state == AppLifecycleState.resumed) {
+      if (_chatListScrollController.hasClients) {
+        _chatListScrollController.jumpTo(0);
+      }
+      // 🔌 Despertar el socket gRPC de Firestore: tras background largo el
+      // listener de getChatsStream queda vivo pero sin recibir updates hasta
+      // reiniciar la app. Un get(Source.server) reactiva el canal.
+      _chatsController.refreshChatsFromServer();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     LocalUnreadCountService().removeListener(_onUnreadCountsChanged);
     _preferencesCache.removeListener(_onPreferencesChanged);
     _userCacheService.aliasChangedNotifier.removeListener(_onAliasChanged);
+    _lastMessageSub?.cancel();
+    _groupLastMessageSub?.cancel();
     _searchController.dispose();
     _searchQuery.dispose();
+    _chatListScrollController.dispose();
     _chatsController.dispose();
     super.dispose();
   }
@@ -201,6 +240,22 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
   // ✅ CACHE: Variables para mantener últimos datos válidos y evitar rebuild infinito
   QuerySnapshot? _lastValidChatsData;
   DateTime _lastValidChatsTimestamp = DateTime.now();
+
+  /// Genera el preview de texto a mostrar en la chat list desde el ChatMessage
+  /// del cache Hive. Si no hay mensaje, devuelve ''.
+  String _previewFor(ChatMessage? m) {
+    if (m == null) return '';
+    if (m.isDeletedForEveryone) return 'Mensaje eliminado';
+    if (m.latitude != null && m.longitude != null) {
+      return m.isLiveLocation ? '📍 Ubicación en tiempo real' : '📍 Ubicación';
+    }
+    final text = m.text?.trim();
+    if (text != null && text.isNotEmpty) return text;
+    if (m.imageUrl != null && m.imageUrl!.isNotEmpty) return '📷 Imagen';
+    if (m.videoUrl != null && m.videoUrl!.isNotEmpty) return '🎥 Video';
+    if (m.audioUrl != null && m.audioUrl!.isNotEmpty) return '🎤 Audio';
+    return '';
+  }
 
   Widget _buildChatList(ColorScheme colorScheme) {
     return StreamBuilder<QuerySnapshot>(
@@ -401,6 +456,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
 
                     return SlidableAutoCloseBehavior(
                       child: ListView.builder(
+                        controller: _chatListScrollController,
                         padding: EdgeInsets.all(16),
                         itemCount: listItems.length,
                         itemBuilder: (context, index) {
@@ -481,105 +537,56 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
         if (chatDoc != null) {
           final chatData = chatDoc.data() as Map<String, dynamic>;
           final unreadCount = LocalUnreadCountService().getUnreadCount(chatDoc.id);
-
-          // ✅ FIX: Usar lastMessageSender del documento del chat (denormalizado)
-          // para garantizar sincronización con lastMessage text
-          final lastMessageSenderFromDoc = chatData['lastMessageSender'] as String?;
           final currentUserId = _chatsController.userId;
-          final isOwnLastMessage = lastMessageSenderFromDoc != null &&
-              lastMessageSenderFromDoc == currentUserId;
 
-          // Solo obtener estado del mensaje si es mensaje propio
-          // (evita inconsistencias cuando timestamps son iguales)
-          if (!isOwnLastMessage) {
-            // Mensaje recibido - no mostrar indicador de estado
-            final clearedAt = _preferencesCache.getClearedAt(chatDoc.id);
-            final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
-            final isChatCleared = clearedAt != null &&
-                (lastMessageTime == null || !clearedAt.isBefore(lastMessageTime.toDate()));
+          // 🔒 Source of truth: Hive cache. El cliente nuevo NO lee
+          // chatData['lastMessage*'] — esos siguen en Firestore solo para
+          // backward compat con clientes viejos. La info de receipts
+          // (lastOpenedAt_*, lastReceivedAt_*) SÍ sigue viniendo del chatData
+          // porque es metadata del recipient, no del mensaje.
+          return StreamBuilder<ChatMessage?>(
+            key: ValueKey('hive_last_${chatDoc.id}'),
+            stream: MessageCacheService().watchLastMessage(chatDoc.id),
+            builder: (context, lastMsgSnapshot) {
+              final lastMsg = lastMsgSnapshot.data;
 
-            return ChatListItem(
-              chatId: chatDoc.id,
-              userId: childId,
-              name: displayName,
-              lastMessage: isBlocked
-                  ? '🔒 Contacto bloqueado'
-                  : (isChatCleared
-                      ? 'Inicia una conversación...'
-                      : (chatData['lastMessage'] ?? '')),
-              time: isChatCleared ? '' : ChatUtils.formatChatTime(chatData['lastMessageTime']),
-              unreadCount: isBlocked ? 0 : unreadCount,
-              photoURL: photoURL,
-              isEmpty: isChatCleared,
-              isBlocked: isBlocked,
-              lastMessageSenderId: null, // No mostrar icono para mensajes recibidos
-              lastMessageStatus: null,
-              lastMessageModerationStatus: null,
-              lastMessageType: chatData['lastMessageType'] as String?, // ✅ Para cursiva
-              onArchived: () => setState(() => _preferencesVersion++),
-              onMuted: () => setState(() => _preferencesVersion++),
-              onCleared: () => setState(() => _preferencesVersion++),
-            );
-          }
+              final lastMessageSender = lastMsg?.senderId;
+              final isOwnLastMessage =
+                  lastMessageSender != null && lastMessageSender == currentUserId;
+              final lastMessagePreview = _previewFor(lastMsg);
+              final lastMessageDateTime =
+                  lastMsg?.timestamp?.toDate() ?? lastMsg?.localTimestamp;
+              final lastMessageType = lastMsg?.type;
 
-          // Mensaje propio - obtener estado del último mensaje via stream
-          return StreamBuilder<QuerySnapshot>(
-            key: ValueKey('last_msg_${chatDoc.id}'),
-            stream: _chatsController.getChatLastMessageStream(chatDoc.id),
-            builder: (context, messageSnapshot) {
+              // ¿Chat limpiado? Comparar contra el lastMessage de Hive.
+              final clearedAt = _preferencesCache.getClearedAt(chatDoc.id);
+              final isChatCleared = clearedAt != null &&
+                  (lastMessageDateTime == null ||
+                      !clearedAt.isBefore(lastMessageDateTime));
+
+              // Status (sent/delivered/seen) solo aplica a mis propios mensajes.
               MessageStatus? lastMessageStatus;
               ModerationStatus? lastMessageModerationStatus;
+              if (isOwnLastMessage && lastMsg != null) {
+                final chatParticipants =
+                    List<String>.from(chatData['participants'] ?? []);
+                final recipientId = chatParticipants.firstWhere(
+                  (id) => id != currentUserId,
+                  orElse: () => '',
+                );
+                final recipientLastOpenedAt =
+                    chatData['lastOpenedAt_$recipientId'] as Timestamp?;
+                final recipientLastReceivedAt =
+                    chatData['lastReceivedAt_$recipientId'] as Timestamp?;
 
-              if (messageSnapshot.hasData &&
-                  messageSnapshot.data != null &&
-                  messageSnapshot.data!.docs.isNotEmpty) {
-                final lastMessageDoc = messageSnapshot.data!.docs.first;
-                final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
-
-                // Solo calcular estado si el mensaje del stream coincide con el sender del doc
-                final streamSenderId = lastMessageData['senderId'] as String? ?? '';
-                if (streamSenderId == lastMessageSenderFromDoc) {
-                  // ✅ V2: Usar lastOpenedAt del recipient para calcular status
-                  // Obtener el ID del recipient (el otro participante del chat)
-                  final chatParticipants = List<String>.from(chatData['participants'] ?? []);
-                  final recipientId = chatParticipants.firstWhere(
-                    (id) => id != currentUserId,
-                    orElse: () => '',
-                  );
-
-                  final lastMessageTimestamp = lastMessageData['timestamp'] as Timestamp?;
-                  final recipientLastOpenedAt = chatData['lastOpenedAt_$recipientId'] as Timestamp?;
-                  final recipientLastReceivedAt = chatData['lastReceivedAt_$recipientId'] as Timestamp?;
-
-                  lastMessageStatus = MessageStatusHelper.calculateStatusV2(
-                    messageTimestamp: lastMessageTimestamp?.toDate(),
-                    senderId: streamSenderId,
-                    recipientLastOpenedAt: recipientLastOpenedAt?.toDate(),
-                    recipientLastReceivedAt: recipientLastReceivedAt?.toDate(),
-                  );
-
-                  final modStatusString = lastMessageData['moderationStatus'] as String?;
-                  if (modStatusString != null) {
-                    switch (modStatusString) {
-                      case 'approved':
-                        lastMessageModerationStatus = ModerationStatus.approved;
-                        break;
-                      case 'blocked':
-                        lastMessageModerationStatus = ModerationStatus.blocked;
-                        break;
-                      case 'pending':
-                        lastMessageModerationStatus = ModerationStatus.pending;
-                        break;
-                    }
-                  }
-                }
+                lastMessageStatus = MessageStatusHelper.calculateStatusV2(
+                  messageTimestamp: lastMessageDateTime,
+                  senderId: lastMessageSender,
+                  recipientLastOpenedAt: recipientLastOpenedAt?.toDate(),
+                  recipientLastReceivedAt: recipientLastReceivedAt?.toDate(),
+                );
+                lastMessageModerationStatus = lastMsg.moderationStatus;
               }
-
-              // Verificar si el chat fue limpiado usando Hive cache
-              final clearedAt = _preferencesCache.getClearedAt(chatDoc.id);
-              final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
-              final isChatCleared = clearedAt != null &&
-                  (lastMessageTime == null || !clearedAt.isBefore(lastMessageTime.toDate()));
 
               return ChatListItem(
                 chatId: chatDoc.id,
@@ -589,16 +596,21 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
                     ? '🔒 Contacto bloqueado'
                     : (isChatCleared
                         ? 'Inicia una conversación...'
-                        : (chatData['lastMessage'] ?? '')),
-                time: isChatCleared ? '' : ChatUtils.formatChatTime(chatData['lastMessageTime']),
+                        : lastMessagePreview),
+                time: isChatCleared || lastMessageDateTime == null
+                    ? ''
+                    : ChatUtils.formatChatTime(
+                        Timestamp.fromDate(lastMessageDateTime)),
                 unreadCount: isBlocked ? 0 : unreadCount,
                 photoURL: photoURL,
                 isEmpty: isChatCleared,
                 isBlocked: isBlocked,
-                lastMessageSenderId: isChatCleared ? null : lastMessageSenderFromDoc,
+                lastMessageSenderId:
+                    isChatCleared || !isOwnLastMessage ? null : lastMessageSender,
                 lastMessageStatus: isChatCleared ? null : lastMessageStatus,
-                lastMessageModerationStatus: isChatCleared ? null : lastMessageModerationStatus,
-                lastMessageType: chatData['lastMessageType'] as String?, // ✅ Para cursiva
+                lastMessageModerationStatus:
+                    isChatCleared ? null : lastMessageModerationStatus,
+                lastMessageType: lastMessageType,
                 onArchived: () => setState(() => _preferencesVersion++),
                 onMuted: () => setState(() => _preferencesVersion++),
                 onCleared: () => setState(() => _preferencesVersion++),
@@ -652,75 +664,67 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
       );
     }
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: _chatsController.getGroupLastMessageStream(groupId),
-      builder: (context, messageSnapshot) {
+    // 🔒 Source of truth: Hive (GroupMessageCacheService).
+    return StreamBuilder<GroupMessage?>(
+      key: ValueKey('hive_last_grp_$groupId'),
+      stream: GroupMessageCacheService().watchLastMessage(groupId),
+      builder: (context, lastMsgSnapshot) {
+        final lastMsg = lastMsgSnapshot.data;
         String? lastMessageSenderId;
         MessageStatus? lastMessageStatus;
         ModerationStatus? lastMessageModerationStatus;
-        String? lastMessageFromStream;
+        String? lastMessageFromCache;
 
-        if (messageSnapshot.hasData && messageSnapshot.data!.docs.isNotEmpty) {
-          final lastMessageDoc = messageSnapshot.data!.docs.first;
-          final lastMessageData = lastMessageDoc.data() as Map<String, dynamic>;
-
-          final senderId = lastMessageData['senderId'] as String? ?? '';
-          lastMessageSenderId = senderId;
-
-          // Obtener preview del mensaje desde el stream si no hay en groupData
-          final messageText = lastMessageData['text'] as String?;
-          final hasImage = lastMessageData['imageUrl'] != null;
-          final hasVideo = lastMessageData['videoUrl'] != null;
-          final hasAudio = lastMessageData['audioUrl'] != null;
-          final isDeleted = lastMessageData['isDeleted'] as bool? ?? false;
-          final senderName = lastMessageData['senderName'] as String? ?? '';
+        if (lastMsg != null) {
           final currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+          final senderId = lastMsg.senderId;
+          lastMessageSenderId = senderId;
           final isOwnMessage = senderId == currentUserId;
 
-          // Construir preview del mensaje
+          // Preview
           String messagePreview;
-          if (isDeleted) {
+          if (lastMsg.isDeleted) {
             messagePreview = 'Mensaje eliminado';
-          } else if (messageText != null && messageText.isNotEmpty) {
-            messagePreview = messageText.length > 40
-                ? '${messageText.substring(0, 40)}...'
-                : messageText;
-          } else if (hasImage) {
+          } else if (lastMsg.latitude != null && lastMsg.longitude != null) {
+            messagePreview = lastMsg.isLiveLocation
+                ? '📍 Ubicación en tiempo real'
+                : '📍 Ubicación';
+          } else if ((lastMsg.text ?? '').isNotEmpty) {
+            final t = lastMsg.text!;
+            messagePreview = t.length > 40 ? '${t.substring(0, 40)}...' : t;
+          } else if ((lastMsg.imageUrl ?? '').isNotEmpty) {
             messagePreview = '📷 Imagen';
-          } else if (hasVideo) {
+          } else if ((lastMsg.videoUrl ?? '').isNotEmpty) {
             messagePreview = '🎥 Video';
-          } else if (hasAudio) {
+          } else if ((lastMsg.audioUrl ?? '').isNotEmpty) {
             messagePreview = '🎵 Audio';
           } else {
             messagePreview = '';
           }
-
-          // Agregar nombre del sender si no es mensaje propio
-          if (!isOwnMessage && senderName.isNotEmpty && messagePreview.isNotEmpty) {
-            // Usar solo el primer nombre para ahorrar espacio
-            final firstName = senderName.split(' ').first;
-            lastMessageFromStream = '$firstName: $messagePreview';
+          if (!isOwnMessage && lastMsg.senderName.isNotEmpty && messagePreview.isNotEmpty) {
+            final firstName = lastMsg.senderName.split(' ').first;
+            lastMessageFromCache = '$firstName: $messagePreview';
           } else {
-            lastMessageFromStream = messagePreview;
+            lastMessageFromCache = messagePreview;
           }
 
-          // Usar calculateGroupV2Status - seen solo si TODOS los miembros leyeron
+          // Status: armamos un map sintético compatible con calculateGroupV2Status.
           // ignore: deprecated_member_use_from_same_package
           lastMessageStatus = MessageStatusHelper.calculateGroupV2Status(
-            data: lastMessageData,
+            data: {
+              'readBy': lastMsg.readBy,
+              'timestamp': lastMsg.timestamp,
+            },
             senderId: senderId,
-            hasServerTimestamp: lastMessageData['timestamp'] != null,
+            hasServerTimestamp: true,
             groupMembers: groupMembers,
           );
 
-          // Para grupos V2, usar verde (approved) cuando está seen, gris para otros estados
           if (lastMessageStatus == MessageStatus.seen) {
             lastMessageModerationStatus = ModerationStatus.approved;
           }
-
-          final modStatusString = lastMessageData['moderationStatus'] as String?;
-          if (modStatusString != null) {
-            switch (modStatusString) {
+          if (lastMsg.moderationStatus != null) {
+            switch (lastMsg.moderationStatus) {
               case 'approved':
                 lastMessageModerationStatus = ModerationStatus.approved;
                 break;
@@ -734,20 +738,17 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           }
         }
 
-        // ✅ Verificar si el grupo fue "limpiado" por el usuario
-        // Comparar clearedAt con lastMessageTime para mostrar solo mensajes nuevos
+        // Clear flag con timestamp de Hive.
         final clearedAt = _preferencesCache.getClearedAt(groupId);
-        final lastMessageTime = groupData['lastMessageTime'] as Timestamp?;
         final isGroupCleared = clearedAt != null &&
-            (lastMessageTime == null || !clearedAt.isBefore(lastMessageTime.toDate()));
+            (lastMsg == null || !clearedAt.isBefore(lastMsg.timestamp));
 
-        // Prioridad: Si está limpiado -> mensaje vacío, sino groupData['lastMessage'] > lastMessageFromStream > 'Inicia la conversación'
         final lastMessage = isGroupCleared
             ? 'Inicia la conversación'
-            : (groupData['lastMessage'] ?? lastMessageFromStream ?? 'Inicia la conversación');
-
-        // Formatear tiempo del último mensaje (vacío si está limpiado)
-        final timeString = isGroupCleared ? '' : _chatsController.formatTime(groupData['lastMessageTime']);
+            : (lastMessageFromCache ?? 'Inicia la conversación');
+        final timeString = isGroupCleared || lastMsg == null
+            ? ''
+            : _chatsController.formatTime(Timestamp.fromDate(lastMsg.timestamp));
 
         return GroupChatListItem(
           groupId: groupId,
@@ -764,7 +765,7 @@ class _ChildChatsScreenState extends State<ChildChatsScreen> with AutomaticKeepA
           lastMessageSenderId: lastMessageSenderId,
           lastMessageStatus: lastMessageStatus,
           lastMessageModerationStatus: lastMessageModerationStatus,
-          lastMessageType: groupData['lastMessageType'] as String?, // ✅ Para cursiva
+          lastMessageType: null, // GroupMessage no tiene field 'type' explícito
           timeString: timeString,
         );
       },

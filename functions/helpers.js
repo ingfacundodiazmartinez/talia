@@ -421,6 +421,68 @@ const RATE_LIMITS = {
  * @param {boolean} [params.isGroup] - Si es mensaje de grupo
  * @returns {Promise<{success: boolean, error?: string}>}
  */
+/**
+ * 🔇 Filtros server-side de mute/archivado para push de chat.
+ * Misma semántica que sendNotificationOnCreate (notifications.js): los push
+ * de mensajes 1:1 y grupos NO pasan por ese trigger (salen directo por los
+ * emisores de abajo), así que el filtro tiene que vivir acá también.
+ * Crítico en iOS: el sistema muestra el push y el cliente no puede
+ * suprimirlo, así que el único mute efectivo es no enviarlo.
+ */
+function shouldSuppressChatPush(userData, chatId, type) {
+  if (type !== "chat_message" && type !== "group_message") return null;
+  if (!chatId) return null;
+
+  // Mute (con expiración opcional via Timestamp)
+  if (userData.mutedChats && typeof userData.mutedChats === "object") {
+    const muteEntry = userData.mutedChats[chatId];
+    if (muteEntry !== undefined && muteEntry !== null) {
+      let isMuted = true;
+      if (muteEntry.toMillis && typeof muteEntry.toMillis === "function") {
+        isMuted = muteEntry.toMillis() > Date.now();
+      }
+      if (isMuted) return "muted";
+    }
+  }
+
+  // Archivado
+  if (userData.archivedChats && typeof userData.archivedChats === "object") {
+    if (userData.archivedChats[chatId] != null) return "archived";
+  }
+
+  return null;
+}
+
+/**
+ * 🧹 Limpiar tokens FCM inválidos del array `fcmTokens` del usuario.
+ * Sin esto los tokens muertos (reinstalls, rotación) se acumulan para
+ * siempre y degradan la entregabilidad. Fire-and-forget seguro.
+ */
+async function cleanupInvalidFcmTokens(userId, fcmTokens, responses) {
+  try {
+    const invalidCodes = new Set([
+      "messaging/registration-token-not-registered",
+      "messaging/invalid-registration-token",
+      "messaging/invalid-argument",
+    ]);
+    const deadTokens = [];
+    responses.forEach((resp, idx) => {
+      if (!resp.success && resp.error && invalidCodes.has(resp.error.code)) {
+        deadTokens.push(fcmTokens[idx]);
+      }
+    });
+    if (deadTokens.length === 0) return;
+
+    await getFirestore().collection("users").doc(userId).update({
+      fcmTokens: FieldValue.arrayRemove(...deadTokens),
+    });
+    console.log(`🧹 [FCM] Removidos ${deadTokens.length} tokens inválidos de ${userId}`);
+  } catch (cleanupError) {
+    // No crítico: se reintenta en el próximo envío.
+    console.log(`⚠️ [FCM] No se pudieron limpiar tokens de ${userId}: ${cleanupError.message}`);
+  }
+}
+
 async function sendDirectPushNotification(params) {
   const {
     userId,
@@ -434,7 +496,9 @@ async function sendDirectPushNotification(params) {
     senderPhotoUrl,
     groupPhotoUrl, // ✅ Foto del grupo para notificaciones
     groupName,
+    groupId, // ✅ Backward compat: clientes viejos navegan con data.groupId
     isGroup,
+    visibleTo, // 🔒 visibilidad del mensaje — si no incluye al receptor, no notificar
   } = params;
 
   try {
@@ -443,6 +507,16 @@ async function sendDirectPushNotification(params) {
     if (senderId && userId === senderId) {
       console.log(`🚫 [DirectPush] BLOCKED - No enviar notificación al sender (userId=${userId} === senderId=${senderId})`);
       return { success: false, error: "Cannot notify message sender" };
+    }
+
+    // 🔒 visibleTo: si el mensaje tiene visibilidad restringida y el receptor
+    // NO está incluido (moderación pendiente, sender bloqueado por el
+    // receptor), no debe recibir push de un mensaje que su app jamás va a
+    // mostrar. Antes este caso filtraba al bloqueador que el bloqueado le
+    // seguía escribiendo.
+    if (Array.isArray(visibleTo) && visibleTo.length > 0 && !visibleTo.includes(userId)) {
+      console.log(`🚫 [DirectPush] Mensaje no visible para ${userId} (visibleTo restringido) — skip push`);
+      return { success: false, error: "Message not visible to recipient" };
     }
 
     console.log(`📱 [DirectPush] Enviando push a ${userId}, tipo: ${type}`);
@@ -456,6 +530,14 @@ async function sendDirectPushNotification(params) {
     }
 
     const userData = userDoc.data();
+
+    // 🔇 Mute/archivado server-side (ver shouldSuppressChatPush)
+    const suppressReason = shouldSuppressChatPush(userData, chatId, type);
+    if (suppressReason) {
+      console.log(`🔇 [DirectPush] Chat ${chatId} ${suppressReason} por ${userId} — skip push`);
+      return { success: false, error: `Chat ${suppressReason}` };
+    }
+
     let fcmTokens = [];
 
     // Normalizar tokens FCM
@@ -506,6 +588,7 @@ async function sendDirectPushNotification(params) {
     if (chatId) fcmData.chatId = chatId;
     if (messageId) fcmData.messageId = messageId;
     if (groupName) fcmData.groupName = groupName;
+    if (groupId) fcmData.groupId = groupId;
     if (isGroup !== undefined) fcmData.isGroup = String(isGroup);
 
     // Detectar si es mensaje de chat para activar NSE
@@ -582,6 +665,11 @@ async function sendDirectPushNotification(params) {
       }
     });
 
+    // 🧹 Remover tokens muertos para no degradar entregabilidad
+    if (response.failureCount > 0) {
+      await cleanupInvalidFcmTokens(userId, fcmTokens, response.responses);
+    }
+
     return { success: response.successCount > 0 };
   } catch (error) {
     console.error(`❌ [DirectPush] Error:`, error);
@@ -616,6 +704,19 @@ async function sendPushNotification(userId, title, body, data = {}) {
     }
 
     const userData = userDoc.data();
+
+    // 🔇 Mute/archivado server-side para mensajes de chat/grupo (los push de
+    // grupo salen por acá, no por sendNotificationOnCreate).
+    const suppressReason = shouldSuppressChatPush(
+      userData,
+      data.chatId || data.groupId,
+      data.type,
+    );
+    if (suppressReason) {
+      console.log(`🔇 [sendPushNotification] Chat ${data.chatId || data.groupId} ${suppressReason} por ${userId} — skip push`);
+      return false;
+    }
+
     let fcmTokens = [];
 
     // Normalizar tokens FCM
@@ -719,6 +820,8 @@ async function sendPushNotification(userId, title, body, data = {}) {
           console.error(`  - Token ${idx}: ${resp.error?.code} - ${resp.error?.message}`);
         }
       });
+      // 🧹 Remover tokens muertos para no degradar entregabilidad
+      await cleanupInvalidFcmTokens(userId, fcmTokens, response.responses);
     }
 
     return response.successCount > 0;
@@ -739,6 +842,7 @@ module.exports = {
   // Push Notifications
   sendPushNotification,
   sendDirectPushNotification,
+  cleanupInvalidFcmTokens,
 
   // Validaciones
   isValidString,

@@ -1,17 +1,17 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../utils/release_logger.dart';
 import 'chat_preferences_cache.dart';
 
 /// Servicio atómico: Archivar chat
 ///
-/// Responsabilidad única: Marcar chat como archivado para el usuario actual
+/// Responsabilidad única: Marcar chat como archivado para el usuario actual.
 ///
-/// Nota: El estado "archivado" se guarda SOLO en cache local (Hive),
-/// NO en Firestore. Esto porque:
-/// - Solo afecta la UI local del usuario
-/// - No necesita sincronización entre dispositivos (preferencia menor)
-/// - Reduce escrituras a Firestore = menos costo
-/// - Operación instantánea sin latencia de red
+/// El estado se guarda en DOS lugares:
+/// - Hive local (lecturas instantáneas para la UI, fuente principal).
+/// - Firestore `users/{uid}.archivedChats` (map chatId → timestamp) para que
+///   `sendNotificationOnCreate` skipee el push server-side. Sin esto, el
+///   usuario recibe banners/FCM de chats archivados aunque no quiera verlos.
 class ArchiveChatService {
   final FirebaseAuth _auth;
   final ChatPreferencesCache _preferencesCache;
@@ -43,6 +43,23 @@ class ArchiveChatService {
 
       // Archivar en cache local
       await _preferencesCache.archiveChat(chatId);
+
+      // 🔒 Persistir en Firestore para que la CF de push haga skip server-side.
+      // Best-effort: si falla, el cliente sigue archivado local. La consecuencia
+      // de un fail acá es que el user podría recibir un push de un chat
+      // archivado hasta que vuelva a archivarlo o sincronice.
+      try {
+        await FirebaseFirestore.instance.collection('users').doc(userId).set({
+          'archivedChats': {
+            chatId: FieldValue.serverTimestamp(),
+          },
+        }, SetOptions(merge: true));
+      } catch (e) {
+        ReleaseLogger.warning(
+          'Error persistiendo archive a Firestore (cliente sigue archivado local): $e',
+          tag: 'ArchiveChat',
+        );
+      }
 
       ReleaseLogger.log(
         'Chat archivado: $chatId',

@@ -18,7 +18,6 @@ import '../../notification_service.dart';
 import '../../reports_screen.dart';
 import '../../services/bottom_nav_visibility.dart';
 import '../../services/credit_wallet_service.dart';
-import 'wallet/daily_bonus_modal.dart';
 
 /// Clase para combinar todos los datos del BottomNavigationBar en un solo stream
 class BottomNavData {
@@ -118,7 +117,9 @@ class ParentMainShell extends StatefulWidget {
 
 class _ParentMainShellState extends State<ParentMainShell> {
   // ✅ CORRECTO: Solo estado UI y controller
-  int _selectedIndex = 0;
+  // Tab inicial = Chats (índice 1). Orden: Dashboard(0), Chats(1), Familia(2),
+  // Perfil(3). Las rutas desde notificaciones sobreescriben este valor.
+  int _selectedIndex = 1;
 
   /// Navegar a un tab específico
   void _navigateToTab(int index) {
@@ -141,7 +142,6 @@ class _ParentMainShellState extends State<ParentMainShell> {
   // GlobalKeys para mantener el estado de navegación de cada tab
   final GlobalKey<NavigatorState> _dashboardNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentDashboard');
   final GlobalKey<NavigatorState> _chatsNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentChats');
-  final GlobalKey<NavigatorState> _contactsNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentContacts');
   final GlobalKey<NavigatorState> _whitelistNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentWhitelist');
   final GlobalKey<NavigatorState> _profileNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'ParentProfile');
 
@@ -173,25 +173,17 @@ class _ParentMainShellState extends State<ParentMainShell> {
     // Esto asegura que las notificaciones se muestren correctamente
     NotificationService().clearCurrentChat();
 
-    // 💰 Wallet Fase 1 (modo sombra): welcome bonus + daily bonus.
-    // Ambas funciones son idempotentes (welcome=one-time, daily=por fecha UTC).
-    // Fire-and-forget — no bloqueamos el init del shell.
+    // 💰 Wallet: solo welcome bonus (one-time). El daily bonus se retiró del
+    // modelo económico — a eCPM bajo genera pérdida fija sin cobertura de ads.
+    // Fire-and-forget: no bloqueamos el init del shell.
     _initializeWalletShadow();
   }
 
-  /// Reclama welcome y daily bonus en segundo plano y, si el daily fue nuevo,
-  /// muestra el modal celebratorio.
+  /// Reclama el welcome bonus en segundo plano (idempotente, sin modal).
   void _initializeWalletShadow() {
     Future<void>.microtask(() async {
       final wallet = CreditWalletService();
-      await wallet.claimWelcomeBonus(); // one-time (silencioso, sin modal)
-      final dailyClaimed = await wallet.claimDailyBonus();
-      if (dailyClaimed && mounted) {
-        // Esperar a que el shell esté listo antes de mostrar el modal
-        await Future.delayed(const Duration(milliseconds: 600));
-        if (!mounted) return;
-        await DailyBonusModal.show(context);
-      }
+      await wallet.claimWelcomeBonus();
     });
   }
 
@@ -368,8 +360,8 @@ class _ParentMainShellState extends State<ParentMainShell> {
   /// Manejar tap en notificación de contacto aprobado
   Future<void> _handleContactApprovedNotificationTap(Map<String, dynamic> data) async {
     try {
-      ReleaseLogger.log('Navigating to contacts tab from notification', tag: 'ParentMainShell');
-      // Cambiar al tab de contactos
+      ReleaseLogger.log('Navigating to Familia tab from notification', tag: 'ParentMainShell');
+      // El viejo tab "Contactos" se eliminó: redirigimos a Familia (whitelist).
       setState(() => _selectedIndex = 2);
     } catch (e) {
       ReleaseLogger.error('Error handling contact approved notification tap: $e', tag: 'ParentMainShell');
@@ -382,8 +374,8 @@ class _ParentMainShellState extends State<ParentMainShell> {
       final childId = data['childId'] as String?;
       ReleaseLogger.log('Navigating to whitelist screen (pendientes) from notification, childId=$childId', tag: 'ParentMainShell');
 
-      // Cambiar al tab de whitelist
-      setState(() => _selectedIndex = 3);
+      // Whitelist ahora vive en index 2 (antes era 3 cuando estaba Contactos).
+      setState(() => _selectedIndex = 2);
 
       // Navegar a la pantalla de whitelist con tab de pendientes
       // WhitelistScreen tiene 3 tabs: Pendientes (0), Aprobadas (1), Rechazadas (2)
@@ -520,6 +512,9 @@ class _ParentMainShellState extends State<ParentMainShell> {
           child: child,
         ),
       ],
+      // Requerido por la API Navigator.pages (exactamente uno de
+      // onDidRemovePage/onPopPage). La página raíz nunca se remueve.
+      onDidRemovePage: (page) {},
       observers: [_NavigatorObserver(_onNavigationChanged)],
     );
   }
@@ -547,12 +542,9 @@ class _ParentMainShellState extends State<ParentMainShell> {
         currentKey = _chatsNavigatorKey;
         break;
       case 2:
-        currentKey = _contactsNavigatorKey;
-        break;
-      case 3:
         currentKey = _whitelistNavigatorKey;
         break;
-      case 4:
+      case 3:
         currentKey = _profileNavigatorKey;
         break;
       default:
@@ -560,7 +552,6 @@ class _ParentMainShellState extends State<ParentMainShell> {
     }
     final navigator = currentKey.currentState;
     if (navigator == null) return false;
-    // Si el navigator puede hacer pop, significa que hay rutas anidadas
     return navigator.canPop();
   }
 
@@ -582,12 +573,9 @@ class _ParentMainShellState extends State<ParentMainShell> {
               currentKey = _chatsNavigatorKey;
               break;
             case 2:
-              currentKey = _contactsNavigatorKey;
-              break;
-            case 3:
               currentKey = _whitelistNavigatorKey;
               break;
-            case 4:
+            case 3:
               currentKey = _profileNavigatorKey;
               break;
             default:
@@ -622,14 +610,10 @@ class _ParentMainShellState extends State<ParentMainShell> {
           ),
           Offstage(
             offstage: _selectedIndex != 2,
-            child: _buildNavigator(_contactsNavigatorKey, ParentContactsScreen()),
-          ),
-          Offstage(
-            offstage: _selectedIndex != 3,
             child: _buildNavigator(_whitelistNavigatorKey, WhitelistScreen()),
           ),
           Offstage(
-            offstage: _selectedIndex != 4,
+            offstage: _selectedIndex != 3,
             child: _buildNavigator(_profileNavigatorKey, ParentProfileScreen()),
           ),
         ],
@@ -645,27 +629,54 @@ class _ParentMainShellState extends State<ParentMainShell> {
           return _buildBottomNavigationBar();
         },
       ),
-      // ✅ CORRECTO: Usar controller para datos de floating action button
-      floatingActionButton: StreamBuilder<int>(
-              stream: _controller.getPendingGroupInvitationsStream(),
-              builder: (context, snapshot) {
-                final count = snapshot.data ?? 0;
-                if (count == 0) return const SizedBox.shrink();
-
-                return Badge(
-                  label: Text(count.toString()),
-                  child: FloatingActionButton(
+      // ✅ CORRECTO: Usar controller para datos de floating action button.
+      // En el tab "Chats" mostramos el FAB de "Nuevo chat" (reemplaza el viejo tab
+      // Contactos). En el resto, conservamos el FAB de invitaciones a grupos cuando hay.
+      floatingActionButton: ValueListenableBuilder<int>(
+              valueListenable: BottomNavVisibility.instance.fullScreenCount,
+              builder: (context, fullScreenCount, _) {
+                if (fullScreenCount > 0 || _hasNestedRoute) {
+                  return const SizedBox.shrink();
+                }
+                if (_selectedIndex == 1) {
+                  // Tab Chats: FAB para iniciar un nuevo chat
+                  return FloatingActionButton(
+                    heroTag: 'parent_new_chat_fab',
                     onPressed: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => const GroupInvitationsScreen(),
+                          builder: (context) => const ParentContactsScreen(),
                         ),
                       );
                     },
-                    tooltip: 'Invitaciones a Grupos ($count)',
-                    child: const Icon(Icons.group_add),
-                  ),
+                    tooltip: 'Nuevo chat',
+                    child: const Icon(Icons.edit),
+                  );
+                }
+                return StreamBuilder<int>(
+                  stream: _controller.getPendingGroupInvitationsStream(),
+                  builder: (context, snapshot) {
+                    final count = snapshot.data ?? 0;
+                    if (count == 0) return const SizedBox.shrink();
+
+                    return Badge(
+                      label: Text(count.toString()),
+                      child: FloatingActionButton(
+                        heroTag: 'parent_group_invitations_fab',
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const GroupInvitationsScreen(),
+                            ),
+                          );
+                        },
+                        tooltip: 'Invitaciones a Grupos ($count)',
+                        child: const Icon(Icons.group_add),
+                      ),
+                    );
+                  },
                 );
               },
             ),
@@ -753,11 +764,6 @@ class _ParentMainShellState extends State<ParentMainShell> {
             icon: _buildIconWithBadge(Icons.chat_bubble_outline, totalUnreadMessages),
             activeIcon: _buildIconWithBadge(Icons.chat_bubble, totalUnreadMessages),
             label: 'Chats',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.people_outline),
-            activeIcon: Icon(Icons.people),
-            label: 'Contactos',
           ),
           BottomNavigationBarItem(
             icon: _buildIconWithBadge(Icons.shield_outlined, whitelistBadgeCount),

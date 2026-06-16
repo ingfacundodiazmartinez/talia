@@ -40,6 +40,9 @@ async function isPremiumSystemEnabled() {
   }
 }
 
+// Reutilizable desde otros módulos (ej. gate premium de la música).
+exports._isPremiumSystemEnabled = isPremiumSystemEnabled;
+
 // ═══════════════════════════════════════════════════════════════
 // PAYMENTS
 // ═══════════════════════════════════════════════════════════════

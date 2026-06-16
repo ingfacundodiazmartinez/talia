@@ -1251,7 +1251,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
                       // Texto Premium benefit
                       Text(
-                        'Sin anuncios + hasta 30 reportes/mes',
+                        'Sin anuncios + créditos mensuales para reportes',
                         style: TextStyle(
                           fontSize: 12,
                           color: Color(0xFFFFD700).withValues(alpha: 0.7),
@@ -1579,9 +1579,19 @@ class DetailedReportScreen extends StatelessWidget {
           ),
           SizedBox(height: 8),
           Text(
-            report['period'] != null
-                ? 'Últimos ${report['period']} días'
-                : 'Última semana',
+            // El backend (functions/reports.js) y el generador local
+            // (gemini_ai_service.dart) ya envían `period` con formato
+            // user-friendly ("Últimos 7 días"). Si vino solo un número (legacy),
+            // lo formateamos acá.
+            (() {
+              final period = report['period'];
+              if (period == null) return 'Última semana';
+              final asString = period.toString();
+              if (RegExp(r'^\d+$').hasMatch(asString)) {
+                return 'Últimos $asString días';
+              }
+              return asString;
+            })(),
             style: TextStyle(fontSize: 16, color: colorScheme.onSurfaceVariant),
           ),
 
@@ -1611,10 +1621,14 @@ class DetailedReportScreen extends StatelessWidget {
                 SizedBox(height: 8),
                 Builder(
                   builder: (context) {
-                    final moodText = report['moodStatus'] ?? 'neutral';
+                    final moodText = (report['moodStatus'] ?? 'neutral') as String;
                     // Ajustar tamaño de fuente según longitud del texto
                     final fontSize = moodText.length > 30 ? 16.0 : (moodText.length > 15 ? 18.0 : 20.0);
-                    return Text(
+                    // Si el texto es largo, mostramos 3 líneas + tap-to-expand.
+                    // Antes quedaba truncado con "..." y no había forma de
+                    // ver el resto.
+                    final isLong = moodText.length > 120;
+                    final textWidget = Text(
                       moodText,
                       style: TextStyle(
                         fontSize: fontSize,
@@ -1623,8 +1637,27 @@ class DetailedReportScreen extends StatelessWidget {
                         height: 1.3,
                       ),
                       textAlign: TextAlign.center,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
+                      maxLines: isLong ? 3 : null,
+                      overflow: isLong ? TextOverflow.ellipsis : TextOverflow.visible,
+                    );
+                    if (!isLong) return textWidget;
+                    return Column(
+                      children: [
+                        textWidget,
+                        SizedBox(height: 8),
+                        GestureDetector(
+                          onTap: () => _showMoodDetailsDialog(context, moodText),
+                          child: Text(
+                            'Ver más',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: colorScheme.onPrimaryContainer,
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                        ),
+                      ],
                     );
                   },
                 ),
@@ -2229,6 +2262,63 @@ class DetailedReportScreen extends StatelessWidget {
           );
         }),
       ],
+    );
+  }
+
+  /// Modal que muestra el texto completo del estado de ánimo cuando el
+  /// resumen del header viene truncado.
+  void _showMoodDetailsDialog(BuildContext context, String fullText) {
+    final colorScheme = Theme.of(context).colorScheme;
+    showDialog(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.mood, color: colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Estado de ánimo',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 400),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    fullText,
+                    style: TextStyle(
+                      fontSize: 15,
+                      height: 1.4,
+                      color: colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cerrar'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

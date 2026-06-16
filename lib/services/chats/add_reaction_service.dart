@@ -56,7 +56,7 @@ class AddReactionService {
           .collection('messages')
           .doc(messageId);
 
-      final messageDoc = await messageRef.get();
+      final messageDoc = await messageRef.get().timeout(const Duration(seconds: 8));
 
       if (!messageDoc.exists) {
         return (success: false, message: 'Mensaje no encontrado');
@@ -127,7 +127,7 @@ class AddReactionService {
           .collection('messages')
           .doc(messageId);
 
-      final messageDoc = await messageRef.get();
+      final messageDoc = await messageRef.get().timeout(const Duration(seconds: 8));
 
       if (!messageDoc.exists) {
         return (
@@ -194,7 +194,7 @@ class AddReactionService {
           .doc(chatId)
           .collection('messages')
           .doc(messageId)
-          .get();
+          .get().timeout(const Duration(seconds: 8));
 
       if (!messageDoc.exists) return false;
 

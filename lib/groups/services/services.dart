@@ -5,3 +5,4 @@ library;
 
 export 'group_service.dart';
 export 'group_approval_service.dart';
+export 'group_message_cache_service.dart';

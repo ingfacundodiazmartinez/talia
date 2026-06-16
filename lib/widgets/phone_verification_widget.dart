@@ -13,12 +13,18 @@ class PhoneVerificationWidget extends StatefulWidget {
   final String? initialCountryCode;
   final String? initialPhoneNumber;
 
+  /// Modo compacto: oculta los elementos decorativos (ícono, indicador de
+  /// pasos) para que el input y el botón de acción entren en el espacio que
+  /// deja el teclado abierto. Lo activa la pantalla padre según viewInsets.
+  final bool compact;
+
   const PhoneVerificationWidget({
     super.key,
     required this.onVerificationSuccess,
     this.onCancel,
     this.initialCountryCode = '+54', // Argentina por defecto
     this.initialPhoneNumber,
+    this.compact = false,
   });
 
   @override
@@ -339,9 +345,11 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _buildHeader(),
-                  SizedBox(height: 20),
-                  _buildProgressIndicator(),
-                  SizedBox(height: 24),
+                  if (!widget.compact) ...[
+                    SizedBox(height: 20),
+                    _buildProgressIndicator(),
+                  ],
+                  SizedBox(height: widget.compact ? 16 : 24),
                   _buildContent(),
                   if (_errorMessage != null) ...[
                     SizedBox(height: 12),
@@ -366,19 +374,21 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
       children: [
         Column(
           children: [
-            Container(
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: ThemeService.primaryColor.withValues(alpha: 0.1),
-                shape: BoxShape.circle,
+            if (!widget.compact) ...[
+              Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: ThemeService.primaryColor.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.phone_android, size: 32, color: ThemeService.primaryColor),
               ),
-              child: Icon(Icons.phone_android, size: 32, color: ThemeService.primaryColor),
-            ),
-            SizedBox(height: 16),
+              SizedBox(height: 16),
+            ],
             Text(
               _currentStep == 0 ? 'Verificar Teléfono' : 'Código de Verificación',
               style: TextStyle(
-                fontSize: 24,
+                fontSize: widget.compact ? 20 : 24,
                 fontWeight: FontWeight.bold,
                 color: Color(0xFF2D3142),
               ),
@@ -515,6 +525,10 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
       controller: _phoneController,
       keyboardType: TextInputType.phone,
       enabled: _currentStep == 0, // Deshabilitar cuando estamos en el paso del código
+      // Al enfocar, el auto-scroll deja visible también el área debajo del
+      // campo (donde está el botón de acción), no solo el campo.
+      scrollPadding: EdgeInsets.only(bottom: 160),
+      autofillHints: const [AutofillHints.telephoneNumber],
       decoration: InputDecoration(
         labelText: 'Número de teléfono',
         hintText: '11 1234 5678',
@@ -558,6 +572,9 @@ class _PhoneVerificationWidgetState extends State<PhoneVerificationWidget>
           keyboardType: TextInputType.number,
           textAlign: TextAlign.center,
           autofocus: true,
+          scrollPadding: EdgeInsets.only(bottom: 160),
+          // Sugerir el código del SMS arriba del teclado (iOS/Android).
+          autofillHints: const [AutofillHints.oneTimeCode],
           style: TextStyle(
             fontSize: 24,
             fontWeight: FontWeight.bold,

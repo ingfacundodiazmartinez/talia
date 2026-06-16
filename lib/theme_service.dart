@@ -8,7 +8,10 @@ class ThemeService extends ChangeNotifier {
 
   static const String _darkModeKey = 'dark_mode_enabled';
 
-  bool _isDarkMode = false;
+  // ✅ Modo oscuro por defecto. Usuarios que ya eligieron explícitamente
+  // mantienen su preferencia (la clave persistida gana); los nuevos y quienes
+  // nunca tocaron el toggle arrancan en oscuro.
+  bool _isDarkMode = true;
   bool get isDarkMode => _isDarkMode;
 
   // Colores principales de la aplicación
@@ -19,7 +22,7 @@ class ThemeService extends ChangeNotifier {
 
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
-    _isDarkMode = prefs.getBool(_darkModeKey) ?? false;
+    _isDarkMode = prefs.getBool(_darkModeKey) ?? true;
     notifyListeners();
   }
 

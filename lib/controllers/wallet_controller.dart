@@ -25,6 +25,12 @@ class WalletTransaction {
   final String reason;
   final int balanceAfter;
   final DateTime? createdAt;
+  // Quién originó la tx. En spends de hijos, initiatedBy != walletId.
+  final String? initiatedBy;
+  // Nombre denormalizado del initiator (de metadata.initiatedByName).
+  // Útil para mostrar "Tade · Face-swap" en el historial del padre.
+  final String? initiatedByName;
+  final String? initiatedByRole;
 
   WalletTransaction({
     required this.id,
@@ -33,10 +39,14 @@ class WalletTransaction {
     required this.reason,
     required this.balanceAfter,
     required this.createdAt,
+    this.initiatedBy,
+    this.initiatedByName,
+    this.initiatedByRole,
   });
 
   factory WalletTransaction.fromDoc(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>;
+    final metadata = (d['metadata'] as Map<String, dynamic>?) ?? const {};
     return WalletTransaction(
       id: doc.id,
       type: d['type'] as String? ?? 'earn',
@@ -44,6 +54,9 @@ class WalletTransaction {
       reason: d['reason'] as String? ?? 'unknown',
       balanceAfter: (d['balanceAfter'] as num?)?.toInt() ?? 0,
       createdAt: (d['createdAt'] as Timestamp?)?.toDate(),
+      initiatedBy: d['initiatedBy'] as String?,
+      initiatedByName: metadata['initiatedByName'] as String?,
+      initiatedByRole: metadata['initiatedByRole'] as String?,
     );
   }
 

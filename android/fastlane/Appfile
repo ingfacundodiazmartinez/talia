@@ -1,0 +1,2 @@
+json_key_file("../functions/play-store-service-account.json")
+package_name("com.talia.chat")

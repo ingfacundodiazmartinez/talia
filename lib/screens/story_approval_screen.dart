@@ -785,6 +785,70 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
     );
   }
 
+  Widget _buildMusicPreviewPlaceholder(Story story, {bool large = false}) {
+    final title = (story.musicTitle?.trim().isNotEmpty ?? false)
+        ? story.musicTitle!.trim()
+        : 'Historia de música';
+    final isLyrics = story.musicDisplayMode == 'lyrics';
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF2A1B3D), Color(0xFF7C4DFF)],
+        ),
+      ),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: large ? 110 : 72,
+                height: large ? 110 : 72,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.15),
+                  border: Border.all(color: Colors.white24, width: 2),
+                ),
+                child: Icon(Icons.music_note_rounded,
+                    color: Colors.white, size: large ? 54 : 36),
+              ),
+              SizedBox(height: large ? 20 : 12),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: large ? 22 : 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              SizedBox(height: large ? 12 : 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(isLyrics ? Icons.lyrics_rounded : Icons.auto_awesome,
+                      color: Colors.white70, size: 14),
+                  const SizedBox(width: 6),
+                  Text(
+                    isLyrics ? 'Con letra' : 'Música creada con IA',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildCardImage(
     Story story,
     ColorScheme colorScheme, {
@@ -803,40 +867,43 @@ class _StoryApprovalScreenState extends State<StoryApprovalScreen>
         ),
         child: Stack(
           children: [
-            // Image
+            // Image — las historias de solo-música no tienen foto/video; en vez
+            // de una imagen rota mostramos un placeholder con el título/letra.
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: CachedNetworkImage(
-                imageUrl: story.mediaUrl,
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: double.infinity,
-                placeholder: (context, url) => Center(
-                  child: CircularProgressIndicator(
-                    color: ThemeService.primaryColor,
-                  ),
-                ),
-                errorWidget: (context, url, error) => Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.broken_image_outlined,
-                        color: colorScheme.onSurfaceVariant,
-                        size: 40,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'No se pudo cargar',
-                        style: TextStyle(
-                          color: colorScheme.onSurfaceVariant,
-                          fontSize: 13,
+              child: story.isMusicOnly
+                  ? _buildMusicPreviewPlaceholder(story)
+                  : CachedNetworkImage(
+                      imageUrl: story.mediaUrl,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
+                      placeholder: (context, url) => Center(
+                        child: CircularProgressIndicator(
+                          color: ThemeService.primaryColor,
                         ),
                       ),
-                    ],
-                  ),
-                ),
-              ),
+                      errorWidget: (context, url, error) => Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.broken_image_outlined,
+                              color: colorScheme.onSurfaceVariant,
+                              size: 40,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'No se pudo cargar',
+                              style: TextStyle(
+                                color: colorScheme.onSurfaceVariant,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
             ),
 
             // Tap to preview indicator
@@ -1322,23 +1389,28 @@ class StoryPreviewForApproval extends StatelessWidget {
       ),
       body: Stack(
         children: [
-          // Full screen image
-          Center(
-            child: InteractiveViewer(
-              child: CachedNetworkImage(
-                imageUrl: story.mediaUrl,
-                fit: BoxFit.contain,
-                width: double.infinity,
-                height: double.infinity,
-                placeholder: (context, url) => Center(
-                  child: CircularProgressIndicator(color: Colors.white),
-                ),
-                errorWidget: (context, url, error) => Center(
-                  child: Icon(Icons.broken_image, color: Colors.white, size: 64),
+          // Full screen image — las historias de solo-música no tienen foto;
+          // mostramos un panel con el título y la letra (para que el padre pueda
+          // revisar el contenido), en lugar de una imagen rota.
+          if (story.isMusicOnly)
+            _buildMusicFullPreview(story)
+          else
+            Center(
+              child: InteractiveViewer(
+                child: CachedNetworkImage(
+                  imageUrl: story.mediaUrl,
+                  fit: BoxFit.contain,
+                  width: double.infinity,
+                  height: double.infinity,
+                  placeholder: (context, url) => Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+                  errorWidget: (context, url, error) => Center(
+                    child: Icon(Icons.broken_image, color: Colors.white, size: 64),
+                  ),
                 ),
               ),
             ),
-          ),
 
           // Top gradient
           Positioned(
@@ -1434,6 +1506,77 @@ class StoryPreviewForApproval extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  /// Vista de revisión para historias de solo-música: título + letra (si la hay).
+  Widget _buildMusicFullPreview(Story story) {
+    final title = (story.musicTitle?.trim().isNotEmpty ?? false)
+        ? story.musicTitle!.trim()
+        : 'Historia de música';
+    final lyrics = story.musicLyrics?.trim();
+    final isLyrics = story.musicDisplayMode == 'lyrics';
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF2A1B3D), Color(0xFF7C4DFF)],
+        ),
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 80, 28, 40),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 110,
+                height: 110,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.15),
+                  border: Border.all(color: Colors.white24, width: 2),
+                ),
+                child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 54),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(isLyrics ? Icons.lyrics_rounded : Icons.auto_awesome,
+                      color: Colors.white70, size: 16),
+                  const SizedBox(width: 6),
+                  Text(
+                    isLyrics ? 'Con letra' : 'Música creada con IA',
+                    style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                ],
+              ),
+              if (lyrics != null && lyrics.isNotEmpty) ...[
+                const SizedBox(height: 24),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Text(
+                      lyrics,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontSize: 17, height: 1.6),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }

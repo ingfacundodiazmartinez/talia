@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:rxdart/rxdart.dart';
 import '../services/story_service_refactored.dart';
 import '../services/story_upload_progress_service.dart';
+import '../utils/official.dart';
 import '../screens/story_camera_screen.dart';
 import '../screens/story_viewer_screen.dart';
 import '../models/trivia.dart';
@@ -95,8 +96,12 @@ class _StoriesSectionState extends State<StoriesSection> {
 
   @override
   void dispose() {
-    // Detener streams de background para evitar spinner infinito
-    storyService.stopBackgroundCacheUpdates();
+    // ⚡ PERF: NO detener los background streams acá. Hacerlo forzaba un
+    // arranque en frío del pipeline completo (query + filtrado + lookups,
+    // 3-15s) en cada navegación de vuelta al home. Los listeners quedan
+    // vivos mientras dura la sesión; el cleanup real ocurre en logout
+    // (DataManagementService → StoryService().resetForLogout()).
+    // startBackgroundCacheUpdates() es idempotente, re-entrar es seguro.
     _triviasSubscription?.cancel();
     _respondedTriviasSubscription?.cancel();
     super.dispose();
@@ -150,6 +155,19 @@ class _StoriesSectionState extends State<StoriesSection> {
     return result;
   }
 
+  /// Reintenta la carga de historias cuando falló.
+  /// Re-suscribe a un stream nuevo (lo que vuelve a mostrar el spinner
+  /// mientras carga) y fuerza un refresh del cache.
+  Future<void> _retryLoadStories() async {
+    if (!mounted) return;
+    setState(() {
+      // Stream nuevo → el StreamBuilder vuelve al estado "waiting" (spinner)
+      _storiesStream = storyService.storiesFromCache;
+    });
+    await storyService.startBackgroundCacheUpdates();
+    await storyService.forceRefreshCache();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -183,9 +201,19 @@ class _StoriesSectionState extends State<StoriesSection> {
                 );
               }
 
+              // Si la carga falla y no hay cache, mostrar botón de refresh
+              // (el spinner se "transforma" en botón para reintentar)
               if (snapshot.hasError && _cachedStories == null) {
                 return Center(
-                  child: Text('Error: ${snapshot.error}'),
+                  child: IconButton(
+                    icon: Icon(
+                      Icons.refresh,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    iconSize: 32,
+                    tooltip: 'Reintentar',
+                    onPressed: _retryLoadStories,
+                  ),
                 );
               }
 
@@ -203,7 +231,11 @@ class _StoriesSectionState extends State<StoriesSection> {
               // Ordenar grupos: 1) Mis historias, 2) No vistas/activas, 3) Vistas
               final sortedUserStoriesList = List<UserStories>.from(unifiedUserStoriesList);
               sortedUserStoriesList.sort((a, b) {
-                // 1. Mis historias SIEMPRE van primero
+                // 0. Talia (oficial: bienvenida/comunicados) SIEMPRE primero
+                if (a.isOfficial && !b.isOfficial) return -1;
+                if (b.isOfficial && !a.isOfficial) return 1;
+
+                // 1. Mis historias van primero
                 final aIsCurrentUser = a.userId == currentUserId;
                 final bIsCurrentUser = b.userId == currentUserId;
                 if (aIsCurrentUser && !bIsCurrentUser) return -1;
@@ -366,6 +398,7 @@ class _StoriesSectionState extends State<StoriesSection> {
   }) {
     final currentUser = FirebaseAuth.instance.currentUser;
     final isCurrentUser = currentUser?.uid == userStories.userId;
+    final isOfficial = userStories.isOfficial;
 
     // Verificar si este usuario tiene trivias activas
     final respondedIds = _respondedTriviaIds ?? <String>{};
@@ -392,7 +425,19 @@ class _StoriesSectionState extends State<StoriesSection> {
     Color? borderColor;
     LinearGradient? borderGradient;
 
-    if (hasTriviaOnly) {
+    if (isOfficial) {
+      // Talia (oficial): gradiente de marca cuando hay historias sin ver,
+      // gris cuando ya se vieron.
+      if (userStories.hasUnviewed) {
+        borderGradient = LinearGradient(
+          begin: Alignment.topRight,
+          end: Alignment.bottomLeft,
+          colors: [ThemeService.primaryColor, Color(0xFFFF6B9D), Color(0xFFA855F7)],
+        );
+      } else {
+        borderColor = Colors.grey[300];
+      }
+    } else if (hasTriviaOnly) {
       // Usuario con solo trivias: gradiente púrpura solo si hay trivias no respondidas
       if (hasUnrespondedTrivias) {
         borderGradient = LinearGradient(
@@ -476,16 +521,41 @@ class _StoriesSectionState extends State<StoriesSection> {
                   ),
                   child: Padding(
                     padding: EdgeInsets.all(3),
-                    // ✅ Usar SyncedUserAvatar para que la foto se actualice en tiempo real
-                    child: SyncedUserAvatar(
-                      userId: userStories.userId,
-                      fallbackPhotoUrl: userStories.userPhotoURL,
-                      userName: userStories.userName,
-                      radius: 24,
-                      backgroundColor: Colors.grey[200],
-                    ),
+                    // Talia (oficial): logo de marca. Resto: avatar sincronizado.
+                    child: isOfficial
+                        ? CircleAvatar(
+                            radius: 24,
+                            backgroundColor: Colors.white,
+                            backgroundImage: const AssetImage(Official.logoAsset),
+                          )
+                        : SyncedUserAvatar(
+                            userId: userStories.userId,
+                            fallbackPhotoUrl: userStories.userPhotoURL,
+                            userName: userStories.userName,
+                            radius: 24,
+                            backgroundColor: Colors.grey[200],
+                          ),
                   ),
                 ),
+
+                // Badge verificado para la cuenta oficial de Talia
+                if (isOfficial)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white,
+                      ),
+                      padding: const EdgeInsets.all(1),
+                      child: Icon(
+                        Icons.verified,
+                        size: 18,
+                        color: ThemeService.primaryColor,
+                      ),
+                    ),
+                  ),
 
                 // Upload progress overlay
                 if (hasUploadProgress)
@@ -628,6 +698,22 @@ class _StoriesSectionState extends State<StoriesSection> {
                           ? FontWeight.w600
                           : FontWeight.w500,
                       // ✅ Color adaptable a modo oscuro/claro
+                      color: userStories.hasUnviewed
+                          ? Theme.of(context).textTheme.bodyMedium?.color
+                          : Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.7),
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  )
+                else if (isOfficial)
+                  Text(
+                    Official.userName,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: userStories.hasUnviewed
+                          ? FontWeight.w600
+                          : FontWeight.w500,
                       color: userStories.hasUnviewed
                           ? Theme.of(context).textTheme.bodyMedium?.color
                           : Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.7),

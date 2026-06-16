@@ -24,6 +24,10 @@ import 'services/stories/story_orchestrator.dart'; // ✅ FIX #10: Para actualiz
 import 'services/chats/chat_services.dart'; // ✅ Para verificar mute de chats/grupos
 import 'services/chats/managers/chat_stream_manager.dart'; // ✅ Para deduplicación de notificaciones
 import 'services/local_unread_count_service.dart'; // ✅ Para incrementar contador de no leídos
+import 'services/message_cache_service.dart'; // ✅ Para sembrar lastMessage desde el push
+import 'groups/services/group_message_cache_service.dart'; // ✅ Idem para grupos
+import 'models/chat_message.dart';
+import 'groups/models/group_message.dart';
 import 'services/notification_dedup_registry.dart'; // ✅ Audit #6: dedup unificado
 import 'services/unread_messages_service.dart'; // ✅ Para actualizar badge
 import 'services/nudge_service.dart'; // ✅ Para manejar nudges entrantes
@@ -300,6 +304,12 @@ class NotificationService {
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get contactRequestNotificationTapStream =>
       _contactRequestNotificationTapController.stream;
+
+  // Stream: el padre tocó una notif de "el hijo necesita créditos" → abrir wallet.
+  final _loadCreditsRequestNotificationTapController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get loadCreditsRequestNotificationTapStream =>
+      _loadCreditsRequestNotificationTapController.stream;
 
   // Stream para notificar cuando se toca una notificación de aprobación de historia
   final _storyApprovalNotificationTapController =
@@ -626,16 +636,24 @@ class NotificationService {
     try {
       // ✅ FIX: Limpiar current_chat_id stale de SharedPreferences
       // Si la app fue killed mientras un chat estaba abierto, dispose() nunca se llamó
-      // y SharedPreferences quedó con un valor viejo que causaría filtrado incorrecto
+      // y SharedPreferences quedó con un valor viejo que causaría filtrado incorrecto.
+      // NOTA: la limpieza principal ahora pasa TEMPRANO en
+      // LocalUnreadCountService.initialize() (este init corre tarde, post-frame).
+      // Acá solo limpiamos si NINGÚN chat está legítimamente abierto: si el
+      // usuario ya entró a un chat antes de que este init termine (ej. tap en
+      // notificación desde killed), borrar la clave rompía el filtro nativo
+      // para ese chat.
       try {
-        final prefs = await SharedPreferences.getInstance();
-        final staleChatId = prefs.getString('current_chat_id');
-        if (staleChatId != null) {
-          ReleaseLogger.log(
-            '🧹 [Initialize] Limpiando current_chat_id stale: $staleChatId',
-            tag: 'NotificationService',
-          );
-          await prefs.remove('current_chat_id');
+        if (_currentChatId == null) {
+          final prefs = await SharedPreferences.getInstance();
+          final staleChatId = prefs.getString('current_chat_id');
+          if (staleChatId != null) {
+            ReleaseLogger.log(
+              '🧹 [Initialize] Limpiando current_chat_id stale: $staleChatId',
+              tag: 'NotificationService',
+            );
+            await prefs.remove('current_chat_id');
+          }
         }
       } catch (e) {
         ReleaseLogger.error(
@@ -950,28 +968,41 @@ class NotificationService {
             }
             _processedNotificationIds.add(doc.id);
 
-            // Filtrar notificaciones anteriores al inicio del listener
-            // ✅ FIX: Agregar margen de 30 segundos para compensar diferencia cliente/servidor
-            final timestamp = data['timestamp'];
-            if (timestamp != null) {
-              DateTime? notifTime;
-              if (timestamp is Timestamp) {
-                notifTime = timestamp.toDate();
-              } else if (timestamp is int) {
-                notifTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
-              }
-
-              // Restar 30 segundos al tiempo de inicio para dar margen
-              final startTimeWithMargin = _notificationsListenerStartTime!.subtract(const Duration(seconds: 30));
-              if (notifTime != null && notifTime.isBefore(startTimeWithMargin)) {
-                ReleaseLogger.log(
-                  '⚠️ [NotificationsListener] Notificación antigua (${notifTime.toIso8601String()} < ${startTimeWithMargin.toIso8601String()}), skip',
-                  tag: 'NotificationService',
-                );
-                continue;
-              }
+            // Filtrar notificaciones anteriores al inicio del listener.
+            // ✅ FIX: las CFs escriben la fecha en 'timestamp' O 'createdAt'
+            // según el módulo (inconsistencia histórica). Mirar solo
+            // 'timestamp' dejaba pasar SIEMPRE las que usan 'createdAt':
+            // como además quedan read=false y el dedup es en memoria, las
+            // mismas notificaciones viejas se re-mostraban en cada cold start.
+            final timestamp = data['timestamp'] ?? data['createdAt'];
+            DateTime? notifTime;
+            if (timestamp is Timestamp) {
+              notifTime = timestamp.toDate();
+            } else if (timestamp is int) {
+              notifTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
             }
-            // Si timestamp es null, permitir la notificación (puede ser serverTimestamp pendiente)
+
+            // Sin fecha parseable → tratar como ANTIGUA y saltear.
+            // Las notificaciones las escriben solo las Cloud Functions con
+            // timestamp ya resuelto; un doc que llega por listener sin fecha
+            // es un doc viejo/malformado, no un serverTimestamp pendiente.
+            if (notifTime == null) {
+              ReleaseLogger.log(
+                '⚠️ [NotificationsListener] Sin timestamp/createdAt parseable: ${doc.id}, skip',
+                tag: 'NotificationService',
+              );
+              continue;
+            }
+
+            // Restar 30 segundos al tiempo de inicio para dar margen
+            final startTimeWithMargin = _notificationsListenerStartTime!.subtract(const Duration(seconds: 30));
+            if (notifTime.isBefore(startTimeWithMargin)) {
+              ReleaseLogger.log(
+                '⚠️ [NotificationsListener] Notificación antigua (${notifTime.toIso8601String()} < ${startTimeWithMargin.toIso8601String()}), skip',
+                tag: 'NotificationService',
+              );
+              continue;
+            }
 
             // Ignorar notificaciones de chat (ya manejadas por ChatStreamManager)
             if (type == 'chat_message' || type == 'message' || type == 'group_message') {
@@ -1027,6 +1058,19 @@ class NotificationService {
     }
   }
 
+  /// Convertir recursivamente valores no serializables a JSON
+  /// (Timestamp/DateTime → ISO8601). Necesario porque los docs de Firestore
+  /// traen Timestamps y jsonEncode falla con ellos.
+  dynamic _jsonSafe(dynamic value) {
+    if (value is Timestamp) return value.toDate().toIso8601String();
+    if (value is DateTime) return value.toIso8601String();
+    if (value is Map) {
+      return value.map((k, v) => MapEntry(k.toString(), _jsonSafe(v)));
+    }
+    if (value is List) return value.map(_jsonSafe).toList();
+    return value;
+  }
+
   /// Mostrar notificación local desde documento de Firestore
   Future<void> _showNotificationFromFirestore(
     String docId,
@@ -1070,12 +1114,15 @@ class NotificationService {
         );
       }
 
-      // Preparar payload para navegación al tocar
-      final payload = jsonEncode({
+      // Preparar payload para navegación al tocar.
+      // _jsonSafe: el doc de Firestore trae Timestamps que jsonEncode no
+      // puede serializar (tiraba "Converting object to an encodable object
+      // failed" y la notificación nunca se mostraba).
+      final payload = jsonEncode(_jsonSafe({
         'type': type,
         'notificationId': docId,
         ...data,
-      });
+      }));
 
       await _localNotifications.show(
         notificationId,
@@ -1501,6 +1548,16 @@ class NotificationService {
           '📱 [Foreground $platform] Chat message $messageId recibido via FCM',
           tag: 'NotificationService',
         );
+
+        // ✅ FIX lastMessage tardío: sembrar el preview en Hive AL INSTANTE
+        // desde el payload del push. El FCM llega más rápido que el listener
+        // del chat doc (socket gRPC, a veces suspendido), que era lo que hacía
+        // que la notificación apareciera y el preview de la lista tardara
+        // varios segundos. Es SEGURO sembrar: el server solo envía el push
+        // para mensajes visibles (visibleTo/mute ya filtrados server-side).
+        // Va ANTES del dedup `wasNotificationShown` para ejecutarse aunque el
+        // StreamDetector haya mostrado la notificación.
+        _seedLastMessageFromPush(message.data, isGroup: isGroup, sentTime: sentTime);
 
         // ✅ DELIVERY RECEIPT: marcar lastReceivedAt_{me} en chat 1-1.
         // En foreground el ChatDocsListener suele ganarle a FCM, pero por las
@@ -2136,6 +2193,17 @@ class NotificationService {
         break;
 
       // ═══════════════════════════════════════════════════════════════
+      // PEDIDO DE CRÉDITOS (el hijo se quedó sin créditos)
+      // ═══════════════════════════════════════════════════════════════
+      case 'load_credits_request':
+        ReleaseLogger.log(
+          '💳 Notificación de pedido de créditos tocada, navegando a wallet',
+          tag: 'NotificationService',
+        );
+        _loadCreditsRequestNotificationTapController.add(data);
+        break;
+
+      // ═══════════════════════════════════════════════════════════════
       // FOMO (Agregar amigo para ver historias)
       // ═══════════════════════════════════════════════════════════════
       case 'story_fomo':
@@ -2461,6 +2529,71 @@ class NotificationService {
         .where('read', isEqualTo: false)
         .snapshots()
         .map((snapshot) => snapshot.docs.length);
+  }
+
+  /// Sembrar el preview del último mensaje en Hive desde el payload del push.
+  /// Cierra la brecha donde la notificación llega por FCM (rápido) pero el
+  /// preview de la lista de chats tardaba porque dependía del listener del
+  /// chat doc (socket gRPC). El server ya filtró visibleTo/mute, así que todo
+  /// push de chat que llega es seguro de mostrar en la lista.
+  void _seedLastMessageFromPush(
+    Map<String, dynamic> data, {
+    required bool isGroup,
+    DateTime? sentTime,
+  }) {
+    try {
+      final messageId = data['messageId'] as String?;
+      final senderId = data['senderId'] as String?;
+      // En grupos el id de conversación viene como groupId (con chatId espejo).
+      final convId =
+          (data['chatId'] as String?) ?? (data['groupId'] as String?);
+      // body = preview ya formateado por el server.
+      final body = (data['body'] as String?) ??
+          (data['messagePreview'] as String?) ??
+          '';
+      if (messageId == null || messageId.isEmpty) return;
+      if (senderId == null || senderId.isEmpty) return;
+      if (convId == null || convId.isEmpty) return;
+
+      final ts = sentTime ?? DateTime.now();
+
+      if (isGroup) {
+        // El body de grupo viene como "Nombre: texto". Para el preview de la
+        // lista (que antepone el primer nombre) sembramos el texto sin el
+        // prefijo del nombre para no duplicarlo.
+        final senderName = (data['senderName'] as String?) ?? '';
+        String text = body;
+        final prefix = '$senderName: ';
+        if (senderName.isNotEmpty && body.startsWith(prefix)) {
+          text = body.substring(prefix.length);
+        }
+        GroupMessageCacheService().seedLastMessageIfNewer(
+          convId,
+          GroupMessage(
+            id: messageId,
+            senderId: senderId,
+            senderName: senderName,
+            text: text,
+            timestamp: ts,
+            isDeleted: false,
+            reactions: const {},
+            readBy: const [],
+          ),
+        );
+      } else {
+        MessageCacheService().seedLastMessageIfNewer(
+          convId,
+          ChatMessage(
+            id: messageId,
+            senderId: senderId,
+            text: body,
+            timestamp: Timestamp.fromDate(ts),
+          ),
+        );
+      }
+    } catch (_) {
+      // Non-critical — si falla, el listener del chat doc actualiza igual.
+    }
   }
 
   /// ═══════════════════════════════════════════════════════════════
@@ -2889,16 +3022,11 @@ class NotificationService {
 
       await batch.commit();
 
-      // Opcional: También limpiar notificaciones locales del sistema
-      if (Platform.isAndroid || Platform.isIOS) {
-        // Nota: No hay forma directa de limpiar notificaciones específicas del sistema
-        // sin un ID específico, pero las nuevas notificaciones no aparecerán
-        await _localNotifications.cancelAll();
-        ReleaseLogger.log(
-          '🗑️ Notificaciones locales limpiadas',
-          tag: 'NotificationService',
-        );
-      }
+      // NOTA: acá había un cancelAll() redundante — la pantalla de chat ya
+      // llama a NotificationTrackingService.dismissNotificationsForContext
+      // justo después (que hoy limpia todo el shade; hacer dismissal POR
+      // chat requiere cancelación nativa por thread/tag, pendiente). Este
+      // método ahora solo limpia los docs de la colección notifications.
     } catch (e) {
       ReleaseLogger.error(
         '❌ Error limpiando notificaciones del chat $chatId: $e',

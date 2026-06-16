@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../../controllers/wallet_controller.dart';
 import '../../../services/credit_wallet_service.dart';
@@ -21,6 +23,13 @@ class _WalletScreenState extends State<WalletScreen> {
   late final WalletController _controller;
   bool _watchingAd = false;
 
+  // Último balance conocido (del stream) y override optimista para que el
+  // contador suba al instante al terminar el video, sin esperar el round-trip
+  // de la CF + propagación del snapshot de Firestore.
+  int _lastKnownBalance = 0;
+  int? _optimisticBalance;
+  Timer? _optimisticTimer;
+
   @override
   void initState() {
     super.initState();
@@ -32,6 +41,7 @@ class _WalletScreenState extends State<WalletScreen> {
 
   @override
   void dispose() {
+    _optimisticTimer?.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -47,6 +57,13 @@ class _WalletScreenState extends State<WalletScreen> {
     final messenger = ScaffoldMessenger.of(context);
     switch (result) {
       case AdResult.earned:
+        // ✅ Optimista: mostrar +1 al instante. El stream lo confirma en 1-3s; si
+        // por throttle no se acreditó, el timer revierte al valor real.
+        setState(() => _optimisticBalance = _lastKnownBalance + 1);
+        _optimisticTimer?.cancel();
+        _optimisticTimer = Timer(const Duration(seconds: 6), () {
+          if (mounted) setState(() => _optimisticBalance = null);
+        });
         messenger.showSnackBar(
           const SnackBar(
             content: Text('¡Ganaste 1 crédito!'),
@@ -110,12 +127,26 @@ class _WalletScreenState extends State<WalletScreen> {
             );
           }
 
+          // Cachear el balance real del stream para el cálculo optimista.
+          _lastKnownBalance = status.balance;
+          // Si el stream ya alcanzó (o superó) el optimista, descartarlo.
+          if (_optimisticBalance != null && status.balance >= _optimisticBalance!) {
+            _optimisticTimer?.cancel();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) setState(() => _optimisticBalance = null);
+            });
+          }
+          // Balance a mostrar: el mayor entre el real y el optimista.
+          final displayBalance = _optimisticBalance != null
+              ? math.max(status.balance, _optimisticBalance!)
+              : status.balance;
+
           return RefreshIndicator(
             onRefresh: _controller.ensureWalletExists,
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                _BalanceCard(status: status),
+                _BalanceCard(status: status, displayBalance: displayBalance),
                 const SizedBox(height: 16),
                 _LifetimeStatsRow(status: status),
                 const SizedBox(height: 24),
@@ -139,8 +170,9 @@ class _WalletScreenState extends State<WalletScreen> {
 
 class _BalanceCard extends StatelessWidget {
   final CreditWalletStatus status;
+  final int displayBalance;
 
-  const _BalanceCard({required this.status});
+  const _BalanceCard({required this.status, required this.displayBalance});
 
   @override
   Widget build(BuildContext context) {
@@ -180,7 +212,7 @@ class _BalanceCard extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               Text(
-                '${status.balance}',
+                '$displayBalance',
                 style: TextStyle(
                   fontSize: 48,
                   fontWeight: FontWeight.bold,
@@ -191,7 +223,7 @@ class _BalanceCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            status.balance == 1 ? 'crédito disponible' : 'créditos disponibles',
+            displayBalance == 1 ? 'crédito disponible' : 'créditos disponibles',
             style: TextStyle(
               fontSize: 14,
               color: colorScheme.onPrimary.withValues(alpha: 0.85),
@@ -436,7 +468,7 @@ class _TransactionTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  tx.reasonLabel,
+                  _buildTitle(tx),
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w500,
@@ -476,5 +508,18 @@ class _TransactionTile extends StatelessWidget {
     if (diff.inHours < 24) return 'hace ${diff.inHours} h';
     if (diff.inDays < 7) return 'hace ${diff.inDays} d';
     return '${local.day}/${local.month}/${local.year}';
+  }
+
+  // Construye el título: si el initiator es un hijo (no es el padre dueño del
+  // wallet), prepende su nombre. Ej: "Tade · Face-swap". Para earns/grants
+  // del propio padre, solo el label de la razón.
+  String _buildTitle(WalletTransaction tx) {
+    final name = tx.initiatedByName;
+    final role = tx.initiatedByRole;
+    final isChild = role == 'child' && name != null && name.isNotEmpty;
+    if (isChild && tx.type == 'spend') {
+      return '$name · ${tx.reasonLabel}';
+    }
+    return tx.reasonLabel;
   }
 }

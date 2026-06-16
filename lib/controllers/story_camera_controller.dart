@@ -10,13 +10,18 @@ import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../services/story_service_refactored.dart';
+import '../services/stories/services/story_music_service.dart';
 import '../services/stickers_service.dart';
 import '../services/character_service.dart';
 import '../services/usage_limits_service.dart';
 import '../services/subscription_service.dart';
 import '../services/story_upload_progress_service.dart';
 import '../services/face_detection_service.dart';
+import '../services/ad_service.dart';
+import '../services/credit_wallet_service.dart';
 import '../models/character.dart';
 import '../screens/character_selector_screen.dart';
 import '../utils/release_logger.dart';
@@ -46,6 +51,13 @@ class StoryCameraController {
   final StoryUploadProgressService _uploadProgressService;
   final PermissionService _permissionService;
   final ImagePicker _imagePicker;
+  final StoryMusicService _musicService = StoryMusicService();
+  final AdService _adService = AdService();
+  final CreditWalletService _walletService = CreditWalletService();
+
+  /// Cuántos créditos cuesta generar una canción (debe coincidir con
+  /// FEATURE_PRICES.song_generation en functions/wallet.js).
+  static const int songCreditCost = 6;
 
   // Estado de la cámara
   CameraController? _cameraController;
@@ -87,6 +99,13 @@ class StoryCameraController {
   Function(String)? onError;
   Function(String)? onSuccess;
   Function()? onPermissionDenied;
+  /// Se dispara cuando una transformación falla por falta de créditos. El screen
+  /// muestra el flujo: si el hijo tiene padre vinculado → ofrecer avisarle; si
+  /// no → invitar a vincular un padre.
+  Function()? onOutOfCredits;
+
+  // Flag interno: la última transformación falló por créditos insuficientes.
+  bool _pendingOutOfCredits = false;
   Function()? onPermissionGranted; // Nuevo callback para cuando se conceden permisos
   Function()? onCameraInitialized;
   Function(bool)? onLoadingChanged;
@@ -956,7 +975,17 @@ class StoryCameraController {
     } catch (e) {
       hasError = true;
       ReleaseLogger.error('❌ Error en face swap: $e', tag: 'StoryCameraController');
-      onError?.call('Error aplicando face swap: $e');
+
+      // ✅ Detectar "sin créditos" (el spend en la CF lanza failed-precondition
+      // con INSUFFICIENT_CREDITS). En ese caso NO mostramos error genérico:
+      // disparamos el flujo de pedir créditos al padre / invitar a vincular.
+      final outOfCredits = e is FirebaseFunctionsException &&
+          (e.message?.contains('INSUFFICIENT_CREDITS') ?? false);
+      if (outOfCredits) {
+        _pendingOutOfCredits = true;
+      } else {
+        onError?.call('Error aplicando face swap: $e');
+      }
 
       // Completar inmediatamente con error
       if (!completer.isCompleted) {
@@ -970,10 +999,60 @@ class StoryCameraController {
         _forceCloseProgressDialog();
       }
       _setLoading(false);
+
+      // Después de cerrar el progress dialog, disparar el flujo de sin-créditos.
+      if (_pendingOutOfCredits) {
+        _pendingOutOfCredits = false;
+        onOutOfCredits?.call();
+      }
     }
 
     // Esperar hasta que el usuario presione continuar o cancele
     return completer.future;
+  }
+
+  /// ¿El hijo (usuario actual) tiene al menos un padre vinculado?
+  /// Usa el campo denormalizado linkedParentIds del doc del usuario.
+  Future<bool> hasLinkedParent() async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return false;
+      final doc =
+          await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final ids = doc.data()?['linkedParentIds'];
+      return ids is List && ids.isNotEmpty;
+    } catch (e) {
+      ReleaseLogger.error('Error verificando padres vinculados: $e',
+          tag: 'StoryCameraController');
+      return false;
+    }
+  }
+
+  /// Pide a los padres vinculados que carguen créditos (la CF manda un push a
+  /// cada uno). Devuelve (success, message).
+  Future<({bool success, String message})> requestCreditsFromParents() async {
+    try {
+      final callable =
+          FirebaseFunctions.instance.httpsCallable('requestCreditsFromParents');
+      final res = await callable.call();
+      final count = (res.data?['parentsNotified'] as int?) ?? 0;
+      return (
+        success: true,
+        message: count > 1
+            ? 'Les avisamos a tu familia ✨'
+            : 'Le avisamos a tu familia ✨',
+      );
+    } on FirebaseFunctionsException catch (e) {
+      if (e.code == 'resource-exhausted') {
+        return (
+          success: false,
+          message: e.message ?? 'Ya avisaste recién, esperá un rato.'
+        );
+      }
+      return (success: false, message: 'No se pudo avisar. Intentá de nuevo.');
+    } catch (e) {
+      return (success: false, message: 'No se pudo avisar. Intentá de nuevo.');
+    }
   }
 
   /// Aplicar face swap con un personaje pre-seleccionado (desde la cámara)
@@ -1169,15 +1248,34 @@ class StoryCameraController {
     required String mediaType, // 'image' o 'video'
     String? caption,
     Character? character,
+    bool aiGenerated = false,
+    String? musicUrl,
+    String? musicPrompt,
+    String? musicLyrics,
+    int? musicStartMs,
+    int? musicClipMs,
+    String? musicTitle,
+    String? musicDisplayMode,
+    List<Map<String, dynamic>>? musicLyricsTimings,
   }) async {
     try {
       ReleaseLogger.log('🚀 Iniciando publicación optimista de historia...', tag: 'StoryCameraController');
 
       // Usar el servicio optimista - NO ESPERAR a que termine la subida
+      // aiGenerated: true si se aplicó face-swap (flag explícito o character != null).
       final storyId = await _storyService.createStory(
         mediaPath: mediaPath,
         mediaType: mediaType,
         caption: caption,
+        aiGenerated: aiGenerated || character != null,
+        musicUrl: musicUrl,
+        musicPrompt: musicPrompt,
+        musicLyrics: musicLyrics,
+        musicStartMs: musicStartMs,
+        musicClipMs: musicClipMs,
+        musicTitle: musicTitle,
+        musicDisplayMode: musicDisplayMode,
+        musicLyricsTimings: musicLyricsTimings,
         onProgressUpdate: (storyId, progress) {
           // Actualizar progreso en el servicio global
           _uploadProgressService.updateProgress(storyId, progress);
@@ -1208,6 +1306,138 @@ class StoryCameraController {
       return false;
     } catch (e) {
       ReleaseLogger.error('❌ Error publicando historia: $e', tag: 'StoryCameraController');
+      onError?.call('Error al publicar historia. Intenta de nuevo.');
+      return false;
+    }
+  }
+
+  /// 🎵 Genera una canción con IA a partir de un prompt.
+  /// Devuelve el resultado (con la URL del audio) o null si falló
+  /// (el error se reporta vía onError con un mensaje legible).
+  Future<StoryMusicResult?> generateMusic({
+    required String prompt,
+    String? lyrics,
+    bool instrumental = false,
+  }) async {
+    try {
+      return await _musicService.generate(
+        prompt: prompt,
+        lyrics: lyrics,
+        instrumental: instrumental,
+      );
+    } on StoryMusicException catch (e) {
+      onError?.call(e.message);
+      return null;
+    } catch (e) {
+      ReleaseLogger.error('Error generando música: $e', tag: 'StoryCameraController');
+      onError?.call('No se pudo generar la canción. Intentá de nuevo.');
+      return null;
+    }
+  }
+
+  /// 🎵 Stream del balance de créditos disponible (wallet propio o del padre).
+  Stream<int?> watchAvailableCredits() => _walletService.watchMaxAvailableCredits();
+
+  /// 🎵 Pide el timing (alignment) de la canción para sincronizar la letra.
+  Future<AlignmentResult?> fetchMusicAlignment(String taskId) =>
+      _musicService.fetchAlignment(taskId);
+
+  /// 🎵 Muestra un rewarded ad para ganar 1 crédito. El crédito se acredita
+  /// automáticamente en el backend (AdService → earnCreditsFromAd) y el stream
+  /// de balance se actualiza solo. Devuelve true si el usuario completó el video.
+  Future<bool> watchAdForCredit() async {
+    try {
+      if (!_adService.isRewardedAdLoaded) {
+        await _adService.loadRewardedAd();
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+      if (!_adService.isRewardedAdLoaded) {
+        onError?.call('El video no está disponible. Probá de nuevo en unos segundos.');
+        return false;
+      }
+      return await _adService.showRewardedAd();
+    } catch (e) {
+      ReleaseLogger.error('Error mostrando rewarded ad: $e', tag: 'StoryCameraController');
+      onError?.call('No se pudo mostrar el video. Intentá de nuevo.');
+      return false;
+    }
+  }
+
+  /// 🎵 Ve [count] rewarded ads SEGUIDOS (al terminar uno arranca el siguiente
+  /// automáticamente). Cada uno acredita 1 crédito en el backend; el stream de
+  /// balance se actualiza solo. Devuelve cuántos videos se completaron.
+  Future<int> watchAdsForCredits(int count) async {
+    int completed = 0;
+    for (var i = 0; i < count; i++) {
+      try {
+        if (!_adService.isRewardedAdLoaded) {
+          await _adService.loadRewardedAd();
+          await Future.delayed(const Duration(milliseconds: 500));
+        }
+        if (!_adService.isRewardedAdLoaded) break;
+        final ok = await _adService.showRewardedAd();
+        if (!ok) break; // el usuario cerró el video antes de completarlo
+        completed++;
+        // Respiro para que se precargue el siguiente.
+        if (i < count - 1) await Future.delayed(const Duration(seconds: 1));
+      } catch (e) {
+        ReleaseLogger.error('Error en cadena de rewarded ads: $e', tag: 'StoryCameraController');
+        break;
+      }
+    }
+    if (completed == 0) {
+      onError?.call('No se pudo mostrar el video. Probá de nuevo en unos segundos.');
+    }
+    return completed;
+  }
+
+  /// 🎵 Para hijos sin créditos: pide a la familia que cargue créditos (la CF
+  /// manda un push a cada padre, que es quien puede ver videos / comprar).
+  /// Muestra el feedback vía los callbacks de la screen.
+  Future<void> requestCreditsFromFamily() async {
+    final result = await requestCreditsFromParents();
+    if (result.success) {
+      onSuccess?.call(result.message);
+    } else {
+      onError?.call(result.message);
+    }
+  }
+
+  /// 🎵 Publica una historia de solo-música (sin foto/video).
+  Future<bool> publishMusicOnlyStory({
+    required String musicUrl,
+    String? musicPrompt,
+    String? musicLyrics,
+    int? musicStartMs,
+    int? musicClipMs,
+    String? musicTitle,
+    String? musicDisplayMode,
+    List<Map<String, dynamic>>? musicLyricsTimings,
+    String? caption,
+  }) async {
+    try {
+      final storyId = await _storyService.createMusicOnlyStory(
+        musicUrl: musicUrl,
+        musicPrompt: musicPrompt,
+        musicLyrics: musicLyrics,
+        musicStartMs: musicStartMs,
+        musicClipMs: musicClipMs,
+        musicTitle: musicTitle,
+        musicDisplayMode: musicDisplayMode,
+        musicLyricsTimings: musicLyricsTimings,
+        caption: caption,
+      );
+      ReleaseLogger.log('✅ Historia de música creada: $storyId', tag: 'StoryCameraController');
+      onSuccess?.call('Historia publicándose...');
+      return true;
+    } on FirebaseFunctionsException catch (e) {
+      final msg = e.code == 'resource-exhausted'
+          ? (e.message ?? 'Alcanzaste el límite de historias. Esperá un momento.')
+          : (e.message ?? 'Error al publicar historia. Intentá de nuevo.');
+      onError?.call(msg);
+      return false;
+    } catch (e) {
+      ReleaseLogger.error('❌ Error publicando música story: $e', tag: 'StoryCameraController');
       onError?.call('Error al publicar historia. Intenta de nuevo.');
       return false;
     }
@@ -1453,6 +1683,11 @@ class _FaceSwapProgressDialogState extends State<_FaceSwapProgressDialog>
                       fontWeight: FontWeight.bold,
                     ),
                   ),
+                ),
+                // X para cerrar/cancelar (esquina superior derecha).
+                GestureDetector(
+                  onTap: widget.onCancel,
+                  child: const Icon(Icons.close, color: Colors.white54, size: 22),
                 ),
               ],
             ),

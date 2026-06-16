@@ -15,6 +15,7 @@ import '../services/typing_indicator_service.dart';
 import '../services/block_service.dart';
 import '../services/audio_processing_service.dart';
 import '../services/message_cache_service.dart';
+import '../services/sound_service.dart';
 import '../services/favorite_service.dart';  // ✅ NEW: For favorite tracking
 import '../services/media_compression_service.dart';
 import '../services/reaction_service.dart';  // ✅ NEW: For reactions
@@ -85,6 +86,26 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   // State
   List<ChatMessage> _messages = [];
   final List<ChatMessage> _pendingMessages = [];
+
+  /// IDs (localId/tempId) de mensajes cuyo envío sigue EN CURSO. El status bar
+  /// muestra "error" tras 30s aunque el upload todavía esté subiendo (cold start,
+  /// archivo grande); este set permite distinguir "todavía enviando" de "falló de
+  /// verdad" y evitar que el retry dispare un segundo envío → burbuja duplicada.
+  ///
+  /// ✅ STATIC: el upload corre en el orchestrator (singleton) y sigue vivo aunque
+  /// el usuario salga del chat (dispone el controller). Compartir el set entre
+  /// instancias permite que, al reentrar, el controller nuevo sepa que el envío
+  /// sigue en curso y NO muestre "error" prematuro. Los IDs son uuid → únicos
+  /// globalmente, sin colisión entre chats.
+  static final Set<String> _inFlightSends = {};
+
+  /// IDs ya vistos en el stream — para detectar mensajes ENTRANTES nuevos y
+  /// reproducir el sonido de recepción una sola vez por mensaje.
+  final Set<String> _seenMessageIds = {};
+  /// La primera emisión del stream es el historial (cache); solo siembra el
+  /// baseline, no suena. A partir de la segunda, los entrantes frescos suenan.
+  bool _receiveSoundBaselineSet = false;
+
   bool _isInitialized = false;
   bool _isLoading = true;  // ✅ FIX: Start as true, set to false when first messages arrive
   bool _hasLoadedInitialMessages = false;
@@ -123,6 +144,11 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   // Public getters
   List<ChatMessage> get messages => [..._messages];
   List<ChatMessage> get pendingMessages => [..._pendingMessages];
+
+  /// true si el envío de este mensaje sigue EN CURSO (upload activo). El UI lo
+  /// usa para NO mostrar "error" mientras el mensaje todavía se está subiendo
+  /// (el timeout visual de 30s no significa que falló).
+  bool isSendInFlight(String messageId) => _inFlightSends.contains(messageId);
   bool get isInitialized => _isInitialized;
   bool get isLoading => _isLoading;
   bool get hasLoadedInitialMessages => _hasLoadedInitialMessages;
@@ -484,6 +510,45 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   }
 
   /// Start listening to messages stream (CACHE-FIRST)
+  /// Detecta mensajes ENTRANTES nuevos (de otros, frescos) en cada emisión del
+  /// stream y reproduce el sonido de recepción una sola vez por mensaje.
+  /// El filtro de frescura (15s) evita sonar en backfill/paginación de
+  /// mensajes viejos.
+  void _maybePlayReceiveSound(List<ChatMessage> incoming) {
+    final incomingIds = incoming.map((m) => m.id).toSet();
+
+    // Primera emisión = historial: solo fijar baseline, sin sonar.
+    if (!_receiveSoundBaselineSet) {
+      _seenMessageIds.addAll(incomingIds);
+      _receiveSoundBaselineSet = true;
+      return;
+    }
+
+    final now = DateTime.now();
+    bool hasFreshIncoming = false;
+    for (final m in incoming) {
+      if (_seenMessageIds.contains(m.id)) continue;
+      if (m.senderId == currentUserId) continue; // no mis propios mensajes
+      if (m.isDeletedForEveryone) continue;
+      final ts = m.timestamp?.toDate() ?? m.localTimestamp;
+      if (ts != null && now.difference(ts).abs() < const Duration(seconds: 15)) {
+        hasFreshIncoming = true;
+      }
+    }
+
+    _seenMessageIds.addAll(incomingIds);
+    // Acotar para que el set no crezca sin límite en chats largos.
+    if (_seenMessageIds.length > 2000) {
+      _seenMessageIds
+        ..clear()
+        ..addAll(incomingIds);
+    }
+
+    if (hasFreshIncoming) {
+      SoundService().playReceiveSound();
+    }
+  }
+
   Future<void> _startListeningToMessages() async {
     // Cancel existing subscription if any
     await _messagesSubscription?.cancel();
@@ -492,6 +557,8 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     _messagesSubscription = _orchestrator.getMessagesStream(chatId).listen(
       (messages) {
         ReleaseLogger.log('Received ${messages.length} messages from cache for chat $chatId');
+        // ✅ Sonido de recepción: mensaje entrante nuevo con el chat abierto.
+        _maybePlayReceiveSound(messages);
         // ✅ FIX: Merge with locally deleted messages to preserve isDeletedForEveryone state
         _messages = _mergeWithLocalDeletedState(messages);
         // El filtrado por bloqueo lo hace el stream manager vía `visibleTo`.
@@ -606,6 +673,7 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     await MessageCacheService().saveMessage(chatId, optimisticMessage);
     _pendingMessages.add(optimisticMessage);
     _messages.insert(0, optimisticMessage);
+    SoundService().playSendSound(); // ✅ sonido corto de envío
     notifyListeners();
 
     final textPreview = text.length > 10 ? '${text.substring(0, 10)}...' : text;
@@ -743,6 +811,46 @@ class ChatControllerCacheFirst extends ChangeNotifier {
     }
   }
 
+  /// Marca el mensaje optimista [tempId] como error preservando su path local
+  /// para que la preview siga visible y el retry pueda re-subir el archivo.
+  void _markOptimisticAsError(String tempId, {String? localPath}) {
+    final idx = _messages.indexWhere((m) => m.id == tempId);
+    if (idx == -1) return;
+    final errored = _messages[idx].copyWith(
+      status: MessageStatus.error,
+      localPath: localPath ?? _messages[idx].localPath,
+    );
+    _messages[idx] = errored;
+    _pendingMessages.removeWhere((m) => m.id == tempId);
+    MessageCacheService().updateMessage(chatId, errored);
+    notifyListeners();
+  }
+
+  /// Devuelve el path local de un archivo multimedia adjunto, o null si no hay.
+  /// Considera `localPath` y, como fallback, los campos *Url cuando apuntan a un
+  /// archivo local (no a una URL http remota ya subida).
+  String? _localMediaPath(ChatMessage m) {
+    if (m.localPath != null && m.localPath!.isNotEmpty) return m.localPath;
+    for (final url in [m.imageUrl, m.videoUrl, m.audioUrl]) {
+      if (url != null && url.isNotEmpty && !url.startsWith('http')) return url;
+    }
+    return null;
+  }
+
+  /// Mapea el `type` string del mensaje al enum MessageType para reenvío.
+  MessageType _mediaTypeFor(String? type) {
+    switch (type) {
+      case 'image':
+        return MessageType.image;
+      case 'video':
+        return MessageType.video;
+      case 'audio':
+        return MessageType.audio;
+      default:
+        return MessageType.text;
+    }
+  }
+
   /// Retry sending a failed message (keeps same position in chat)
   ///
   /// Flow:
@@ -768,6 +876,23 @@ class ChatControllerCacheFirst extends ChangeNotifier {
       return;
     }
 
+    // ⚠️ El envío original SIGUE EN CURSO: el status bar mostró "error" por el
+    // timeout de 30s (cold start / archivo grande), pero el upload no falló.
+    // Disparar un retry ahora crearía un SEGUNDO mensaje en Firestore (duplicado).
+    // Solo reseteamos el timer visual a "sending" y dejamos que el envío termine.
+    if (_inFlightSends.contains(messageId)) {
+      final idx = _messages.indexWhere((m) => m.id == messageId);
+      if (idx != -1) {
+        _messages[idx] = _messages[idx].copyWith(
+          status: MessageStatus.sending,
+          localTimestamp: DateTime.now(),
+        );
+        notifyListeners();
+      }
+      ReleaseLogger.log('⏳ Retry ignorado: envío aún en curso para ${messageId.substring(0, 8)}...');
+      return;
+    }
+
     // 2. Update to "sending" state
     final sendingMessage = failedMessage.copyWith(
       status: MessageStatus.sending,
@@ -780,9 +905,16 @@ class ChatControllerCacheFirst extends ChangeNotifier {
 
     ReleaseLogger.log('🔄 Retrying message ${messageId.substring(0, 8)}...');
 
+    _inFlightSends.add(messageId);
     try {
       // 3. Send to backend via orchestrator
-      if (failedMessage.text != null && failedMessage.text!.isNotEmpty) {
+      final mediaPath = _localMediaPath(failedMessage);
+      final isTextMessage = (failedMessage.type == null ||
+              failedMessage.type == 'text') &&
+          failedMessage.text != null &&
+          failedMessage.text!.isNotEmpty;
+
+      if (isTextMessage) {
         await _orchestrator.sendMessage(
           chatId: chatId,
           content: failedMessage.text!,
@@ -793,8 +925,25 @@ class ChatControllerCacheFirst extends ChangeNotifier {
 
         // Success - message will be updated via stream with real ID
         ReleaseLogger.log('✅ Message retry successful for ${messageId.substring(0, 8)}...');
+      } else if (mediaPath != null) {
+        // ✅ FIX: Retry de mensajes multimedia (imagen/video/audio).
+        // Antes esto era un TODO y el retry no hacía nada: la burbuja quedaba
+        // colgada y, si el envío original terminaba en paralelo, aparecía una
+        // segunda burbuja. Re-subimos usando el path local preservado y el MISMO
+        // localId para que la dedup colapse todo en una sola burbuja.
+        await _orchestrator.sendMessage(
+          chatId: chatId,
+          content: failedMessage.text ?? '',
+          type: _mediaTypeFor(failedMessage.type),
+          mediaPath: mediaPath,
+          replyTo: failedMessage.replyTo,
+          metadata: {'localId': messageId},
+        );
+        ReleaseLogger.log('✅ Media retry successful for ${messageId.substring(0, 8)}...');
+      } else {
+        // Sin texto ni archivo local disponible: no se puede reintentar.
+        throw Exception('No hay contenido ni archivo local para reenviar');
       }
-      // TODO: Handle retry for media messages (image, video, audio)
     } catch (e) {
       // 4. Error - update status back to error
       final errorMessage = sendingMessage.copyWith(
@@ -809,6 +958,8 @@ class ChatControllerCacheFirst extends ChangeNotifier {
       }
 
       ReleaseLogger.error('❌ Message retry failed for ${messageId.substring(0, 8)}...: $e');
+    } finally {
+      _inFlightSends.remove(messageId);
     }
   }
 
@@ -969,8 +1120,12 @@ class ChatControllerCacheFirst extends ChangeNotifier {
       waveformData: waveform,  // Correct parameter name from ChatMessage
     );
 
+    // ✅ FIX: Persistir a Hive (ver sendImage) para que la burbuja sobreviva
+    // salir/reentrar al chat durante una subida lenta.
+    await MessageCacheService().saveMessage(chatId, optimisticMessage);
     _pendingMessages.add(optimisticMessage);
     _messages.insert(0, optimisticMessage);
+    SoundService().playSendSound(); // ✅ sonido corto de envío
     notifyListeners();
   }
 
@@ -979,6 +1134,12 @@ class ChatControllerCacheFirst extends ChangeNotifier {
   /// [transcription] - Transcripción local del audio (gratis, usando STT del dispositivo)
   /// Se envía al servidor para moderación en lugar de usar APIs de pago como Whisper
   Future<void> processAndUploadAudio(String audioPath, {String? transcription}) async {
+    // ✅ FIX duplicado: el flujo de audio está partido (createOptimisticAudioBubble
+    // crea el optimista, este método lo sube). Sin pasar el MISMO id como localId,
+    // el mensaje real de Firestore no reconcilia con el optimista → DOS burbujas.
+    // Buscamos el id del optimista por su audioPath y lo pasamos como localId.
+    final optIdx = _messages.indexWhere((m) => m.audioUrl == audioPath);
+    final localId = optIdx != -1 ? _messages[optIdx].id : null;
     try {
       // Construir metadata con transcripción si está disponible
       final Map<String, dynamic> metadata = {};
@@ -986,26 +1147,35 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         metadata['transcription'] = transcription;
         ReleaseLogger.log('📝 Enviando audio con transcripción local', tag: 'Audio');
       }
+      if (localId != null) metadata['localId'] = localId;
 
-      await _orchestrator.sendMessage(
-        chatId: chatId,
-        content: '', // Audio messages don't need text content
-        type: MessageType.audio,
-        mediaPath: audioPath,
-        metadata: metadata.isNotEmpty ? metadata : null,
-      );
+      if (localId != null) _inFlightSends.add(localId);
+      try {
+        await _orchestrator.sendMessage(
+          chatId: chatId,
+          content: '', // Audio messages don't need text content
+          type: MessageType.audio,
+          mediaPath: audioPath,
+          metadata: metadata.isNotEmpty ? metadata : null,
+        );
+      } finally {
+        if (localId != null) _inFlightSends.remove(localId);
+      }
 
       // Remove from pending messages
       _pendingMessages.removeWhere((m) => m.audioUrl == audioPath);
       ReleaseLogger.log('Audio uploaded successfully');
     } catch (e) {
       ReleaseLogger.error('Failed to upload audio: $e');
-      // Update optimistic message to error status
+      // Update optimistic message to error status (y persistir a Hive para que
+      // sobreviva la navegación, como imágenes/video).
       final failedIndex = _messages.indexWhere((m) => m.audioUrl == audioPath);
       if (failedIndex != -1) {
-        _messages[failedIndex] = _messages[failedIndex].copyWith(
+        final errored = _messages[failedIndex].copyWith(
           status: MessageStatus.error,
         );
+        _messages[failedIndex] = errored;
+        await MessageCacheService().updateMessage(chatId, errored);
         notifyListeners();
       }
       rethrow;
@@ -1014,6 +1184,9 @@ class ChatControllerCacheFirst extends ChangeNotifier {
 
   /// Send image with optimistic updates
   Future<void> sendImage({required ImageSource source}) async {
+    // Hoisted para que el catch pueda marcar la burbuja como error.
+    String? errorTempId;
+    String? errorLocalPath;
     try {
       final picker = ImagePicker();
       final pickedFile = await picker.pickImage(
@@ -1027,6 +1200,8 @@ class ChatControllerCacheFirst extends ChangeNotifier {
 
       // Create optimistic message
       final tempId = const Uuid().v4();
+      errorTempId = tempId;
+      errorLocalPath = pickedFile.path;
       final optimisticMessage = ChatMessage.optimistic(
         id: tempId,
         senderId: currentUserId,
@@ -1034,8 +1209,13 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         localPath: pickedFile.path, // ✅ FIX: Usar localPath para imagen local
       );
 
+      // ✅ FIX: Persistir a Hive como el texto (línea ~612). Sin esto, al salir
+      // y reentrar al chat durante una subida lenta la burbuja desaparecía
+      // (no sobrevivía la navegación) hasta que Firestore confirmaba.
+      await MessageCacheService().saveMessage(chatId, optimisticMessage);
       _pendingMessages.add(optimisticMessage);
       _messages.insert(0, optimisticMessage);
+      SoundService().playSendSound(); // ✅ sonido corto de envío
       notifyListeners();
 
       // ✅ OPTIMIZACIÓN: Comprimir imagen antes de subir
@@ -1044,23 +1224,40 @@ class ChatControllerCacheFirst extends ChangeNotifier {
       final fileToUpload = compressedFile ?? imageFile;
 
       // Upload in background via orchestrator
-      await _orchestrator.sendMessage(
-        chatId: chatId,
-        content: '', // Image messages don't need text content
-        type: MessageType.image,
-        mediaPath: fileToUpload.path,
-      );
+      // ✅ FIX: Pasar localId=tempId para que el optimista del servicio y el
+      // mensaje real de Firestore compartan el MISMO id. Sin esto, la dedup por
+      // localId no matchea y aparecen DOS burbujas (la fallida + la enviada).
+      _inFlightSends.add(tempId);
+      try {
+        await _orchestrator.sendMessage(
+          chatId: chatId,
+          content: '', // Image messages don't need text content
+          type: MessageType.image,
+          mediaPath: fileToUpload.path,
+          metadata: {'localId': tempId},
+        );
+      } finally {
+        _inFlightSends.remove(tempId);
+      }
 
       // Remove from pending
       _pendingMessages.removeWhere((m) => m.id == tempId);
     } catch (e) {
       ReleaseLogger.error('Failed to send image: $e');
+      // ✅ FIX: Preservar la burbuja en estado error con el path local ORIGINAL
+      // (no el comprimido, que es temporal) para que la foto siga visible y el
+      // retry pueda re-subirla. Antes la burbuja quedaba vacía o desaparecía.
+      if (errorTempId != null) {
+        _markOptimisticAsError(errorTempId, localPath: errorLocalPath);
+      }
       rethrow;
     }
   }
 
   /// Send video with optimistic updates
   Future<void> sendVideo({String? path, PlatformFile? file}) async {
+    String? errorTempId;
+    String? errorLocalPath;
     try {
       String? videoPath = path;
 
@@ -1078,6 +1275,8 @@ class ChatControllerCacheFirst extends ChangeNotifier {
 
       // Create optimistic message
       final tempId = const Uuid().v4();
+      errorTempId = tempId;
+      errorLocalPath = videoPath;
       final optimisticMessage = ChatMessage.optimistic(
         id: tempId,
         senderId: currentUserId,
@@ -1085,22 +1284,35 @@ class ChatControllerCacheFirst extends ChangeNotifier {
         videoUrl: videoPath, // Local path temporarily
       );
 
+      // ✅ FIX: Persistir a Hive (ver sendImage) para que sobreviva la navegación.
+      await MessageCacheService().saveMessage(chatId, optimisticMessage);
       _pendingMessages.add(optimisticMessage);
       _messages.insert(0, optimisticMessage);
+      SoundService().playSendSound(); // ✅ sonido corto de envío
       notifyListeners();
 
       // Upload in background via orchestrator
-      await _orchestrator.sendMessage(
-        chatId: chatId,
-        content: '', // Video messages don't need text content
-        type: MessageType.video,
-        mediaPath: videoPath,
-      );
+      // ✅ FIX: localId=tempId para dedup correcta (ver sendImage).
+      _inFlightSends.add(tempId);
+      try {
+        await _orchestrator.sendMessage(
+          chatId: chatId,
+          content: '', // Video messages don't need text content
+          type: MessageType.video,
+          mediaPath: videoPath,
+          metadata: {'localId': tempId},
+        );
+      } finally {
+        _inFlightSends.remove(tempId);
+      }
 
       // Remove from pending
       _pendingMessages.removeWhere((m) => m.id == tempId);
     } catch (e) {
       ReleaseLogger.error('Failed to send video: $e');
+      if (errorTempId != null) {
+        _markOptimisticAsError(errorTempId, localPath: errorLocalPath);
+      }
       rethrow;
     }
   }
@@ -1119,8 +1331,11 @@ class ChatControllerCacheFirst extends ChangeNotifier {
       imageUrl: thumbnailPath, // Use image URL for thumbnail preview
     );
 
+    // ✅ FIX: Persistir a Hive (ver sendImage) para que sobreviva la navegación.
+    unawaited(MessageCacheService().saveMessage(chatId, optimisticMessage));
     _pendingMessages.add(optimisticMessage);
     _messages.insert(0, optimisticMessage);
+    SoundService().playSendSound(); // ✅ sonido corto de envío
     notifyListeners();
   }
 

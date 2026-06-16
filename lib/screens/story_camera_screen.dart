@@ -10,10 +10,17 @@ import '../services/bottom_nav_visibility.dart';
 import '../utils/release_logger.dart';
 import '../widgets/permission_dialog.dart';
 import '../widgets/camera/flutter_camera_view.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'music/music_generator_screen.dart';
+import 'music/music_crop_screen.dart';
+import '../services/stories/services/story_music_service.dart';
+import '../services/subscription_service.dart';
+import '../widgets/premium_paywall_dialog.dart';
 import 'package:flutter_story_editor/flutter_story_editor.dart';
 // ignore: implementation_imports
 import 'package:flutter_story_editor/src/controller/controller.dart';
 import 'trivia/trivia_creation_screen.dart';
+import '../link_parent_child.dart';
 
 /// Pantalla de cámara para crear historias - REFACTORIZADA
 ///
@@ -23,7 +30,11 @@ import 'trivia/trivia_creation_screen.dart';
 /// - Coordinar llamadas al StoryCameraController
 /// - Navegación y diálogos
 class StoryCameraScreen extends StatefulWidget {
-  const StoryCameraScreen({super.key});
+  /// Si es true, apenas se captura la foto se abre automáticamente el selector
+  /// de face-swap (usado desde el CTA "Generá tu historia con IA" del visor).
+  final bool autoOpenFaceSwap;
+
+  const StoryCameraScreen({super.key, this.autoOpenFaceSwap = false});
 
   @override
   State<StoryCameraScreen> createState() => _StoryCameraScreenState();
@@ -103,6 +114,10 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       _showAppSettingsDialog();
     };
 
+    // Sin créditos al generar con IA: ofrecer avisar a la familia, o invitar a
+    // vincular un padre si el hijo no tiene ninguno.
+    _controller.onOutOfCredits = _handleOutOfCredits;
+
     _controller.onPermissionGranted = () {
       // Los permisos fueron concedidos, simplemente continuar sin mostrar mensajes
       // La cámara se inicializará automáticamente y el usuario verá el preview
@@ -146,12 +161,13 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     WidgetsBinding.instance.removeObserver(this);
     BottomNavVisibility.instance.unregisterFullScreen();
 
-    // ✅ Restaurar orientaciones permitidas al salir
+    // 🔒 Restaurar el lock global de la app (solo portrait). Antes este bloque
+    // abría las 4 orientaciones, lo que dejaba a la app rotando en landscape
+    // por el resto de la sesión hasta el siguiente reinicio. La app entera es
+    // portrait-only (ver main.dart).
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
     ]);
 
     // Dispose controller which will handle cleanup of any active modals
@@ -175,6 +191,83 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   }
 
   /// ===== MÉTODOS UI HELPER (NO LÓGICA DE NEGOCIO) =====
+
+  /// Flujo cuando se acaba el crédito al generar con IA.
+  Future<void> _handleOutOfCredits() async {
+    // Esperar a que cierre el progress dialog del face-swap antes de mostrar el nuestro.
+    await Future.delayed(const Duration(milliseconds: 350));
+    if (!mounted) return;
+    final hasParent = await _controller.hasLinkedParent();
+    if (!mounted) return;
+    if (hasParent) {
+      _showRequestCreditsDialog();
+    } else {
+      _showLinkParentDialog();
+    }
+  }
+
+  /// Hijo CON padre vinculado: ofrecer avisarle para que cargue créditos.
+  void _showRequestCreditsDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.auto_awesome, color: Color(0xFF9D7FE8), size: 40),
+        title: const Text('Te quedaste sin créditos'),
+        content: const Text(
+          '¿Avisamos a tu familia para que mire un video y cargue más créditos?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Ahora no'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final r = await _controller.requestCreditsFromParents();
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(r.message),
+                backgroundColor: r.success ? Colors.green : Colors.orange,
+              ));
+            },
+            child: const Text('Avisar a mi familia'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Hijo SIN padre vinculado: invitar a vincular para seguir generando con IA.
+  void _showLinkParentDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.family_restroom, color: Color(0xFF9D7FE8), size: 40),
+        title: const Text('Vinculá a tu familia'),
+        content: const Text(
+          'Vinculá a tu mamá o papá para seguir generando historias con IA.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Ahora no'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const GenerateLinkCodeScreen(),
+                ),
+              );
+            },
+            child: const Text('Vincular'),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _showAppSettingsDialog() {
     PermissionDialog.showPermissionDeniedDialog(
@@ -219,7 +312,25 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
     }
 
     if (imagePath != null) {
-      await _navigateToStoryEditor(imagePath, 'image');
+      // ✨ Si venimos del CTA "Generá tu historia con IA", abrir el selector de
+      // face-swap apenas se toma la foto, antes del editor.
+      String finalPath = imagePath;
+      bool preAppliedFaceSwap = false;
+      if (widget.autoOpenFaceSwap && mounted) {
+        final swapped = await _controller.applyFaceSwapToFile(
+          context,
+          File(imagePath),
+        );
+        if (swapped != null) {
+          finalPath = swapped;
+          preAppliedFaceSwap = true;
+        }
+      }
+      await _navigateToStoryEditor(
+        finalPath,
+        'image',
+        preAppliedFaceSwap: preAppliedFaceSwap,
+      );
     }
   }
 
@@ -254,7 +365,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   // Métodos de character transformation removidos - ahora están en el story editor
 
   /// Navegar al editor de historias
-  Future<void> _navigateToStoryEditor(String mediaPath, String mediaType) async {
+  ///
+  /// [preAppliedFaceSwap] = true si ya se aplicó face-swap antes de entrar al
+  /// editor (auto-flow). Sirve para marcar la historia como aiGenerated aunque
+  /// el usuario no toque el botón de face-swap dentro del editor.
+  Future<void> _navigateToStoryEditor(
+    String mediaPath,
+    String mediaType, {
+    bool preAppliedFaceSwap = false,
+  }) async {
     try {
       ReleaseLogger.log('🎬 Navegando al editor con: $mediaPath (tipo: $mediaType)', tag: 'StoryCameraScreen');
 
@@ -294,35 +413,122 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
       String? editedFilePath;
       String? capturedCaption;
       bool shouldPublish = false;
+      // Marca si la historia fue generada con IA (face-swap pre-aplicado en el
+      // auto-flow, o aplicado por el usuario dentro del editor).
+      bool faceSwapApplied = preAppliedFaceSwap;
+
+      // 🎵 Música generada desde el botón del editor (si el usuario la agregó).
+      final pendingMusic = ValueNotifier<StoryMusicResult?>(null);
+
+      // Reproductor para escuchar la canción/fragmento mientras se edita la foto.
+      final musicPreview = AudioPlayer();
+      Future<void> updatePreview(StoryMusicResult? m) async {
+        try {
+          await musicPreview.stop();
+          if (m == null) return;
+          await musicPreview.play(UrlSource(m.audioUrl));
+          if (m.startMs != null && m.startMs! > 0) {
+            await musicPreview.seek(Duration(milliseconds: m.startMs!));
+          }
+        } catch (_) {}
+      }
+
+      // Loop del fragmento: al llegar al fin del clip, volver al inicio.
+      final posSub = musicPreview.onPositionChanged.listen((pos) {
+        final m = pendingMusic.value;
+        if (m?.clipMs != null) {
+          final start = m!.startMs ?? 0;
+          if (pos.inMilliseconds >= start + m.clipMs!) {
+            musicPreview.seek(Duration(milliseconds: start));
+          }
+        }
+      });
+
+      // Resolver el rol una sola vez: los hijos piden créditos a la familia,
+      // los adultos pueden ver videos.
+      final isChild = await _controller.hasLinkedParent();
+      if (!mounted) {
+        pendingMusic.dispose();
+        await posSub.cancel();
+        await musicPreview.dispose();
+        return;
+      }
 
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => FlutterStoryEditor(
-            selectedFiles: [file],
-            controller: storyController,
-            captionController: captionController,
-            onSaveClickListener: (editedFiles) {
-              ReleaseLogger.log('💾 Story editor completado con ${editedFiles.length} archivos', tag: 'StoryCameraScreen');
-              if (editedFiles.isNotEmpty) {
-                // Capturar datos para publicar DESPUÉS de que el editor cierre
-                editedFilePath = editedFiles.first.path;
-                capturedCaption = captionController.text.trim();
-                shouldPublish = true;
-                ReleaseLogger.log('📝 Caption capturado: "${capturedCaption?.isNotEmpty == true ? capturedCaption : "(vacío)"}"', tag: 'StoryCameraScreen');
-              }
-              // Cerrar el editor - Navigator.push retornará después de esto
-              Navigator.pop(context);
-            },
-            onFaceSwapClickListener: (currentFile, currentIndex) async {
-              return await _handleFaceSwap(currentFile, currentIndex);
-            },
-            // Pulse el botón solo si el usuario nunca usó face-swap, para
-            // destacarlo como feature insignia la primera vez.
-            showFaceSwapPulse: !_hasUsedFaceSwap,
+          builder: (editorContext) => Stack(
+            children: [
+              FlutterStoryEditor(
+                selectedFiles: [file],
+                controller: storyController,
+                captionController: captionController,
+                onSaveClickListener: (editedFiles) {
+                  ReleaseLogger.log('💾 Story editor completado con ${editedFiles.length} archivos', tag: 'StoryCameraScreen');
+                  if (editedFiles.isNotEmpty) {
+                    // Capturar datos para publicar DESPUÉS de que el editor cierre
+                    editedFilePath = editedFiles.first.path;
+                    capturedCaption = captionController.text.trim();
+                    shouldPublish = true;
+                    ReleaseLogger.log('📝 Caption capturado: "${capturedCaption?.isNotEmpty == true ? capturedCaption : "(vacío)"}"', tag: 'StoryCameraScreen');
+                  }
+                  // Cerrar el editor - Navigator.push retornará después de esto
+                  Navigator.pop(editorContext);
+                },
+                onFaceSwapClickListener: (currentFile, currentIndex) async {
+                  final result = await _handleFaceSwap(currentFile, currentIndex);
+                  if (result != null) faceSwapApplied = true;
+                  return result;
+                },
+                // Pulse el botón solo si el usuario nunca usó face-swap, para
+                // destacarlo como feature insignia la primera vez.
+                showFaceSwapPulse: !_hasUsedFaceSwap,
+              ),
+              // 🎵 Botón "Música IA" visible dentro del editor.
+              Positioned(
+                right: 12,
+                top: MediaQuery.of(editorContext).padding.top + 60,
+                child: ValueListenableBuilder<StoryMusicResult?>(
+                  valueListenable: pendingMusic,
+                  builder: (ctx, music, _) => _buildEditorMusicButton(
+                    hasMusic: music != null,
+                    onTap: () async {
+                      // Pausar el preview para no superponerlo con el de la
+                      // pantalla de generación/recorte.
+                      await musicPreview.pause();
+                      if (!ctx.mounted) return;
+                      if (music == null) {
+                        // Generar una canción nueva.
+                        final result = await _openMusicGenerator(ctx, isChild);
+                        if (result != null) pendingMusic.value = result;
+                      } else {
+                        // Re-editar el recorte de la canción ya generada.
+                        final crop = await _openMusicCrop(ctx, music);
+                        if (crop != null) {
+                          music.startMs = crop.startMs;
+                          music.clipMs = crop.clipMs;
+                          music.fragmentLyrics = crop.lyrics;
+                          music.displayMode = crop.displayMode;
+                          music.title = crop.title;
+                          music.lineTimings = crop.lineTimings;
+                        }
+                      }
+                      await updatePreview(pendingMusic.value);
+                    },
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       );
+
+      // Música agregada desde el editor (si la hay).
+      final musicResult = pendingMusic.value;
+      await posSub.cancel();
+      await musicPreview.stop();
+      await musicPreview.dispose();
+      pendingMusic.dispose();
 
       // ✅ FIX: Cerrar cámara INMEDIATAMENTE y publicar en background
       // Navegación optimista - el usuario no espera la subida
@@ -337,6 +543,15 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           mediaPath: editedFilePath!,
           mediaType: mediaType,
           caption: capturedCaption?.isNotEmpty == true ? capturedCaption : null,
+          aiGenerated: faceSwapApplied || musicResult != null,
+          musicUrl: musicResult?.audioUrl,
+          musicPrompt: musicResult?.prompt,
+          musicLyrics: musicResult?.fragmentLyrics,
+          musicStartMs: musicResult?.startMs,
+          musicClipMs: musicResult?.clipMs,
+          musicTitle: musicResult?.title,
+          musicDisplayMode: musicResult?.displayMode,
+          musicLyricsTimings: musicResult?.lineTimings,
         );
       }
     } catch (e) {
@@ -348,6 +563,86 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
   /// Manejar face swap en el editor
   Future<String?> _handleFaceSwap(File currentFile, int currentIndex) async {
     return await _controller.applyFaceSwapToFile(context, currentFile);
+  }
+
+  /// Abre el generador de música (pantalla con el diseño estándar de imágenes
+  /// IA). Devuelve la canción generada, o null si el usuario salió sin crear.
+  /// Abre solo la pantalla de recorte para una canción YA generada (re-editar
+  /// el fragmento sin regenerar). Usa la letra completa (no el fragmento).
+  Future<MusicCrop?> _openMusicCrop(BuildContext ctx, StoryMusicResult m) {
+    return Navigator.of(ctx).push<MusicCrop>(
+      MaterialPageRoute(
+        builder: (_) => MusicCropScreen(
+          audioUrl: m.audioUrl,
+          taskId: m.taskId,
+          fullLyrics: m.lyrics,
+          defaultTitle: m.title ?? m.defaultTitle,
+          onFetchAlignment: _controller.fetchMusicAlignment,
+        ),
+      ),
+    );
+  }
+
+  /// Feature para el paywall de música (creación de canciones con IA).
+  static const _musicPremiumFeature = PremiumFeature(
+    id: 'ai_music',
+    name: 'Música con IA',
+    description: 'Creá canciones únicas con IA para tus historias',
+    requiredTier: SubscriptionTier.premium,
+    iconName: '🎵',
+  );
+
+  Future<StoryMusicResult?> _openMusicGenerator(BuildContext ctx, bool isChild) async {
+    // 🔒 Gate premium: la creación de canciones es exclusiva de Premium/Premium+.
+    final isPremium = await _controller.hasActiveSubscription();
+    if (!isPremium) {
+      if (ctx.mounted) {
+        PremiumPaywallDialog.show(ctx, feature: _musicPremiumFeature);
+      }
+      return null;
+    }
+    if (!ctx.mounted) return null;
+    return await showMusicGenerator(
+      ctx,
+      onGenerate: _controller.generateMusic,
+      creditCost: StoryCameraController.songCreditCost,
+      creditsStream: _controller.watchAvailableCredits(),
+      onWatchAds: isChild ? null : _controller.watchAdsForCredits,
+      onRequestCredits: isChild ? _controller.requestCreditsFromFamily : null,
+      onFetchAlignment: _controller.fetchMusicAlignment,
+    );
+  }
+
+  /// Botón "Música IA" que se muestra dentro del editor de historias.
+  Widget _buildEditorMusicButton({required bool hasMusic, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(colors: [Color(0xFFB388FF), Color(0xFF7C4DFF)]),
+          borderRadius: BorderRadius.circular(24),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 8),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              hasMusic ? Icons.check_rounded : Icons.music_note_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              hasMusic ? 'Música ✓' : 'Música IA',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// ===== BUILD UI =====
@@ -568,9 +863,12 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
             onPressed: _closeScreen,
             icon: Icons.close,
           ),
-          // Controles de cámara (flash, switch)
+          // Controles de cámara (flash, switch) + música IA
           Row(
             children: [
+              // Crear historia de solo música con IA
+              _buildMusicStoryButton(),
+              SizedBox(width: 8),
               // Flash button - disponible para ambas cámaras
               _buildFlashButton(),
               SizedBox(width: 8),
@@ -583,6 +881,57 @@ class _StoryCameraScreenState extends State<StoryCameraScreen>
           ),
         ],
       ),
+    );
+  }
+
+  /// Botón para crear una historia de solo-música con IA.
+  Widget _buildMusicStoryButton() {
+    return GestureDetector(
+      onTap: _openMusicStoryCreation,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFFB388FF), Color(0xFF7C4DFF)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF7C4DFF).withValues(alpha: 0.5),
+              blurRadius: 10,
+              spreadRadius: 1,
+            ),
+          ],
+        ),
+        child: const Icon(Icons.music_note_rounded, color: Colors.white, size: 24),
+      ),
+    );
+  }
+
+  /// Abre el flujo de creación de historia de solo-música.
+  Future<void> _openMusicStoryCreation() async {
+    // Los hijos no pueden ver videos: piden créditos a la familia.
+    final isChild = await _controller.hasLinkedParent();
+    if (!mounted) return;
+    final result = await _openMusicGenerator(context, isChild);
+    if (result == null || !mounted) return;
+
+    // Cerrar la cámara y publicar en background (UX optimista).
+    Navigator.pop(context);
+    _controller.publishMusicOnlyStory(
+      musicUrl: result.audioUrl,
+      musicPrompt: result.prompt,
+      musicLyrics: result.fragmentLyrics,
+      musicStartMs: result.startMs,
+      musicClipMs: result.clipMs,
+      musicTitle: result.title,
+      musicDisplayMode: result.displayMode,
+      musicLyricsTimings: result.lineTimings,
+      // El prompt ya NO se usa como caption: la historia muestra título o letra.
+      caption: null,
     );
   }
 

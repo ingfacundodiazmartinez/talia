@@ -11,10 +11,13 @@ import '../../notification_dedup_registry.dart';
 import '../chat_orchestrator.dart';
 import '../../unread_messages_service.dart';
 import '../../message_cache_service.dart';
+import '../../../groups/services/group_message_cache_service.dart';
+import '../../../groups/models/group_message.dart';
 import '../../read_receipts_service.dart';
 import '../../local_unread_count_service.dart';
 import '../../../notification_service.dart';
 import '../../contact_photo_cache_service.dart';
+import '../../snackbar_service.dart';
 import '../../app_state_service.dart';
 import '../../message_status_helper.dart';
 import '../chat_preferences_cache.dart';
@@ -244,6 +247,19 @@ class ChatStreamManager {
               })
               .toList();
 
+          // ✅ FIX FLICKER: el eco local de Firestore (latency compensation)
+          // llega con timestamp=null (serverTimestamp sin resolver) y
+          // fromFirestore no setea localTimestamp. Un mensaje sin NINGÚN
+          // tiempo se ordena al final de la lista (= tope del chat), así que
+          // el mensaje recién enviado "saltaba" arriba por una fracción de
+          // segundo hasta que el server resolvía el timestamp. Materializar
+          // localTimestamp=ahora lo mantiene en su lugar (abajo, es el más
+          // reciente) en ambos sorts (memoria y Hive).
+          messages = messages.map((msg) {
+            if (msg.timestamp != null || msg.localTimestamp != null) return msg;
+            return msg.copyWith(localTimestamp: DateTime.now());
+          }).toList();
+
           // ✅ FIX: Filtrar mensajes anteriores a clearedAt (respaldo de seguridad)
           if (clearedAtForFilter != null) {
             final beforeFilter = messages.length;
@@ -285,6 +301,24 @@ class ChatStreamManager {
           // ✅ CRITICAL: Save to Hive cache (persistent) - CACHE-FIRST ARCHITECTURE
           await MessageCacheService().saveMessages(chatId, messages);
           ReleaseLogger.log('Saved ${messages.length} messages to Hive cache for chat $chatId');
+
+          // 🔒 Para grupos, también guardar en GroupMessageCacheService para
+          // que la chat list (que lee de ahí) muestre el lastMessage correcto
+          // aunque el user nunca haya abierto el grupo. Convertimos desde los
+          // docs originales para preservar senderName y demás campos exclusivos
+          // de GroupMessage que no están en ChatMessage.
+          if (isGroup) {
+            try {
+              final groupMessages = snapshot.docs.map((doc) {
+                final data = doc.data() as Map<String, dynamic>;
+                return GroupMessage.fromFirestore(doc.id, data);
+              }).toList();
+              await GroupMessageCacheService().saveMessages(chatId, groupMessages);
+              ReleaseLogger.log('Saved ${groupMessages.length} group messages to GroupMessageCacheService for $chatId');
+            } catch (e) {
+              ReleaseLogger.error('Error saving group messages to cache: $e');
+            }
+          }
 
           // ✅ V2 ARCHITECTURE: Confirmar recepción de mensajes para eliminación por CF
           // Solo para chats 1-1 (grupos usan TTL de 7 días)
@@ -799,6 +833,17 @@ class ChatStreamManager {
         if (lastMessageTime != null && !_lastSeenMessageTimestamps.containsKey(chatId)) {
           _lastSeenMessageTimestamps[chatId] = lastMessageTime;
         }
+
+        // 🔒 SST=Hive: si el cache no tiene mensajes para este chat, hacer
+        // prefetch ahora para poblarlo. Sin esto, en el primer install la
+        // chat list muestra "Inicia una conversación..." aunque haya
+        // historial en Firestore. Fire-and-forget para no bloquear el listener.
+        final cacheCheck = isGroup
+            ? GroupMessageCacheService().getLastMessage(chatId)
+            : MessageCacheService().getLastMessage(chatId);
+        if (cacheCheck == null && lastMessageTime != null) {
+          prefetchMessagesForChat(chatId, isGroup: isGroup, limit: 20);
+        }
       }
 
       // Detectar solo modificaciones (cuando llega mensaje nuevo, lastMessageAt cambia)
@@ -895,10 +940,15 @@ class ChatStreamManager {
         // No necesitamos filtro de edad adicional
 
         // ✅ FIX #1: FILTRO 2 - MemoryCache puro (SIN I/O bloqueante)
-        // Usa variable en memoria (_cachedCurrentChatId) en lugar de SharedPreferences
-        // Esto elimina COMPLETAMENTE el riesgo de race condition (0ms vs potenciales 2-5s)
-
-        if (_cachedCurrentChatId != null && _cachedCurrentChatId == chatId) {
+        // ✅ FIX: usar LocalUnreadCountService como fuente de verdad del
+        // "chat actual". La variable propia (_cachedCurrentChatId) nunca se
+        // seteaba — las pantallas de chat solo llaman a
+        // NotificationService.setCurrentChat y LocalUnreadCountService
+        // .enterChat — así que este filtro era código muerto y dependía de
+        // guards redundantes aguas abajo.
+        final activeChatId =
+            _cachedCurrentChatId ?? LocalUnreadCountService().currentChatId;
+        if (activeChatId != null && activeChatId == chatId) {
           ReleaseLogger.log('📱 [ChatDocsListener] Usuario está en chat $chatId - SKIP notificación');
           continue;
         }
@@ -941,7 +991,8 @@ class ChatStreamManager {
         final chatDoc = await FirebaseFirestore.instance
             .collection(collection)
             .doc(chatId)
-            .get();
+            .get()
+            .timeout(const Duration(seconds: 8));
         if (!chatDoc.exists) {
           ReleaseLogger.log('⚠️ [ChatDocsListener] Chat no existe: $chatId');
           return;
@@ -1008,12 +1059,12 @@ class ChatStreamManager {
 
       // ✅ FIX: Solo mostrar notificaciones para mensajes POSTERIORES a cuando la app volvió a foreground
       // Esto evita mostrar notificaciones de mensajes que llegaron en background (FCM ya los mostró)
-      final prefs = await _prefs; // Usa cache para evitar delay de I/O
-      final resumedAt = prefs.getInt('app_resumed_foreground_at');
+      // Usa el valor in-memory de AppStateService (no SharedPreferences) para evitar
+      // race conditions con escritura async + para tener valor válido en cold start.
+      final resumedDateTime = AppStateService().lastForegroundResumeTime;
       final lastMessageTime = chatData['lastMessageTime'] as Timestamp?;
 
-      if (resumedAt != null && lastMessageTime != null) {
-        final resumedDateTime = DateTime.fromMillisecondsSinceEpoch(resumedAt);
+      if (lastMessageTime != null) {
         final messageDateTime = lastMessageTime.toDate();
 
         // Si el mensaje es ANTERIOR a cuando volvimos a foreground, fue recibido en background
@@ -1021,6 +1072,18 @@ class ChatStreamManager {
         if (messageDateTime.isBefore(resumedDateTime)) {
           ReleaseLogger.log(
             '⏭️ [StreamDetector] Mensaje anterior a foreground resume (${messageDateTime.toIso8601String()} < ${resumedDateTime.toIso8601String()}) - SKIP',
+          );
+          return;
+        }
+
+        // Red de seguridad: descartar mensajes con más de 5 min de antigüedad.
+        // Clock skew normal es de segundos; 5 min cubre cualquier desfase real.
+        // Esto protege contra cualquier edge case del filtro de arriba
+        // (race con lifecycle event, ADDED+MODIFIED en cold start con cache, etc.)
+        final age = DateTime.now().difference(messageDateTime);
+        if (age > const Duration(minutes: 5)) {
+          ReleaseLogger.log(
+            '⏭️ [StreamDetector] Mensaje muy viejo (${age.inMinutes}min, ${messageDateTime.toIso8601String()}) - SKIP banner',
           );
           return;
         }
@@ -1081,13 +1144,28 @@ class ChatStreamManager {
         '⚡ [ChatDocsListener] Mostrando notificación instantánea para mensaje $lastMessageId',
       );
 
-      // Crear ChatMessage virtual con datos del documento
+      // Crear ChatMessage virtual con datos del documento.
+      // ✅ timestamp = lastMessageTime: necesario para que el índice de Hive
+      // lo acepte (seedLastMessage / _maybeUpdateLastMessage descartan
+      // mensajes sin ningún tiempo) y para que la chat list lo ordene bien.
       final virtualMessage = ChatMessage(
         id: lastMessageId,
         senderId: senderId,
         text: messagePreview,
         type: lastMessageType,
+        timestamp: lastMessageTime,
       );
+
+      // ✅ FIX: sembrar el índice de lastMessage de Hive AL INSTANTE para que
+      // la chat list se actualice/reordene JUNTO con la notificación. Antes el
+      // preview de la lista solo se actualizaba cuando prefetchMessagesForChat
+      // (un get() separado a la subcolección, ~segundos) completaba, así que
+      // la notificación aparecía y el lastMessage de la lista tardaba.
+      // Solo 1:1: los grupos leen el preview de GroupMessageCacheService, que
+      // se actualiza por su propio listener/prefetch.
+      if (!isGroup) {
+        MessageCacheService().seedLastMessageIfNewer(chatId, virtualMessage);
+      }
 
       // Mostrar notificación instantánea
       await _showInstantNotification(
@@ -1124,11 +1202,21 @@ class ChatStreamManager {
       final userId = currentUser.uid;
       ReleaseLogger.log('⚡ [AllChatListeners] Iniciando listeners para todos los chats del usuario ${userId.substring(0, 8)}...');
 
-      // 1️⃣ Obtener todos los chats individuales donde el usuario es participante
-      final chatsSnapshot = await FirebaseFirestore.instance
-          .collection('chats')
-          .where('participants', arrayContains: userId)
-          .get();
+      // 1️⃣ + 2️⃣ Chats individuales y grupos EN PARALELO.
+      // ⚡ PERF + 🔒 TIMEOUT: este método es awaiteado por el init del shell;
+      // sin timeout, un socket Firestore suspendido colgaba el arranque entero.
+      final (chatsSnapshot, groupsSnapshot) = await (
+        FirebaseFirestore.instance
+            .collection('chats')
+            .where('participants', arrayContains: userId)
+            .get()
+            .timeout(const Duration(seconds: 10)),
+        FirebaseFirestore.instance
+            .collection('groups_v2')
+            .where('members', arrayContains: userId)
+            .get()
+            .timeout(const Duration(seconds: 10)),
+      ).wait;
 
       ReleaseLogger.log('📊 [AllChatListeners] Encontrados ${chatsSnapshot.docs.length} chats individuales');
 
@@ -1136,12 +1224,6 @@ class ChatStreamManager {
         final chatId = chatDoc.id;
         ensureListenerActive(chatId, isGroup: false);
       }
-
-      // 2️⃣ Obtener todos los grupos donde el usuario es miembro (Groups V2)
-      final groupsSnapshot = await FirebaseFirestore.instance
-          .collection('groups_v2')
-          .where('members', arrayContains: userId)
-          .get();
 
       ReleaseLogger.log('📊 [AllChatListeners] Encontrados ${groupsSnapshot.docs.length} grupos');
 
@@ -1468,10 +1550,13 @@ class ChatStreamManager {
     }
 
     try {
+      // 🔒 TIMEOUT: sin esto, un socket Firestore suspendido (app vuelve de
+      // background) cuelga el setup del stream de mensajes al abrir el chat.
       final chatDoc = await FirebaseFirestore.instance
           .collection('chats')
           .doc(chatId)
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 8));
 
       if (chatDoc.exists) {
         final data = chatDoc.data()!;
@@ -1653,7 +1738,7 @@ class ChatStreamManager {
         );
       }
 
-      final snapshot = await query.get();
+      final snapshot = await query.get().timeout(const Duration(seconds: 10));
 
       if (snapshot.docs.isEmpty) {
         ReleaseLogger.log('📥 [Prefetch] No hay mensajes para $chatId${clearedAt != null ? " después de clearedAt" : ""}');
@@ -1685,6 +1770,20 @@ class ChatStreamManager {
 
       // Guardar en Hive cache
       await MessageCacheService().saveMessages(chatId, messages);
+
+      // 🔒 Para grupos también guardar en GroupMessageCacheService (modelo
+      // diferente, con senderName etc) para que la chat list lo lea correcto.
+      if (isGroup) {
+        try {
+          final groupMessages = snapshot.docs.map((doc) {
+            final data = doc.data();
+            return GroupMessage.fromFirestore(doc.id, data);
+          }).toList();
+          await GroupMessageCacheService().saveMessages(chatId, groupMessages);
+        } catch (e) {
+          ReleaseLogger.error('❌ [Prefetch] Error guardando GroupMessages: $e');
+        }
+      }
 
       ReleaseLogger.log('✅ [Prefetch] Pre-cargados ${messages.length} mensajes para $chatId en Hive cache');
     } catch (e) {
@@ -1761,6 +1860,30 @@ class ChatStreamManager {
         return;
       }
 
+      // 🔒 CHECK ARCHIVED: si el chat está archivado, NO mostrar el banner
+      // local en-app, pero SI mostrar un toast/snackbar info suave para que el
+      // user se entere del mensaje sin invadirle la pantalla.
+      if (ChatPreferencesCache().isArchived(chatId)) {
+        ReleaseLogger.log(
+          '📦 [StreamDetector] Chat $chatId archivado - mostrando solo toast',
+          tag: 'ChatStreamManager',
+        );
+        try {
+          final senderName = ContactPhotoCacheService()
+              .getDisplayName(message.senderId, 'Alguien');
+          final preview = (message.text ?? '').isNotEmpty
+              ? message.text!
+              : 'Nuevo mensaje';
+          SnackbarService().showInfo(
+            '$senderName (archivado): $preview',
+            duration: const Duration(seconds: 3),
+          );
+        } catch (e) {
+          // No bloquear el flujo si SnackbarService falla.
+        }
+        return;
+      }
+
       final cacheService = ContactPhotoCacheService();
 
       // 1. Obtener nombre del remitente (alias > nombre cacheado > query Firestore)
@@ -1773,7 +1896,8 @@ class ChatStreamManager {
           final userDoc = await FirebaseFirestore.instance
               .collection('users')
               .doc(message.senderId)
-              .get();
+              .get()
+              .timeout(const Duration(seconds: 5));
 
           if (userDoc.exists) {
             final userData = userDoc.data();
@@ -1800,7 +1924,8 @@ class ChatStreamManager {
           final groupDoc = await FirebaseFirestore.instance
               .collection('groups_v2')
               .doc(chatId)
-              .get();
+              .get()
+              .timeout(const Duration(seconds: 5));
 
           if (groupDoc.exists) {
             groupName = groupDoc.data()?['name'] as String? ?? 'Grupo';

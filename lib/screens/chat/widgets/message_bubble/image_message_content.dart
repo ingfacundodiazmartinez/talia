@@ -6,8 +6,10 @@ import '../media_viewer_screen.dart';
 
 /// Widget que muestra el contenido de un mensaje de imagen
 ///
-/// ✅ FIX: Usa tamaño fijo para evitar resizing de la burbuja mientras carga
-/// Las imágenes se centran dentro del contenedor y el fondo rellena el espacio
+/// ✅ Contenedor CUADRADO de tamaño fijo (no hay resizing mientras carga) y
+/// la imagen lo llena completo con BoxFit.cover — sin franjas laterales en
+/// fotos portrait ni franjas verticales en panorámicas. El recorte es solo
+/// visual: el tap abre el MediaViewer con la foto completa.
 class ImageMessageContent extends StatelessWidget {
   final String? imageUrl;
   final String? localPath;
@@ -16,9 +18,8 @@ class ImageMessageContent extends StatelessWidget {
   final List<MediaItem> mediaItems;
   final int initialIndex;
 
-  // ✅ Tamaño fijo para el contenedor de imagen
-  static const double _containerWidth = 220.0;
-  static const double _containerHeight = 180.0;
+  // ✅ Tamaño fijo cuadrado para el contenedor de imagen
+  static const double _containerSize = 220.0;
 
   const ImageMessageContent({
     super.key,
@@ -33,70 +34,63 @@ class ImageMessageContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-
-    // Color de fondo para rellenar espacio vacío
-    final backgroundColor = isDarkMode
-        ? Colors.black54
-        : colorScheme.surfaceContainerHighest;
 
     return Column(
       children: [
-        // ✅ Contenedor de tamaño fijo para evitar resizing
-        Container(
-          width: _containerWidth,
-          height: _containerHeight,
-          decoration: BoxDecoration(
-            color: backgroundColor,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                // Si está enviando y tiene localPath, mostrar imagen local
-                if (status == MessageStatus.sending && imageUrl == null && localPath != null)
-                  Image.file(
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            width: _containerSize,
+            height: _containerSize,
+            // Mientras NO haya URL de red (enviando o error), mostrar la
+            // imagen local. ✅ FIX: antes solo en 'sending' → si el envío
+            // fallaba (status error) la burbuja quedaba vacía ("Sin imagen").
+            child: (imageUrl == null && localPath != null)
+                ? Image.file(
                     File(localPath!),
-                    fit: BoxFit.contain,
-                    width: _containerWidth,
-                    height: _containerHeight,
-                    cacheWidth: (_containerWidth * MediaQuery.of(context).devicePixelRatio).round(),
+                    fit: BoxFit.cover,
+                    width: _containerSize,
+                    height: _containerSize,
+                    cacheWidth: (_containerSize *
+                            MediaQuery.of(context).devicePixelRatio)
+                        .round(),
                     errorBuilder: (context, error, stackTrace) {
-                      return _buildPlaceholder(colorScheme, 'Cargando...');
-                    },
-                  )
-                // Si tiene URL, mostrar de red
-                else if (imageUrl != null)
-                  GestureDetector(
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => MediaViewerScreen(
-                            mediaItems: mediaItems,
-                            initialIndex: initialIndex,
-                          ),
-                        ),
+                      return _buildPlaceholder(
+                        colorScheme,
+                        status == MessageStatus.error ? 'Error' : 'Cargando...',
                       );
                     },
-                    child: CachedNetworkImage(
-                      imageUrl: imageUrl!,
-                      width: _containerWidth,
-                      height: _containerHeight,
-                      fit: BoxFit.contain,
-                      memCacheWidth: (_containerWidth * MediaQuery.of(context).devicePixelRatio).round(),
-                      maxWidthDiskCache: 800,
-                      maxHeightDiskCache: 800,
-                      placeholder: (context, url) => _buildLoadingPlaceholder(colorScheme),
-                      errorWidget: (context, url, error) => _buildErrorPlaceholder(colorScheme),
-                    ),
                   )
-                else
-                  _buildPlaceholder(colorScheme, 'Sin imagen'),
-              ],
-            ),
+                : (imageUrl != null)
+                    ? GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => MediaViewerScreen(
+                                mediaItems: mediaItems,
+                                initialIndex: initialIndex,
+                              ),
+                            ),
+                          );
+                        },
+                        child: CachedNetworkImage(
+                          imageUrl: imageUrl!,
+                          width: _containerSize,
+                          height: _containerSize,
+                          fit: BoxFit.cover,
+                          memCacheWidth: (_containerSize *
+                                  MediaQuery.of(context).devicePixelRatio)
+                              .round(),
+                          maxWidthDiskCache: 800,
+                          maxHeightDiskCache: 800,
+                          placeholder: (context, url) =>
+                              _buildLoadingPlaceholder(colorScheme),
+                          errorWidget: (context, url, error) =>
+                              _buildErrorPlaceholder(colorScheme),
+                        ),
+                      )
+                    : _buildPlaceholder(colorScheme, 'Sin imagen'),
           ),
         ),
         if (text != null && text!.isNotEmpty) const SizedBox(height: 8),
@@ -106,8 +100,8 @@ class ImageMessageContent extends StatelessWidget {
 
   Widget _buildPlaceholder(ColorScheme colorScheme, String message) {
     return Container(
-      width: _containerWidth,
-      height: _containerHeight,
+      width: _containerSize,
+      height: _containerSize,
       color: colorScheme.surfaceContainerHighest,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -132,8 +126,8 @@ class ImageMessageContent extends StatelessWidget {
 
   Widget _buildLoadingPlaceholder(ColorScheme colorScheme) {
     return Container(
-      width: _containerWidth,
-      height: _containerHeight,
+      width: _containerSize,
+      height: _containerSize,
       color: colorScheme.surfaceContainerHighest,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -156,8 +150,8 @@ class ImageMessageContent extends StatelessWidget {
 
   Widget _buildErrorPlaceholder(ColorScheme colorScheme) {
     return Container(
-      width: _containerWidth,
-      height: _containerHeight,
+      width: _containerSize,
+      height: _containerSize,
       color: colorScheme.errorContainer,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,

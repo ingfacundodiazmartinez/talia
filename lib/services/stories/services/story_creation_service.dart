@@ -46,6 +46,15 @@ class StoryCreationService {
     required String mediaPath,
     String? text,
     Map<String, dynamic>? filter,
+    bool aiGenerated = false,
+    String? musicUrl,
+    String? musicPrompt,
+    String? musicLyrics,
+    int? musicStartMs,
+    int? musicClipMs,
+    String? musicTitle,
+    String? musicDisplayMode,
+    List<Map<String, dynamic>>? musicLyricsTimings,
     Function(String storyId, double progress)? onProgressUpdate,
   }) async {
     final currentUserId = _storyRepository.currentUserId;
@@ -88,6 +97,15 @@ class StoryCreationService {
         mediaPath: mediaPath,
         text: text,
         filter: filter,
+        aiGenerated: aiGenerated,
+        musicUrl: musicUrl,
+        musicPrompt: musicPrompt,
+        musicLyrics: musicLyrics,
+        musicStartMs: musicStartMs,
+        musicClipMs: musicClipMs,
+        musicTitle: musicTitle,
+        musicDisplayMode: musicDisplayMode,
+        musicLyricsTimings: musicLyricsTimings,
       );
 
       // 3. Agregar a cache optimista (aparece inmediatamente en UI)
@@ -103,6 +121,15 @@ class StoryCreationService {
         tempStoryId: tempStoryId,
         mediaPath: mediaPath,
         optimisticStory: optimisticStory,
+        aiGenerated: aiGenerated,
+        musicUrl: musicUrl,
+        musicPrompt: musicPrompt,
+        musicLyrics: musicLyrics,
+        musicStartMs: musicStartMs,
+        musicClipMs: musicClipMs,
+        musicTitle: musicTitle,
+        musicDisplayMode: musicDisplayMode,
+        musicLyricsTimings: musicLyricsTimings,
         onProgressUpdate: onProgressUpdate,
       );
 
@@ -206,6 +233,15 @@ class StoryCreationService {
     required String mediaPath,
     String? text,
     Map<String, dynamic>? filter,
+    bool aiGenerated = false,
+    String? musicUrl,
+    String? musicPrompt,
+    String? musicLyrics,
+    int? musicStartMs,
+    int? musicClipMs,
+    String? musicTitle,
+    String? musicDisplayMode,
+    List<Map<String, dynamic>>? musicLyricsTimings,
   }) async {
     // Obtener información del usuario
     final userInfo = await _contactRepository.getUserInfo(userId);
@@ -229,6 +265,17 @@ class StoryCreationService {
       status: StoryStatus.uploading,
       localMediaPath: mediaPath,
       uploadProgress: 0.0,
+      aiGenerated: aiGenerated,
+      musicUrl: musicUrl,
+      musicPrompt: musicPrompt,
+      musicLyrics: musicLyrics,
+      musicStartMs: musicStartMs,
+      musicClipMs: musicClipMs,
+      musicTitle: musicTitle,
+      musicDisplayMode: musicDisplayMode,
+      musicLyricsTimings: (musicLyricsTimings ?? const [])
+          .map((m) => LyricLine.fromMap(m))
+          .toList(),
     );
   }
 
@@ -241,6 +288,15 @@ class StoryCreationService {
     required String tempStoryId,
     required String mediaPath,
     required Story optimisticStory,
+    bool aiGenerated = false,
+    String? musicUrl,
+    String? musicPrompt,
+    String? musicLyrics,
+    int? musicStartMs,
+    int? musicClipMs,
+    String? musicTitle,
+    String? musicDisplayMode,
+    List<Map<String, dynamic>>? musicLyricsTimings,
     Function(String storyId, double progress)? onProgressUpdate,
   }) async {
       try {
@@ -283,6 +339,15 @@ class StoryCreationService {
           'caption': optimisticStory.caption,
           'filter': optimisticStory.filter,
           'tempStoryId': tempStoryId,
+          'aiGenerated': aiGenerated,
+          if (musicUrl != null) 'musicUrl': musicUrl,
+          if (musicPrompt != null) 'musicPrompt': musicPrompt,
+          if (musicLyrics != null) 'musicLyrics': musicLyrics,
+          if (musicStartMs != null) 'musicStartMs': musicStartMs,
+          if (musicClipMs != null) 'musicClipMs': musicClipMs,
+          if (musicTitle != null) 'musicTitle': musicTitle,
+          if (musicDisplayMode != null) 'musicDisplayMode': musicDisplayMode,
+          if (musicLyricsTimings != null) 'musicLyricsTimings': musicLyricsTimings,
         });
 
         // 4. Validar respuesta de la Cloud Function
@@ -430,6 +495,117 @@ class StoryCreationService {
     } catch (e) {
       _cacheManager.removeOptimisticStory(currentUserId, storyId);
       ReleaseLogger.error('Error creando mood story: $e', tag: 'StoryCreation');
+      rethrow;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // MUSIC-ONLY STORY CREATION
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Crear historia de solo-música (sin foto/video).
+  ///
+  /// La canción ya fue generada y persistida en Storage por la Cloud Function
+  /// `generateStoryMusic`; acá solo creamos el doc de la historia vía el CF
+  /// `createStory` (que respeta rate limiting y aprobación parental).
+  Future<String> createMusicOnlyStory({
+    required String musicUrl,
+    String? musicPrompt,
+    String? musicLyrics,
+    int? musicStartMs,
+    int? musicClipMs,
+    String? musicTitle,
+    String? musicDisplayMode,
+    List<Map<String, dynamic>>? musicLyricsTimings,
+    String? caption,
+  }) async {
+    final currentUserId = _storyRepository.currentUserId;
+    if (currentUserId == null) {
+      throw Exception('Usuario no autenticado');
+    }
+
+    final tempStoryId = _generateTempStoryId();
+
+    try {
+      final userInfo = await _contactRepository.getUserInfo(currentUserId);
+      final now = DateTime.now();
+      final expiresAt = now.add(Duration(hours: 24));
+
+      // Historia optimista (aparece inmediatamente con un fondo de música).
+      final optimisticStory = Story(
+        id: tempStoryId,
+        userId: currentUserId,
+        userName: userInfo?['name'] ?? 'Usuario',
+        userPhotoURL: userInfo?['photoURL'],
+        mediaUrl: '',
+        mediaType: 'music',
+        caption: caption,
+        createdAt: now,
+        expiresAt: expiresAt,
+        viewedBy: [],
+        replies: [],
+        status: StoryStatus.uploading,
+        aiGenerated: true,
+        musicUrl: musicUrl,
+        musicPrompt: musicPrompt,
+        musicLyrics: musicLyrics,
+        musicStartMs: musicStartMs,
+        musicClipMs: musicClipMs,
+        musicTitle: musicTitle,
+        musicDisplayMode: musicDisplayMode,
+        musicLyricsTimings: (musicLyricsTimings ?? const [])
+            .map((m) => LyricLine.fromMap(m))
+            .toList(),
+      );
+
+      _cacheManager.addOptimisticStory(currentUserId, optimisticStory);
+
+      final functions = FirebaseFunctions.instance;
+      final createStoryFunction = functions.httpsCallable('createStory');
+
+      final result = await createStoryFunction.call({
+        'mediaType': 'music',
+        'mediaUrl': '',
+        'caption': caption,
+        'musicUrl': musicUrl,
+        'musicPrompt': musicPrompt,
+        'musicLyrics': musicLyrics,
+        'musicStartMs': musicStartMs,
+        'musicClipMs': musicClipMs,
+        if (musicTitle != null) 'musicTitle': musicTitle,
+        if (musicDisplayMode != null) 'musicDisplayMode': musicDisplayMode,
+        if (musicLyricsTimings != null) 'musicLyricsTimings': musicLyricsTimings,
+        'tempStoryId': tempStoryId,
+        'aiGenerated': true,
+      });
+
+      if (result.data['success'] != true) {
+        throw Exception(
+          result.data['message'] ?? 'Error creando historia en servidor',
+        );
+      }
+
+      final serverStatus = result.data['status'];
+      final storyStatus = serverStatus == 'approved'
+          ? StoryStatus.approved
+          : StoryStatus.pending;
+
+      final realStory = optimisticStory.copyWith(status: storyStatus);
+      _cacheManager.updateOptimisticStory(
+        currentUserId,
+        tempStoryId,
+        realStory,
+      );
+
+      ReleaseLogger.log(
+        'Música-only story creada: $tempStoryId (status: $serverStatus)',
+        tag: 'StoryCreation',
+      );
+
+      return tempStoryId;
+    } catch (e) {
+      _cacheManager.removeOptimisticStory(currentUserId, tempStoryId);
+      ReleaseLogger.error('Error creando música story: $e', tag: 'StoryCreation');
       rethrow;
     }
   }

@@ -1569,6 +1569,47 @@ exports.createContactFromGroupInvitation = onCall(
         throw new HttpsError("permission-denied", "No eres padre del hijo invitado");
       }
 
+      // 🔒 SEGURIDAD: Validar que efectivamente existe una invitación de grupo
+      // donde memberId está en requiredApprovals[invitedChildId]. Antes de
+      // este check, un padre podía crear contactos aprobados entre su hijo y
+      // CUALQUIER usuario, sin que jamás hubiera existido una invitación real.
+      //
+      // Schema de groupInvitations: invitedChildId (string) +
+      // requiredApprovals (map cuyas keys son los memberIds del grupo que
+      // necesitan aprobación). No hay campo "memberId" top-level, hay que
+      // filtrar en código.
+      const childInvitations = await db
+        .collection("groupInvitations")
+        .where("invitedChildId", "==", invitedChildId)
+        .limit(50)
+        .get();
+
+      const hasInvitationFor = childInvitations.docs.some((doc) => {
+        const requiredApprovals = doc.data().requiredApprovals || {};
+        return Object.prototype.hasOwnProperty.call(requiredApprovals, memberId);
+      });
+
+      if (!hasInvitationFor) {
+        // Fallback: si ya comparten un grupo en groups_v2, también es válido.
+        const sharedGroup = await db
+          .collection("groups_v2")
+          .where("members", "array-contains", invitedChildId)
+          .limit(50)
+          .get();
+
+        const hasSharedGroup = sharedGroup.docs.some((doc) => {
+          const members = doc.data().members || [];
+          return members.includes(memberId);
+        });
+
+        if (!hasSharedGroup) {
+          throw new HttpsError(
+            "permission-denied",
+            "No hay invitación de grupo válida entre estos usuarios"
+          );
+        }
+      }
+
       // 2. Verificar/crear contacto
       const participants = [invitedChildId, memberId].sort();
       const existingContact = await db

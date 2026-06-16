@@ -635,14 +635,20 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
                 Row(
                   children: [
                     Icon(Icons.check_circle_outline,
-                        size: 16, color: Colors.green.shade600),
+                        size: 16,
+                        color: isDarkMode
+                            ? Colors.green.shade400
+                            : Colors.green.shade600),
                     SizedBox(width: 6),
                     Text(
                       'Cómo activarlo:',
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
-                        color: Colors.green.shade700,
+                        // ✅ Contraste: verde claro en dark mode, oscuro en light.
+                        color: isDarkMode
+                            ? Colors.green.shade300
+                            : Colors.green.shade700,
                       ),
                     ),
                   ],
@@ -652,7 +658,10 @@ class _ChildDashboardCardState extends State<ChildDashboardCard> {
                   howToFix,
                   style: TextStyle(
                     fontSize: 12,
-                    color: Colors.green.shade800,
+                    // ✅ Antes shade800 (verde oscuro sobre fondo oscuro) = ilegible.
+                    color: isDarkMode
+                        ? Colors.green.shade200
+                        : Colors.green.shade800,
                     height: 1.4,
                   ),
                 ),

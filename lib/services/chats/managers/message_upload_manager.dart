@@ -105,9 +105,20 @@ class MessageUploadManager {
         });
       }
 
-      // Esperar completación
-      final taskSnapshot = await uploadTask;
-      final downloadUrl = await taskSnapshot.ref.getDownloadURL();
+      // Esperar completación CON TIMEOUT. Sin esto, si Storage se estanca (red
+      // o token App Check que no llega) el upload se cuelga para siempre y el
+      // mensaje queda en "pending" eterno. Con timeout, lanza → uploadWithRetry
+      // reintenta y, si agota, el mensaje pasa a error (reintentable por el user).
+      final taskSnapshot = await uploadTask.timeout(
+        const Duration(seconds: 45),
+        onTimeout: () {
+          uploadTask.cancel();
+          throw TimeoutException('Upload de Storage excedió 45s');
+        },
+      );
+      final downloadUrl = await taskSnapshot.ref
+          .getDownloadURL()
+          .timeout(const Duration(seconds: 15));
 
       // Cleanup
       _activeUploads.remove(uploadId);

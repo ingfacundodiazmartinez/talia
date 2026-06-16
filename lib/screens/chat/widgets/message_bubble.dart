@@ -9,6 +9,7 @@ import 'message_bubble/reply_preview_widget.dart';
 import 'message_bubble/image_message_content.dart';
 import 'message_bubble/video_message_content.dart';
 import 'message_bubble/audio_message_content.dart';
+import 'message_bubble/location_message_content.dart';
 import 'message_bubble/text_message_content.dart';
 import 'message_bubble/message_timestamp.dart';
 import 'message_bubble/message_reactions.dart';
@@ -91,6 +92,14 @@ class MessageBubble extends StatefulWidget {
   // ✅ NEW: Para timeout de mensajes pending y reenvío
   final DateTime? localTimestamp;
   final VoidCallback? onRetry;
+  // ✅ true si el upload sigue en curso: suprime el "error" por timeout visual.
+  final bool isUploading;
+
+  // ✅ Ubicación (type == 'location')
+  final double? latitude;
+  final double? longitude;
+  final bool isLiveLocation;
+  final DateTime? liveLocationExpiresAt;
 
   const MessageBubble({
     super.key,
@@ -135,6 +144,11 @@ class MessageBubble extends StatefulWidget {
     this.onFavoriteToggled,  // ✅ Callback para refrescar favoritos
     this.localTimestamp,  // ✅ NEW: Para timeout de mensajes pending
     this.onRetry,  // ✅ NEW: Callback para reenviar mensaje fallido
+    this.isUploading = false,
+    this.latitude,
+    this.longitude,
+    this.isLiveLocation = false,
+    this.liveLocationExpiresAt,
   });
 
   @override
@@ -495,6 +509,22 @@ class _MessageBubbleState extends State<MessageBubble>
                                                           'video',
                                                         ).initialIndex,
                                                   ),
+                                                // Ubicación (estática o en vivo)
+                                                if (widget.type == 'location' &&
+                                                    widget.latitude != null &&
+                                                    widget.longitude != null)
+                                                  LocationMessageContent(
+                                                    latitude: widget.latitude!,
+                                                    longitude: widget.longitude!,
+                                                    isLiveLocation:
+                                                        widget.isLiveLocation,
+                                                    liveLocationExpiresAt:
+                                                        widget.liveLocationExpiresAt,
+                                                    chatId: widget.chatId,
+                                                    senderId: widget.senderId,
+                                                    isGroup: widget.isGroupChat,
+                                                    isMe: widget.isMe,
+                                                  ),
                                                 // Audio
                                                 if (_shouldShowAudio())
                                                   AudioMessageContent(
@@ -523,6 +553,7 @@ class _MessageBubbleState extends State<MessageBubble>
                                                   isFavorite: widget.isFavorite,
                                                   localTimestamp: widget.localTimestamp,
                                                   onRetry: widget.onRetry,
+                                                  isUploading: widget.isUploading,
                                                 ),
                                               ],
                                             ],
@@ -671,6 +702,17 @@ class _MessageBubbleState extends State<MessageBubble>
         chatId: widget.chatId,
         messageId: widget.messageId,
         isGroupChat: widget.isGroupChat,
+        messageSnapshot: {
+          'text': widget.text,
+          'type': widget.type,
+          'senderId': widget.senderId,
+          'senderName': widget.senderName,
+          'imageUrl': widget.imageUrl,
+          'videoUrl': widget.videoUrl,
+          'audioUrl': widget.audioUrl,
+          if (widget.timestamp != null)
+            'timestamp': widget.timestamp!.toDate().millisecondsSinceEpoch,
+        },
       );
 
       // ✅ Notificar al parent para refrescar favoritos

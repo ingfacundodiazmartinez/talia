@@ -121,15 +121,19 @@ class ShareTargetService {
         return;
       }
 
-      // Verificar si el share es reciente (últimos 5 minutos)
+      // Verificar si el share es reciente. La Share Extension guarda este
+      // pendiente cuando no puede enviar directo (ej. token vencido) y le
+      // promete al usuario que se enviará al abrir la app — con una ventana
+      // de 5 minutos casi siempre se descartaba en silencio. 48h cubre el
+      // caso real: compartir a la noche y abrir Talia al día siguiente.
       final shareTime = DateTime.fromMillisecondsSinceEpoch(
         (pendingShare.timestamp * 1000).toInt(),
       );
       final now = DateTime.now();
 
-      if (now.difference(shareTime).inMinutes >= 5) {
+      if (now.difference(shareTime).inHours >= 48) {
         ReleaseLogger.log(
-          '📥 [ShareTarget] iOS Share too old (${now.difference(shareTime).inMinutes} min), ignoring',
+          '📥 [ShareTarget] iOS Share too old (${now.difference(shareTime).inHours} h), ignoring',
           tag: 'ShareTarget',
         );
         await cacheService.clearPendingShare();
@@ -237,6 +241,25 @@ class ShareTargetService {
 
     // Acumular con contenido existente si es reciente
     if (_pendingContent != null && _pendingContent!.isNotEmpty) {
+      // ✅ Dedup por contenido: refreshPendingContent() vuelve a leer el
+      // initial intent (getInitialMedia devuelve lo mismo hasta el reset),
+      // así que sin esto los mismos items se acumulaban duplicados y la
+      // foto se enviaba dos veces.
+      String keyOf(SharedContent c) =>
+          c.mediaPath ?? c.text ?? c.url ?? c.id;
+      final existingKeys = _pendingContent!.map(keyOf).toSet();
+      contents = contents
+          .where((c) => !existingKeys.contains(keyOf(c)))
+          .toList();
+      if (contents.isEmpty) {
+        ReleaseLogger.log(
+          '📥 [ShareTarget] All incoming items already pending (dedup), skipping',
+          tag: 'ShareTarget',
+        );
+        // Re-armar el timer para que el batch pendiente igual se notifique.
+        _scheduleNotification();
+        return;
+      }
       // Agregar nuevos items al contenido existente
       final combined = [..._pendingContent!, ...contents];
 
@@ -263,6 +286,12 @@ class ShareTargetService {
     );
 
     // Esperar un poco por si llegan más items
+    _scheduleNotification();
+  }
+
+  /// Programar la notificación del batch acumulado tras la ventana de espera.
+  void _scheduleNotification() {
+    _accumulationTimer?.cancel();
     _accumulationTimer = Timer(_accumulationWindow, () {
       // Notificar una vez que no lleguen más items
       if (_pendingContent != null && _pendingContent!.isNotEmpty) {

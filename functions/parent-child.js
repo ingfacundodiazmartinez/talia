@@ -54,10 +54,20 @@ exports.createParentChildLink = onCall({
 
     console.log(`📋 Intentando vincular padre: ${parentId} con hijo: ${childId}`);
 
-    // 3. Validar que el caller es el padre, el hijo, o un padre existente del hijo
+    // 3. Validar autorización del caller.
+    //
+    // 🔒 SEGURIDAD: hay 3 paths de autorización válidos:
+    //   (a) Caller es padre existente aprobado del child → puede aprobar
+    //       vinculaciones adicionales (flujo de co-parenting). Sin code.
+    //   (b) Caller es el child y el code fue creado por el parent.
+    //   (c) Caller es el parent y el code fue creado por el child.
+    //
+    // Antes de este fix, (b) y (c) se hacían SIN code obligatorio, lo que
+    // permitía a cualquier usuario autenticado vincularse como padre/hijo
+    // de cualquier víctima (privilege escalation completa: ver/aprobar
+    // stories, leer emergencies, etc.).
     let isExistingParent = false;
     if (callerId !== parentId && callerId !== childId) {
-      // Verificar si el caller es un padre existente del hijo
       const existingLinks = await db.collection("parent_children")
         .where("childId", "==", childId)
         .where("parentId", "==", callerId)
@@ -65,16 +75,25 @@ exports.createParentChildLink = onCall({
         .limit(1)
         .get();
 
-      if (!existingLinks.empty) {
-        isExistingParent = true;
-        console.log(`✅ Usuario ${callerId} es padre existente aprobando vinculación adicional`);
-      } else {
+      if (existingLinks.empty) {
         console.error(`❌ Usuario ${callerId} no autorizado (no es padre, hijo, ni padre existente)`);
         throw new HttpsError("permission-denied", "No autorizado: debes ser el padre, el hijo, o un padre existente para crear el vínculo");
       }
+      isExistingParent = true;
+      console.log(`✅ Usuario ${callerId} es padre existente aprobando vinculación adicional`);
+    } else {
+      // Caller es parentId o childId — requiere code de la OTRA parte.
+      if (!code) {
+        console.error(`❌ Falta code de vinculación (caller=${callerId})`);
+        throw new HttpsError(
+          "failed-precondition",
+          "Se requiere código de vinculación generado por la otra parte"
+        );
+      }
     }
 
-    // 4. Si se proporciona código, validarlo
+    // 4. Validar el código si vino. (Obligatorio si caller es parentId/childId,
+    //    opcional si es padre existente).
     if (code) {
       console.log(`🔑 Validando código: ${code}`);
 
@@ -90,14 +109,32 @@ exports.createParentChildLink = onCall({
 
       const codeData = codeSnapshot.docs[0].data();
 
-      // Validar que el código no haya expirado
       if (codeData.expiresAt && codeData.expiresAt.toDate() < new Date()) {
         console.error(`❌ Código ${code} expirado`);
         throw new HttpsError("failed-precondition", "Código de vinculación expirado");
       }
 
-      // Validar que el código pertenece a uno de los usuarios
-      if (codeData.createdBy !== parentId && codeData.createdBy !== childId) {
+      // 🔒 El código debe haber sido creado por la OTRA parte del vínculo.
+      // Si caller es parentId, code lo debe haber creado childId, y viceversa.
+      // (Si caller es padre existente, aceptamos code creado por cualquiera de las dos partes.)
+      let expectedCreator;
+      if (callerId === parentId) {
+        expectedCreator = childId;
+      } else if (callerId === childId) {
+        expectedCreator = parentId;
+      } else {
+        expectedCreator = null; // padre existente — permitir parent o child
+      }
+
+      if (expectedCreator !== null) {
+        if (codeData.createdBy !== expectedCreator) {
+          console.error(`❌ Código ${code} no fue creado por la otra parte (esperado=${expectedCreator}, createdBy=${codeData.createdBy})`);
+          throw new HttpsError(
+            "permission-denied",
+            "Código no válido: debe haber sido generado por la otra parte"
+          );
+        }
+      } else if (codeData.createdBy !== parentId && codeData.createdBy !== childId) {
         console.error(`❌ Código ${code} no pertenece a ninguno de los usuarios`);
         throw new HttpsError("permission-denied", "Código de vinculación no válido para estos usuarios");
       }

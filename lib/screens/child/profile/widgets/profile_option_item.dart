@@ -7,6 +7,8 @@ class ProfileOptionItem extends StatelessWidget {
   final String subtitle;
   final VoidCallback onTap;
   final bool isDestructive;
+  /// Cuenta a mostrar en un badge rojo a la derecha (null = sin badge).
+  final int? badge;
 
   const ProfileOptionItem({
     super.key,
@@ -15,6 +17,7 @@ class ProfileOptionItem extends StatelessWidget {
     required this.subtitle,
     required this.onTap,
     this.isDestructive = false,
+    this.badge,
   });
 
   @override
@@ -49,10 +52,32 @@ class ProfileOptionItem extends StatelessWidget {
           subtitle,
           style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
         ),
-        trailing: Icon(
-          Icons.arrow_forward_ios,
-          size: 16,
-          color: colorScheme.onSurfaceVariant,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (badge != null && badge! > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.red,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  badge! > 99 ? '99+' : badge!.toString(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            if (badge != null && badge! > 0) const SizedBox(width: 8),
+            Icon(
+              Icons.arrow_forward_ios,
+              size: 16,
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ],
         ),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         tileColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),

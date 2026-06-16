@@ -8,6 +8,8 @@ import '../controllers/chat_controller_cache_first.dart';
 import '../utils/release_logger.dart';
 import '../notification_service.dart';
 import '../services/local_unread_count_service.dart';
+import '../services/live_location_service.dart';
+import 'chat/widgets/location_share_sheet.dart';
 import '../services/notification_tracking_service.dart';
 import '../services/bottom_nav_visibility.dart';
 import '../services/user_cache_service.dart';
@@ -60,6 +62,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
   // UI Controllers
   final TextEditingController _messageController = TextEditingController();
+  final FocusNode _messageFocusNode = FocusNode();
   final ScrollController _scrollController = ScrollController();
   final RecorderController _recorderController = RecorderController();
   final UserCacheService _userCacheService = UserCacheService();
@@ -208,6 +211,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
     _controller.dispose();
     _messageController.removeListener(_onTypingChanged);
     _messageController.dispose();
+    _messageFocusNode.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _recorderController.dispose();
@@ -538,7 +542,37 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
       onCameraTap: () => handleSendImage(ImageSource.camera),
       onGalleryTap: () => handleSendImage(ImageSource.gallery),
       onVideoTap: handleSendVideo,
+      onLocationTap: _handleShareLocation,
     );
+  }
+
+  /// Flujo de compartir ubicación (estática o en vivo) — tipo WhatsApp.
+  Future<void> _handleShareLocation() async {
+    final choice = await LocationShareSheet.show(context);
+    if (choice == null || !mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    bool ok;
+    if (choice.isLive) {
+      ok = await LiveLocationService().startLiveShare(
+        chatId: widget.chatId,
+        isGroup: false,
+        duration: choice.liveDuration!,
+      );
+    } else {
+      ok = await LiveLocationService().shareStaticLocation(
+        chatId: widget.chatId,
+        isGroup: false,
+      );
+    }
+    if (!ok && mounted) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo compartir la ubicación. Revisá los permisos.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   /// Wrapper que utiliza el mixin compartido para mostrar el picker de reacciones
@@ -762,15 +796,40 @@ class _ChatDetailScreenState extends State<ChatDetailScreen>
 
     return ChatInputBar(
       messageController: _messageController,
+      messageFocusNode: _messageFocusNode,
       showEmojiPicker: _showEmojiPicker,
       isRecording: _isRecording,
-      onToggleEmojiPicker: () => setState(() => _showEmojiPicker = !_showEmojiPicker),
+      onToggleEmojiPicker: _toggleEmojiPicker,
+      onTextFieldFocused: _onTextFieldFocused,
       onAttachTap: _showAttachmentOptions,
       onSendTap: _handleSendMessage,
       onRecordStart: _startRecording,
       onRecordEnd: _stopRecording,
       onSubmitMessage: _handleSendMessage,
     );
+  }
+
+  /// Toggle estilo WhatsApp:
+  /// - Si el panel está abierto → cerralo y reabrí el teclado.
+  /// - Si está cerrado → cerrá el teclado y abrí el panel.
+  void _toggleEmojiPicker() {
+    if (_showEmojiPicker) {
+      setState(() => _showEmojiPicker = false);
+      _messageFocusNode.requestFocus();
+    } else {
+      // Ocultar teclado primero — el cambio de keyboard a emoji panel ocurre
+      // en el mismo "slot" inferior.
+      _messageFocusNode.unfocus();
+      setState(() => _showEmojiPicker = true);
+    }
+  }
+
+  /// Cuando el user toca el TextField con el emoji panel abierto, lo
+  /// cerramos. El teclado aparece solo porque el TextField acaba de ganar foco.
+  void _onTextFieldFocused() {
+    if (_showEmojiPicker) {
+      setState(() => _showEmojiPicker = false);
+    }
   }
 
   Widget _buildEmojiPicker() {

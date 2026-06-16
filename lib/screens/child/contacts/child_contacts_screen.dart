@@ -952,7 +952,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen>
           ),
           SizedBox(height: 8),
           Text(
-            'Aquí aparecerán las solicitudes de amistad',
+            'Aquí aparecerán las invitaciones a tu círculo',
             style: TextStyle(
               fontSize: 14,
               color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
@@ -1023,7 +1023,7 @@ class _ChildContactsScreenState extends State<ChildContactsScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('¡Ahora sos amigo de $displayName!'),
+            content: Text('¡$displayName se sumó a tu círculo!'),
             backgroundColor: Colors.green,
           ),
         );
@@ -1045,8 +1045,8 @@ class _ChildContactsScreenState extends State<ChildContactsScreen>
     String displayName,
   ) async {
     final confirmed = await _showConfirmDialog(
-      'Rechazar solicitud',
-      '¿Rechazar la solicitud de amistad de $displayName?',
+      'Rechazar invitación',
+      '¿Rechazar la invitación de $displayName a tu círculo?',
     );
 
     if (confirmed != true) return;
@@ -1326,7 +1326,7 @@ class _ContactItemCard extends StatelessWidget {
         children: [
           Icon(Icons.favorite, size: 14, color: Colors.pink),
           SizedBox(width: 4),
-          Text('Amigo', style: TextStyle(fontSize: 12, color: Colors.pink)),
+          Text('En tu círculo', style: TextStyle(fontSize: 12, color: Colors.pink)),
         ],
       );
     }
@@ -1334,7 +1334,7 @@ class _ContactItemCard extends StatelessWidget {
     // Vista de solicitudes de amistad
     if (isFriendRequest) {
       return Text(
-        'Quiere ser tu amigo',
+        'Te invitó a su círculo',
         style: TextStyle(fontSize: 12, color: Colors.purple.shade600),
       );
     }

@@ -122,6 +122,8 @@ class ChildMainShellController {
           childId: childId,
           // ignore: use_build_context_synchronously
           context: context,
+          // ⚡ PERF: pasar el rol ya verificado evita re-leer users/{childId}
+          userRole: userRole,
         );
 
         await _childController!.initialize();

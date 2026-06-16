@@ -50,6 +50,26 @@ class StoryReply {
   }
 }
 
+/// Una línea de la letra con su ventana de tiempo (ms absolutos de la canción),
+/// usada para resaltar la línea actual mientras suena (karaoke línea por línea).
+class LyricLine {
+  final String text;
+  final int startMs;
+  final int endMs;
+
+  const LyricLine({required this.text, required this.startMs, required this.endMs});
+
+  factory LyricLine.fromMap(Map<String, dynamic> data) {
+    return LyricLine(
+      text: (data['text'] ?? '').toString(),
+      startMs: (data['startMs'] as num?)?.toInt() ?? 0,
+      endMs: (data['endMs'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Map<String, dynamic> toMap() => {'text': text, 'startMs': startMs, 'endMs': endMs};
+}
+
 class Story {
   final String id;
   final String userId;
@@ -75,6 +95,17 @@ class Story {
   final List<String> availableFor; // IDs de usuarios que pueden ver esta historia (contactos al momento de crear)
   final List<String> parentViewers; // IDs de padres que pueden ver/aprobar esta historia (para queries optimizadas)
   final List<String> likedBy; // IDs de usuarios que dieron like a esta historia
+  final bool aiGenerated; // true si la historia se creó con face-swap / IA
+  final bool isOfficial; // true si fue autorada por Talia (sistema)
+  final bool isBroadcast; // true si es un comunicado para todos los usuarios
+  final String? musicUrl; // URL de la canción generada con IA (opcional)
+  final String? musicPrompt; // Descripción usada para generar la canción
+  final String? musicLyrics; // Letra de la canción (para mostrar en la historia)
+  final int? musicStartMs; // Inicio del recorte de la canción (ms)
+  final int? musicClipMs; // Duración del clip de la canción (ms)
+  final String? musicTitle; // Título de la canción (para el modo 'title')
+  final String? musicDisplayMode; // 'title' | 'lyrics' — qué mostrar en la historia
+  final List<LyricLine> musicLyricsTimings; // líneas con timing (ms abs) para karaoke
 
   Story({
     required this.id,
@@ -101,6 +132,17 @@ class Story {
     this.availableFor = const [],
     this.parentViewers = const [],
     this.likedBy = const [],
+    this.aiGenerated = false,
+    this.isOfficial = false,
+    this.isBroadcast = false,
+    this.musicUrl,
+    this.musicPrompt,
+    this.musicLyrics,
+    this.musicStartMs,
+    this.musicClipMs,
+    this.musicTitle,
+    this.musicDisplayMode,
+    this.musicLyricsTimings = const [],
   });
 
   // Factory constructor para crear desde Firestore
@@ -197,9 +239,32 @@ class Story {
       availableFor: availableFor,
       parentViewers: parentViewers,
       likedBy: likedBy,
+      aiGenerated: data['aiGenerated'] == true,
+      isOfficial: data['isOfficial'] == true,
+      isBroadcast: data['isBroadcast'] == true,
+      musicUrl: data['musicUrl'],
+      musicPrompt: data['musicPrompt'],
+      musicLyrics: data['musicLyrics'],
+      musicStartMs: (data['musicStartMs'] as num?)?.toInt(),
+      musicClipMs: (data['musicClipMs'] as num?)?.toInt(),
+      musicTitle: data['musicTitle'],
+      musicDisplayMode: data['musicDisplayMode'],
+      musicLyricsTimings: _parseLyricTimings(data['musicLyricsTimings']),
     );
     } catch (e) {
       throw Exception('Error parsing story ${doc.id}: $e. Data keys: ${(doc.data() as Map<String, dynamic>?)?.keys.toList()}');
+    }
+  }
+
+  static List<LyricLine> _parseLyricTimings(dynamic raw) {
+    if (raw is! List) return const [];
+    try {
+      return raw
+          .whereType<Map>()
+          .map((m) => LyricLine.fromMap(Map<String, dynamic>.from(m)))
+          .toList();
+    } catch (_) {
+      return const [];
     }
   }
 
@@ -258,6 +323,17 @@ class Story {
       'availableFor': availableFor,
       'parentViewers': parentViewers,
       'likedBy': likedBy,
+      'aiGenerated': aiGenerated,
+      'isOfficial': isOfficial,
+      'isBroadcast': isBroadcast,
+      'musicUrl': musicUrl,
+      'musicPrompt': musicPrompt,
+      'musicLyrics': musicLyrics,
+      'musicStartMs': musicStartMs,
+      'musicClipMs': musicClipMs,
+      'musicTitle': musicTitle,
+      'musicDisplayMode': musicDisplayMode,
+      'musicLyricsTimings': musicLyricsTimings.map((l) => l.toMap()).toList(),
     };
   }
 
@@ -342,6 +418,17 @@ class Story {
     List<String>? availableFor,
     List<String>? parentViewers,
     List<String>? likedBy,
+    bool? aiGenerated,
+    bool? isOfficial,
+    bool? isBroadcast,
+    String? musicUrl,
+    String? musicPrompt,
+    String? musicLyrics,
+    int? musicStartMs,
+    int? musicClipMs,
+    String? musicTitle,
+    String? musicDisplayMode,
+    List<LyricLine>? musicLyricsTimings,
   }) {
     return Story(
       id: id ?? this.id,
@@ -368,6 +455,17 @@ class Story {
       availableFor: availableFor ?? this.availableFor,
       parentViewers: parentViewers ?? this.parentViewers,
       likedBy: likedBy ?? this.likedBy,
+      aiGenerated: aiGenerated ?? this.aiGenerated,
+      isOfficial: isOfficial ?? this.isOfficial,
+      isBroadcast: isBroadcast ?? this.isBroadcast,
+      musicUrl: musicUrl ?? this.musicUrl,
+      musicPrompt: musicPrompt ?? this.musicPrompt,
+      musicLyrics: musicLyrics ?? this.musicLyrics,
+      musicStartMs: musicStartMs ?? this.musicStartMs,
+      musicClipMs: musicClipMs ?? this.musicClipMs,
+      musicTitle: musicTitle ?? this.musicTitle,
+      musicDisplayMode: musicDisplayMode ?? this.musicDisplayMode,
+      musicLyricsTimings: musicLyricsTimings ?? this.musicLyricsTimings,
     );
   }
 
@@ -376,6 +474,22 @@ class Story {
 
   // Obtener cantidad de likes
   int get likesCount => likedBy.length;
+
+  // true si la historia tiene una canción asociada
+  bool get hasMusic => musicUrl != null && musicUrl!.isNotEmpty;
+
+  // true si es una historia de solo música (sin foto/video)
+  bool get isMusicOnly => mediaType == 'music';
+
+  // true si la historia de música debe mostrar la letra sincronizada (karaoke).
+  bool get showsKaraokeLyrics =>
+      musicDisplayMode == 'lyrics' && musicLyricsTimings.isNotEmpty;
+
+  // true si es una música legacy (sin displayMode) que solo tiene letra estática.
+  bool get hasLegacyStaticLyrics =>
+      musicDisplayMode == null &&
+      musicLyrics != null &&
+      musicLyrics!.trim().isNotEmpty;
 }
 
 // Clase para agrupar historias por usuario
@@ -385,6 +499,7 @@ class UserStories {
   final String? userPhotoURL;
   final List<Story> stories;
   final bool hasUnviewed;
+  final bool isOfficial; // true si es la cuenta oficial de Talia
 
   UserStories({
     required this.userId,
@@ -392,6 +507,7 @@ class UserStories {
     this.userPhotoURL,
     required this.stories,
     required this.hasUnviewed,
+    this.isOfficial = false,
   });
 
   // Obtener la historia más reciente para mostrar en el preview (solo aprobadas)
@@ -417,6 +533,15 @@ class UserStories {
     final nonExpiredStories = stories.where((story) => !story.isExpired).toList();
     nonExpiredStories.sort((a, b) => a.createdAt.compareTo(b.createdAt));
     return nonExpiredStories;
+  }
+
+  // Como allUserStories pero SIN filtrar expiradas. Usado en "Mis historias"
+  // del perfil donde el user quiere ver su histórico completo, incluso
+  // historias fuera de 24h.
+  List<Story> get allUserStoriesIncludingExpired {
+    final all = List<Story>.from(stories);
+    all.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return all;
   }
 
   // Obtener historias pendientes de aprobación

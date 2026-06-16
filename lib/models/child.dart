@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart' hide User;
 import 'user.dart';
 import '../utils/release_logger.dart';
 
@@ -193,84 +194,108 @@ class Child extends User {
     });
   }
 
-  /// Obtiene los padres vinculados del hijo
-  /// ✅ FIX: Usa linkedParentsData desnormalizado para evitar problemas de permisos
+  /// Padres vinculados del hijo.
+  ///
+  /// Hay DOS verdades en juego, cada una con su proyección de lectura:
+  ///
+  ///  • RELACIÓN — verdad: colección `parent_children`. Pero sus rules solo
+  ///    dejan leer el vínculo en el que el viewer participa, y Firestore rechaza
+  ///    queries que puedan devolver docs no legibles. Proyección permission-safe:
+  ///    `linkedParentIds` en el doc del hijo (mantenida por el trigger
+  ///    `onParentChildLinkCreated`).
+  ///
+  ///  • PERFIL del padre (nombre/foto) — verdad: doc `users/{parentId}`.
+  ///    Proyección: `linkedParentsData` en el doc del hijo. La proyección puede
+  ///    quedar STALE (ej: el padre recambia su foto → Firebase Storage revoca el
+  ///    token viejo → la URL guardada da 403). Por eso leemos el doc real del
+  ///    padre cuando el viewer tiene permiso, y caemos a la proyección si no.
+  ///
+  /// Estrategia: proyección para resolver QUIÉNES son los padres (permission-safe),
+  /// doc real para resolver nombre/foto FRESCOS, proyección como fallback de perfil.
   Future<List<Map<String, dynamic>>> getParents() async {
+    final db = FirebaseFirestore.instance;
     try {
-      ReleaseLogger.log('👨‍👩‍👧 [getParents] Buscando padres para childId: $id', tag: 'Child');
-
-      // 1. Obtener el documento del hijo
-      final childDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(id)
-          .get();
-
+      final childDoc = await db.collection('users').doc(id).get();
       if (!childDoc.exists) {
         ReleaseLogger.log('👨‍👩‍👧 [getParents] Documento del hijo no existe', tag: 'Child');
         return [];
       }
-
       final childData = childDoc.data()!;
-      final parentIds = List<String>.from(childData['linkedParentIds'] ?? []);
-      // ✅ Defensive: handle corrupted data where field might be List instead of Map
-      final linkedParentsData = childData['linkedParentsData'] is Map
-          ? childData['linkedParentsData'] as Map<String, dynamic>
-          : <String, dynamic>{};
 
-      ReleaseLogger.log('👨‍👩‍👧 [getParents] linkedParentIds: $parentIds', tag: 'Child');
-      ReleaseLogger.log('👨‍👩‍👧 [getParents] linkedParentsData keys: ${linkedParentsData.keys.toList()}', tag: 'Child');
+      var parentIds = List<String>.from(childData['linkedParentIds'] ?? const []);
+      final projection = childData['linkedParentsData'] is Map
+          ? Map<String, dynamic>.from(childData['linkedParentsData'] as Map)
+          : const <String, dynamic>{};
 
+      // Fallback a la FUENTE DE VERDAD de la relación si la proyección está vacía.
       if (parentIds.isEmpty) {
-        ReleaseLogger.log('👨‍👩‍👧 [getParents] No hay padres vinculados', tag: 'Child');
-        return [];
-      }
-
-      // 2. Usar datos desnormalizados si están disponibles
-      List<Map<String, dynamic>> parents = [];
-
-      for (var parentId in parentIds) {
-        if (linkedParentsData.containsKey(parentId)) {
-          // Usar datos desnormalizados (no requiere permisos adicionales)
-          final parentInfo = linkedParentsData[parentId] as Map<String, dynamic>;
-          parents.add({
-            'id': parentId,
-            'name': parentInfo['name'] ?? 'Padre/Madre',
-            'photoURL': parentInfo['photoURL'],
-          });
-          ReleaseLogger.log('👨‍👩‍👧 [getParents] Padre desde datos desnormalizados: ${parentInfo['name']}', tag: 'Child');
-        } else {
-          // Fallback: intentar leer documento (puede fallar por permisos)
-          ReleaseLogger.log('👨‍👩‍👧 [getParents] Intentando leer documento del padre: $parentId', tag: 'Child');
-          try {
-            final parentDoc = await FirebaseFirestore.instance
-                .collection('users')
-                .doc(parentId)
-                .get();
-
-            if (parentDoc.exists) {
-              final parentData = parentDoc.data()!;
-              parentData['id'] = parentDoc.id;
-              parents.add(parentData);
-              ReleaseLogger.log('👨‍👩‍👧 [getParents] Padre encontrado: ${parentData['name']}', tag: 'Child');
-            }
-          } catch (e) {
-            // Si falla por permisos, agregar con datos mínimos
-            ReleaseLogger.log('👨‍👩‍👧 [getParents] Sin permisos para leer padre $parentId, usando datos mínimos', tag: 'Child');
-            parents.add({
-              'id': parentId,
-              'name': 'Padre/Madre',
-              'photoURL': null,
-            });
-          }
+        if (childData['role'] != 'child') return [];
+        parentIds = await _parentIdsFromSourceOfTruth();
+        if (parentIds.isNotEmpty) {
+          ReleaseLogger.error(
+            '⚠️ [getParents] Proyección linkedParentIds vacía para hijo $id pero '
+            'existe vínculo en parent_children. Trigger onParentChildLinkCreated '
+            'desincronizado — revisar.',
+            tag: 'Child',
+          );
         }
       }
+      if (parentIds.isEmpty) return [];
 
-      ReleaseLogger.log('👨‍👩‍👧 [getParents] Total padres: ${parents.length}', tag: 'Child');
-      return parents;
+      // Resolver nombre/foto: doc real (fresco) si se puede, sino proyección.
+      final result = <Map<String, dynamic>>[];
+      for (final parentId in parentIds) {
+        String? name;
+        String? photoURL;
+        try {
+          final pDoc = await db.collection('users').doc(parentId).get();
+          if (pDoc.exists) {
+            name = pDoc.data()!['name'] as String?;
+            photoURL = pDoc.data()!['photoURL'] as String?;
+          }
+        } catch (_) {
+          // Sin permiso para leer el doc del padre → usar proyección.
+        }
+        if (name == null || photoURL == null) {
+          final p = projection[parentId];
+          if (p is Map) {
+            name ??= p['name'] as String?;
+            photoURL ??= p['photoURL'] as String?;
+          }
+        }
+        result.add({
+          'id': parentId,
+          'name': (name != null && name.isNotEmpty) ? name : 'Padre/Madre',
+          'photoURL': photoURL,
+        });
+      }
+      return result;
     } catch (e) {
       ReleaseLogger.error('Error obteniendo padres del hijo: $e', tag: 'Child');
       return [];
     }
+  }
+
+  /// Devuelve los parentId del hijo leyendo la fuente de verdad (parent_children).
+  /// Las rules solo dejan leer el vínculo donde el viewer participa, así que esto
+  /// recupera al padre que está mirando a su propio hijo (self-heal).
+  Future<List<String>> _parentIdsFromSourceOfTruth() async {
+    final db = FirebaseFirestore.instance;
+    final selfId = FirebaseAuth.instance.currentUser?.uid;
+    if (selfId == null) return [];
+    final ids = <String>[];
+    for (final linkId in ['${selfId}_$id', '${id}_$selfId']) {
+      try {
+        final link = await db.collection('parent_children').doc(linkId).get();
+        if (link.exists && link.data()?['status'] == 'approved') {
+          final pid = link.data()!['parentId'] as String?;
+          if (pid != null && pid != id) ids.add(pid);
+        }
+      } catch (_) {
+        // Sin permiso para ese vínculo: ignorar.
+      }
+    }
+    return ids;
   }
 
   @override

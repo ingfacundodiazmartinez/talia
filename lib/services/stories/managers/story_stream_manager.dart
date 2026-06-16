@@ -5,6 +5,7 @@ import 'story_cache_manager.dart';
 import '../../../models/story.dart';
 import '../../block_status_cache_service.dart';
 import '../../../utils/release_logger.dart';
+import '../../../utils/official.dart';
 
 /// Manager para coordinación de streams de historias
 ///
@@ -50,6 +51,13 @@ class StoryStreamManager {
     _setupBlockStatusListener();
   }
 
+  /// Usuarios cuyas historias removimos por bloqueo. Solo recargamos
+  /// historias en la transición real bloqueado→desbloqueado: al arrancar,
+  /// el listener de chats emite un evento "no bloqueado" por CADA chat
+  /// existente, lo que disparaba ~1 recarga (y 1 permission-denied) por
+  /// contacto en cada inicio de app.
+  final Set<String> _usersBlockedLocally = {};
+
   /// Configurar listener para cambios de estado de bloqueo
   void _setupBlockStatusListener() {
     // Solo configurar si el servicio de bloqueo tiene el stream
@@ -60,10 +68,13 @@ class StoryStreamManager {
           (blockStatusChange) {
             if (blockStatusChange.isBlocked) {
               // Usuario bloqueado: remover solo sus historias (granular)
+              _usersBlockedLocally.add(blockStatusChange.contactId);
               _removeStoriesFromBlockedUser(blockStatusChange.contactId);
               _invalidateParentChildCacheForUser(blockStatusChange.contactId);
-            } else {
-              // Usuario desbloqueado: recargar solo sus historias (granular)
+            } else if (_usersBlockedLocally.remove(blockStatusChange.contactId)) {
+              // Transición real de desbloqueo: recargar solo sus historias.
+              // Eventos "no bloqueado" sin bloqueo previo (estado inicial al
+              // arrancar) se ignoran: el stream principal ya trae esas historias.
               _reloadStoriesForUser(blockStatusChange.contactId);
               _invalidateParentChildCacheForUser(blockStatusChange.contactId);
             }
@@ -93,8 +104,10 @@ class StoryStreamManager {
   /// Recargar historias de un usuario específico desde Firestore
   Future<void> _reloadStoriesForUser(String userId) async {
     try {
-      // Cargar historias del usuario desde Firestore
-      final userStories = await _storyRepository.getByUserId(userId);
+      // Cargar historias del usuario con query compatible con las rules
+      // (getByUserId era rechazado con permission-denied)
+      final userStories =
+          await _storyRepository.getApprovedStoriesByAuthor(userId);
 
       if (userStories.isNotEmpty) {
         // Crear UserStories para este usuario
@@ -104,12 +117,15 @@ class StoryStreamManager {
         // historias como vistas (caso típico: padre responde historia del menor).
         final viewerId = _storyRepository.currentUserId;
         final hasUnviewed = _hasUnviewedStories(userStories, viewerId);
+        final isOfficial =
+            story.isOfficial || Official.isOfficialUser(userId);
         final newUserStories = UserStories(
           userId: userId,
           userName: story.userName,
-          userPhotoURL: story.userPhotoURL,
+          userPhotoURL: isOfficial ? null : story.userPhotoURL,
           stories: userStories,
           hasUnviewed: hasUnviewed,
+          isOfficial: isOfficial,
         );
 
         // Agregar al cache usando el método específico del cache manager
@@ -388,7 +404,12 @@ class StoryStreamManager {
       final stories = entry.value;
       final userInfo = usersInfo[userId];
 
-      if (userInfo != null) {
+      // La cuenta oficial de Talia no tiene documento en `users`; usamos los
+      // datos del propio Story (userName/photoURL los escribe el backoffice).
+      final isOfficial =
+          Official.isOfficialUser(userId) || stories.any((s) => s.isOfficial);
+
+      if (userInfo != null || isOfficial) {
         // Ordenar historias por fecha
         stories.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
@@ -400,10 +421,13 @@ class StoryStreamManager {
 
         userStoriesList.add(UserStories(
           userId: userId,
-          userName: userInfo['name'] ?? 'Usuario',
-          userPhotoURL: userInfo['photoURL'],
+          userName: isOfficial
+              ? Official.userName
+              : (userInfo?['name'] ?? 'Usuario'),
+          userPhotoURL: isOfficial ? null : userInfo?['photoURL'],
           stories: stories,
           hasUnviewed: hasUnviewed,
+          isOfficial: isOfficial,
         ));
       }
     }
@@ -455,11 +479,13 @@ class StoryStreamManager {
       tag: 'StoryStreamManager',
     );
 
-    // OPTIMIZACIÓN: Obtener TODAS las relaciones padre-hijo de una vez
-    final parentChildRelations = await _getBatchParentChildRelations(stories);
-
-    // OPTIMIZACIÓN: Obtener estados de bloqueo de todos los usuarios de una vez
-    final blockStatuses = await _getBatchBlockStatuses(stories, currentUserId);
+    // ⚡ PERF: relaciones padre-hijo y estados de bloqueo en PARALELO.
+    // Antes eran secuenciales: con timeouts de 5s c/u, el peor caso era 10s
+    // por snapshot antes de mostrar nada. En paralelo el peor caso es 5s.
+    final (parentChildRelations, blockStatuses) = await (
+      _getBatchParentChildRelations(stories),
+      _getBatchBlockStatuses(stories, currentUserId),
+    ).wait;
 
     final filteredStories = <Story>[];
     int blockedCount = 0;
@@ -508,7 +534,13 @@ class StoryStreamManager {
 
     try {
       // OPTIMIZACIÓN: Usar el método batch que ejecuta queries en paralelo
-      final relations = await _contactRepository.getBatchLinkedParents(userIds);
+      // 🔒 TIMEOUT: Firestore offline/suspendido NO tira error — el await se
+      // cuelga indefinidamente. Sin timeout, todo el filtro de visibilidad
+      // queda colgado y las historias nunca se muestran (bug: "no aparece
+      // ninguna historia hasta reiniciar"). Con timeout cae al catch y degrada.
+      final relations = await _contactRepository
+          .getBatchLinkedParents(userIds)
+          .timeout(const Duration(seconds: 5));
 
       // Actualizar cache
       _parentChildCache.clear();
@@ -517,7 +549,9 @@ class StoryStreamManager {
 
       return relations;
     } catch (e) {
-      // En caso de error, retornar cache vacío (comportamiento conservativo)
+      // En caso de error/timeout, retornar cache vacío (comportamiento
+      // conservativo): las historias APPROVED se siguen mostrando; solo se
+      // ocultan pending/rejected que requieren relación padre-hijo.
       return {};
     }
   }
@@ -542,13 +576,19 @@ class StoryStreamManager {
         return MapEntry(userId, isBlockedByOther || isBlockingOther);
       });
 
-      final results = await Future.wait(futures);
+      // 🔒 TIMEOUT: ver nota en _getBatchParentChildRelations. Si las queries
+      // de bloqueo se cuelgan (Firestore suspendido), el filtro entero queda
+      // colgado y no se muestran historias. Con timeout cae al catch.
+      final results = await Future.wait(futures)
+          .timeout(const Duration(seconds: 5));
 
       for (final result in results) {
         blockStatuses[result.key] = result.value;
       }
     } catch (e) {
-      // En caso de error, asumir que no hay bloqueos (comportamiento conservativo)
+      // En caso de error/timeout, asumir que no hay bloqueos (comportamiento
+      // conservativo, idéntico al ya existente). El bloqueo igual se refuerza
+      // server-side vía availableFor y por el listener de block status.
       for (final userId in userIds) {
         blockStatuses[userId] = false;
       }

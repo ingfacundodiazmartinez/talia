@@ -39,7 +39,12 @@ class NotificationDedupRegistry {
     DedupNs.shown: _NsConfig(maxSize: 500, ttl: Duration(minutes: 5)),
     DedupNs.processedMessage: _NsConfig(maxSize: 1000, ttl: Duration(minutes: 10)),
     DedupNs.processedCall: _NsConfig(maxSize: 200, ttl: Duration(minutes: 30)),
-    DedupNs.tap: _NsConfig(maxSize: 100, ttl: Duration(seconds: 5)),
+    // ✅ FIX: 30s (era 5s). En cold start desde tap compiten varios handlers
+    // (getInitialMessage, pending_notification_data, method channel nativo)
+    // con delays de 500ms + init diferido post-frame; en devices lentos el
+    // segundo handler llegaba después de los 5s y navegaba DOS veces (doble
+    // pantalla de chat en el stack).
+    DedupNs.tap: _NsConfig(maxSize: 100, ttl: Duration(seconds: 30)),
   };
 
   /// Almacenamiento por namespace. Usamos LinkedHashMap como LRU: insertion

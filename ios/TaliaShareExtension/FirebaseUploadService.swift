@@ -45,97 +45,136 @@ class FirebaseUploadService {
     // MARK: - Auth Token Management (via App Group)
 
     /// Estructura para decodificar credenciales
+    /// `refreshToken` y `apiKey` son opcionales para compatibilidad con
+    /// archivos escritos por versiones viejas de la app.
     private struct Credentials: Codable {
         let userId: String
-        let idToken: String
-        let timestamp: Int
+        var idToken: String
+        var timestamp: Int
+        var refreshToken: String?
+        var apiKey: String?
     }
 
-    /// Cache de credenciales para evitar leer archivo repetidamente
-    private var cachedCredentials: Credentials?
+    private var credentialsURL: URL? {
+        FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: appGroupId)?
+            .appendingPathComponent("firebase_credentials.json")
+    }
 
-    /// Cargar credenciales desde App Group
-    private func loadCredentials() -> Credentials? {
-        NSLog("🔐 [FirebaseUpload] loadCredentials() called")
-
-        // Retornar cache si existe y es reciente (menos de 5 minutos)
-        if let cached = cachedCredentials {
-            let age = Date().timeIntervalSince1970 * 1000 - Double(cached.timestamp)
-            if age < 5 * 60 * 1000 { // 5 minutos
-                NSLog("🔐 [FirebaseUpload] Using cached credentials (age: \(Int(age / 60000)) min)")
-                return cached
-            } else {
-                NSLog("🔐 [FirebaseUpload] Cached credentials too old, reloading...")
-            }
-        }
-
-        guard let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) else {
+    /// Leer credenciales del App Group SIN validar expiración.
+    private func loadStoredCredentials() -> Credentials? {
+        guard let url = credentialsURL else {
             NSLog("❌ [FirebaseUpload] App Group container not available - check entitlements!")
             return nil
         }
-
-        let credentialsURL = containerURL.appendingPathComponent("firebase_credentials.json")
-        NSLog("🔐 [FirebaseUpload] Looking for credentials at: \(credentialsURL.path)")
-
-        guard FileManager.default.fileExists(atPath: credentialsURL.path) else {
+        guard FileManager.default.fileExists(atPath: url.path) else {
             NSLog("⚠️ [FirebaseUpload] Credentials file not found - abre la app Talia primero")
             return nil
         }
-
         do {
-            let data = try Data(contentsOf: credentialsURL)
-            NSLog("🔐 [FirebaseUpload] Read \(data.count) bytes from credentials file")
-
-            let credentials = try JSONDecoder().decode(Credentials.self, from: data)
-
-            // Verificar que el token no sea muy viejo (Firebase tokens expiran en 1 hora)
-            let tokenAge = Date().timeIntervalSince1970 * 1000 - Double(credentials.timestamp)
-            let tokenAgeMinutes = Int(tokenAge / 60000)
-            NSLog("🔐 [FirebaseUpload] Token age: \(tokenAgeMinutes) minutes")
-
-            if tokenAge > 55 * 60 * 1000 { // 55 minutos
-                NSLog("⚠️ [FirebaseUpload] Token EXPIRED (\(tokenAgeMinutes) min > 55 min)")
-                NSLog("⚠️ [FirebaseUpload] Abre la app Talia para refrescar el token")
-                return nil
-            }
-
-            cachedCredentials = credentials
-            NSLog("✅ [FirebaseUpload] Credentials loaded OK for user: \(credentials.userId.prefix(8))...")
-            return credentials
+            let data = try Data(contentsOf: url)
+            return try JSONDecoder().decode(Credentials.self, from: data)
         } catch {
             NSLog("❌ [FirebaseUpload] Error decoding credentials: \(error)")
             return nil
         }
     }
 
-    /// Obtener token de autenticación desde App Group
-    func getAuthToken() -> String? {
-        return loadCredentials()?.idToken
+    /// El idToken de Firebase dura 60 min; lo consideramos fresco hasta 50.
+    private func isTokenFresh(_ credentials: Credentials) -> Bool {
+        let age = Date().timeIntervalSince1970 * 1000 - Double(credentials.timestamp)
+        return age < 50 * 60 * 1000
+    }
+
+    /// Persistir credenciales actualizadas (tras un refresh exitoso).
+    private func storeCredentials(_ credentials: Credentials) {
+        guard let url = credentialsURL,
+              let data = try? JSONEncoder().encode(credentials) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// Obtener credenciales con idToken VÁLIDO, renovándolo vía
+    /// securetoken.googleapis.com si está vencido. Así el envío directo
+    /// funciona siempre (estándar tipo WhatsApp), sin importar hace cuánto
+    /// se abrió la app principal.
+    private func withFreshCredentials(completion: @escaping (Credentials?) -> Void) {
+        guard let stored = loadStoredCredentials() else {
+            completion(nil)
+            return
+        }
+
+        if isTokenFresh(stored) {
+            completion(stored)
+            return
+        }
+
+        guard let refreshToken = stored.refreshToken,
+              let apiKey = stored.apiKey,
+              let url = URL(string: "https://securetoken.googleapis.com/v1/token?key=\(apiKey)") else {
+            NSLog("⚠️ [FirebaseUpload] Token vencido y sin refreshToken/apiKey (credenciales de app vieja)")
+            completion(nil)
+            return
+        }
+
+        NSLog("🔄 [FirebaseUpload] idToken vencido, renovando vía securetoken...")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        let encodedToken = refreshToken.addingPercentEncoding(withAllowedCharacters: allowed) ?? refreshToken
+        request.httpBody = "grant_type=refresh_token&refresh_token=\(encodedToken)".data(using: .utf8)
+        request.timeoutInterval = 15
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+
+            if let error = error {
+                NSLog("❌ [FirebaseUpload] Refresh error: \(error.localizedDescription)")
+                completion(nil)
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200,
+                  let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let newIdToken = json["id_token"] as? String else {
+                if let data = data, let body = String(data: data, encoding: .utf8) {
+                    NSLog("❌ [FirebaseUpload] Refresh failed: \(body.prefix(300))")
+                }
+                completion(nil)
+                return
+            }
+
+            var updated = stored
+            updated.idToken = newIdToken
+            updated.timestamp = Int(Date().timeIntervalSince1970 * 1000)
+            // Google puede rotar el refresh token — persistir el nuevo.
+            if let newRefreshToken = json["refresh_token"] as? String {
+                updated.refreshToken = newRefreshToken
+            }
+            self.storeCredentials(updated)
+            NSLog("✅ [FirebaseUpload] idToken renovado OK")
+            completion(updated)
+        }.resume()
     }
 
     /// Obtener User ID desde App Group
     func getUserId() -> String? {
-        return loadCredentials()?.userId
+        return loadStoredCredentials()?.userId
     }
 
-    /// Verificar si el usuario está autenticado
+    /// Verificar si el usuario puede autenticarse: token fresco O refreshToken
+    /// disponible para renovarlo.
     func isAuthenticated() -> Bool {
-        let credentials = loadCredentials()
-        let isAuth = credentials != nil
-        NSLog("🔐 [FirebaseUpload] isAuthenticated check: \(isAuth)")
-        if !isAuth {
-            // Log reason for failure
-            if let containerURL = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId) {
-                let credentialsURL = containerURL.appendingPathComponent("firebase_credentials.json")
-                if FileManager.default.fileExists(atPath: credentialsURL.path) {
-                    NSLog("🔐 [FirebaseUpload] Credentials file EXISTS but failed to load (possibly expired or malformed)")
-                } else {
-                    NSLog("🔐 [FirebaseUpload] Credentials file DOES NOT EXIST - user needs to open app first")
-                }
-            } else {
-                NSLog("🔐 [FirebaseUpload] App Group container not available - check entitlements")
-            }
+        guard let credentials = loadStoredCredentials() else {
+            NSLog("🔐 [FirebaseUpload] isAuthenticated: no credentials file")
+            return false
         }
+        let isAuth = isTokenFresh(credentials) || credentials.refreshToken != nil
+        NSLog("🔐 [FirebaseUpload] isAuthenticated: \(isAuth) (fresh: \(isTokenFresh(credentials)), hasRefresh: \(credentials.refreshToken != nil))")
         return isAuth
     }
 
@@ -147,12 +186,30 @@ class FirebaseUploadService {
         chatIds: [String],
         completion: @escaping (UploadResult) -> Void
     ) {
-        guard let token = getAuthToken(), let userId = getUserId() else {
-            NSLog("❌ [FirebaseUpload] Not authenticated")
-            completion(.error("No estás autenticado. Abre la app primero."))
-            return
+        withFreshCredentials { [weak self] credentials in
+            guard let self = self else { return }
+            guard let credentials = credentials else {
+                NSLog("❌ [FirebaseUpload] Not authenticated / token refresh failed")
+                completion(.error("No se pudo autenticar. Verifica tu conexión o abre la app Talia."))
+                return
+            }
+            self.sendToChatsAuthenticated(
+                items: items,
+                chatIds: chatIds,
+                userId: credentials.userId,
+                token: credentials.idToken,
+                completion: completion
+            )
         }
+    }
 
+    private func sendToChatsAuthenticated(
+        items: [SharedItem],
+        chatIds: [String],
+        userId: String,
+        token: String,
+        completion: @escaping (UploadResult) -> Void
+    ) {
         NSLog("📤 [FirebaseUpload] Sending \(items.count) items to \(chatIds.count) chats")
 
         let group = DispatchGroup()
@@ -753,11 +810,27 @@ class FirebaseUploadService {
         item: SharedItem,
         completion: @escaping (UploadResult) -> Void
     ) {
-        guard let token = getAuthToken(), let userId = getUserId() else {
-            completion(.error("No estás autenticado. Abre la app primero."))
-            return
+        withFreshCredentials { [weak self] credentials in
+            guard let self = self else { return }
+            guard let credentials = credentials else {
+                completion(.error("No se pudo autenticar. Verifica tu conexión o abre la app Talia."))
+                return
+            }
+            self.createStoryAuthenticated(
+                item: item,
+                userId: credentials.userId,
+                token: credentials.idToken,
+                completion: completion
+            )
         }
+    }
 
+    private func createStoryAuthenticated(
+        item: SharedItem,
+        userId: String,
+        token: String,
+        completion: @escaping (UploadResult) -> Void
+    ) {
         guard item.type == .image || item.type == .video, let fileURL = item.url else {
             completion(.error("Solo se pueden crear historias con imágenes o videos"))
             return

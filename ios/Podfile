@@ -42,16 +42,20 @@ target 'Runner' do
   target 'RunnerTests' do
     inherit! :search_paths
   end
-end
 
-# Notification Service Extension - descarga foto del sender + marca delivery receipts.
-# Necesita Firebase Auth (para leer el currentUser desde shared keychain) y Firestore
-# (para escribir `lastReceivedAt_{uid}` al chat doc cuando llega la push, incluso si
-# la app principal está totalmente cerrada).
-target 'NotificationServiceExtension' do
-  use_frameworks!
-  pod 'FirebaseAuth'
-  pod 'FirebaseFirestore'
+  # Notification Service Extension - descarga foto del sender + marca delivery
+  # receipts. Necesita Firebase Auth (para leer currentUser desde shared
+  # keychain) y Firestore (para escribir `lastReceivedAt_{uid}` al chat doc
+  # cuando llega la push, incluso si la app principal está totalmente cerrada).
+  #
+  # ⚠️ Nested inside Runner + inherit! :search_paths: comparte los pods
+  # ya instalados por Runner (FirebaseAuth, FirebaseFirestore vienen via
+  # flutter_install_all_ios_pods). Sin este nesting, cada target produce su
+  # propio GoogleUtilities.framework y Xcode 16 tira "Multiple commands
+  # produce" durante `flutter build ipa`.
+  target 'NotificationServiceExtension' do
+    inherit! :search_paths
+  end
 end
 
 # Share Extension - recibe contenido compartido desde otras apps
@@ -70,6 +74,15 @@ post_install do |installer|
       # de arm64 en simulator para que todos los pods sean consistentes.
       config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
       config.build_settings['ONLY_ACTIVE_ARCH'] = 'YES'
+      # ✅ FIX: "Multiple commands produce GoogleUtilities.framework /
+      # GoogleUtilities_Privacy.bundle" en `flutter build ipa` con Xcode 16.
+      # Xcode user script sandboxing trata cada script phase como aislado,
+      # lo que rompe el copy/embed compartido entre Runner y la NSE. Apagarlo
+      # restaura el comportamiento clásico de CocoaPods.
+      config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
     end
+  end
+  installer.pods_project.build_configurations.each do |config|
+    config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
   end
 end

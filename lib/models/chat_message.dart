@@ -73,6 +73,15 @@ class ChatMessage {
   // - [senderId, receiverId]: mensaje normal, visible para ambos.
   final List<String>? visibleTo;
 
+  // ✅ Ubicación (type == 'location'). Punto inicial compartido.
+  final double? latitude;
+  final double? longitude;
+  // Live location (tipo WhatsApp): si isLiveLocation, la posición se actualiza
+  // en tiempo real desde la subcolección `live_locations/{senderId}` hasta
+  // `liveLocationExpiresAt`.
+  final bool isLiveLocation;
+  final Timestamp? liveLocationExpiresAt;
+
   ChatMessage({
     required this.id,
     required this.senderId,
@@ -106,6 +115,10 @@ class ChatMessage {
     this.localId, // ✅ Agregar localId
     this.isDeletedForEveryone = false, // ✅ Agregar isDeletedForEveryone
     this.visibleTo,
+    this.latitude,
+    this.longitude,
+    this.isLiveLocation = false,
+    this.liveLocationExpiresAt,
   });
 
   /// Factory constructor desde Firestore DocumentSnapshot
@@ -188,6 +201,10 @@ class ChatMessage {
       visibleTo: data['visibleTo'] != null
           ? List<String>.from(data['visibleTo'] as List)
           : null,
+      latitude: (data['latitude'] as num?)?.toDouble(),
+      longitude: (data['longitude'] as num?)?.toDouble(),
+      isLiveLocation: data['isLiveLocation'] as bool? ?? false,
+      liveLocationExpiresAt: data['liveLocationExpiresAt'] as Timestamp?,
     );
   }
 
@@ -273,6 +290,14 @@ class ChatMessage {
 
     // ✅ Visibilidad por destinatario
     if (visibleTo != null) map['visibleTo'] = visibleTo;
+
+    // ✅ Ubicación
+    if (latitude != null) map['latitude'] = latitude;
+    if (longitude != null) map['longitude'] = longitude;
+    if (isLiveLocation) map['isLiveLocation'] = true;
+    if (liveLocationExpiresAt != null) {
+      map['liveLocationExpiresAt'] = liveLocationExpiresAt;
+    }
 
     return map;
   }
@@ -384,6 +409,10 @@ class ChatMessage {
     String? localId, // ✅ FIX: Agregar localId como parámetro
     bool? isDeletedForEveryone, // ✅ Agregar isDeletedForEveryone
     List<String>? visibleTo,
+    double? latitude,
+    double? longitude,
+    bool? isLiveLocation,
+    Timestamp? liveLocationExpiresAt,
   }) {
     return ChatMessage(
       id: id ?? this.id,
@@ -417,6 +446,10 @@ class ChatMessage {
       localId: localId ?? this.localId, // ✅ FIX: Usar valor pasado o preservar actual
       isDeletedForEveryone: isDeletedForEveryone ?? this.isDeletedForEveryone,
       visibleTo: visibleTo ?? this.visibleTo,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      isLiveLocation: isLiveLocation ?? this.isLiveLocation,
+      liveLocationExpiresAt: liveLocationExpiresAt ?? this.liveLocationExpiresAt,
     );
   }
 

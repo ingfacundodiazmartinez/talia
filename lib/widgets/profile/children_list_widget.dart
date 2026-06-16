@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../models/parent.dart';
+import '../../link_parent_child.dart';
 
 /// Widget que muestra la lista de hijos vinculados al padre
 class ChildrenListWidget extends StatelessWidget {
@@ -22,42 +23,88 @@ class ChildrenListWidget extends StatelessWidget {
           .snapshots(),
       builder: (context, snapshot) {
         if (!snapshot.hasData || !snapshot.data!.exists) {
-          return _buildEmptyState(context);
+          return Column(
+            children: [
+              _buildEmptyState(context),
+              SizedBox(height: 12),
+              _buildAddChildButton(context),
+            ],
+          );
         }
 
         final userData = snapshot.data!.data() as Map<String, dynamic>?;
         final linkedChildrenIds = List<String>.from(userData?['linkedChildrenIds'] ?? []);
 
         if (linkedChildrenIds.isEmpty) {
-          return _buildEmptyState(context);
+          return Column(
+            children: [
+              _buildEmptyState(context),
+              SizedBox(height: 12),
+              _buildAddChildButton(context),
+            ],
+          );
         }
 
         return Column(
-          children: linkedChildrenIds.map((childId) {
-            return FutureBuilder<DocumentSnapshot>(
-              future: FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(childId)
-                  .get(),
-              builder: (context, userSnapshot) {
-                if (!userSnapshot.hasData) return SizedBox();
+          children: [
+            ...linkedChildrenIds.map((childId) {
+              return FutureBuilder<DocumentSnapshot>(
+                future: FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(childId)
+                    .get(),
+                builder: (context, userSnapshot) {
+                  if (!userSnapshot.hasData) return SizedBox();
 
-                final userData =
-                    userSnapshot.data!.data() as Map<String, dynamic>?;
-                final name = userData?['name'] ?? 'Usuario';
-                final photoURL = userData?['photoURL'] as String?;
+                  final userData =
+                      userSnapshot.data!.data() as Map<String, dynamic>?;
+                  final name = userData?['name'] ?? 'Usuario';
+                  final photoURL = userData?['photoURL'] as String?;
 
-                return _buildChildCard(
-                  context,
-                  childId: childId,
-                  name: name,
-                  photoURL: photoURL,
-                );
-              },
-            );
-          }).toList(),
+                  return _buildChildCard(
+                    context,
+                    childId: childId,
+                    name: name,
+                    photoURL: photoURL,
+                  );
+                },
+              );
+            }),
+            SizedBox(height: 4),
+            _buildAddChildButton(context),
+          ],
         );
       },
+    );
+  }
+
+  Widget _buildAddChildButton(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => const GenerateLinkCodeScreen(),
+            ),
+          );
+        },
+        icon: Icon(Icons.add_link, color: colorScheme.primary),
+        label: Text(
+          'Vincular otro hijo',
+          style: TextStyle(color: colorScheme.primary),
+        ),
+        style: OutlinedButton.styleFrom(
+          padding: EdgeInsets.symmetric(vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          side: BorderSide(
+            color: colorScheme.primary.withValues(alpha: 0.5),
+          ),
+        ),
+      ),
     );
   }
 

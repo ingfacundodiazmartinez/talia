@@ -90,6 +90,12 @@ class GroupMessage {
   /// Para moderación: solo [senderId] hasta que CF apruebe.
   final List<String>? visibleTo;
 
+  // ✅ Ubicación (contentType == 'location').
+  final double? latitude;
+  final double? longitude;
+  final bool isLiveLocation;
+  final DateTime? liveLocationExpiresAt;
+
   const GroupMessage({
     required this.id,
     required this.senderId,
@@ -118,6 +124,10 @@ class GroupMessage {
     this.moderationReason,
     this.localId,
     this.visibleTo,
+    this.latitude,
+    this.longitude,
+    this.isLiveLocation = false,
+    this.liveLocationExpiresAt,
   });
 
   factory GroupMessage.fromFirestore(String id, Map<String, dynamic> data) {
@@ -169,6 +179,12 @@ class GroupMessage {
       visibleTo: data['visibleTo'] != null
           ? List<String>.from(data['visibleTo'] as List)
           : null,
+      // Ubicación
+      latitude: (data['latitude'] as num?)?.toDouble(),
+      longitude: (data['longitude'] as num?)?.toDouble(),
+      isLiveLocation: data['isLiveLocation'] as bool? ?? false,
+      liveLocationExpiresAt:
+          (data['liveLocationExpiresAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -200,6 +216,12 @@ class GroupMessage {
       if (localId != null) 'localId': localId,
       // Visibilidad por destinatario
       if (visibleTo != null) 'visibleTo': visibleTo,
+      // Ubicación
+      if (latitude != null) 'latitude': latitude,
+      if (longitude != null) 'longitude': longitude,
+      if (isLiveLocation) 'isLiveLocation': true,
+      if (liveLocationExpiresAt != null)
+        'liveLocationExpiresAt': Timestamp.fromDate(liveLocationExpiresAt!),
     };
   }
 
@@ -209,6 +231,7 @@ class GroupMessage {
   /// Get content type for reply preview
   /// Verifica URLs y también localPaths (para mensajes en cache sin URL)
   String get contentType {
+    if (latitude != null && longitude != null) return 'location';
     if (imageUrl != null && imageUrl!.isNotEmpty) return 'image';
     if (localImagePath != null && localImagePath!.isNotEmpty) return 'image';
     if (videoUrl != null && videoUrl!.isNotEmpty) return 'video';
@@ -283,6 +306,10 @@ class GroupMessage {
     String? moderationReason,
     String? localId,
     List<String>? visibleTo,
+    double? latitude,
+    double? longitude,
+    bool? isLiveLocation,
+    DateTime? liveLocationExpiresAt,
   }) {
     return GroupMessage(
       id: id ?? this.id,
@@ -312,6 +339,10 @@ class GroupMessage {
       moderationReason: moderationReason ?? this.moderationReason,
       localId: localId ?? this.localId,
       visibleTo: visibleTo ?? this.visibleTo,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      isLiveLocation: isLiveLocation ?? this.isLiveLocation,
+      liveLocationExpiresAt: liveLocationExpiresAt ?? this.liveLocationExpiresAt,
     );
   }
 

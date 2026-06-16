@@ -69,6 +69,9 @@ const groups = require("./groups");
 // Grupos V2 (nueva arquitectura con aprobación parental)
 const groupsV2 = require("./groups-v2");
 
+// Resúmenes IA de grupos (efímero, free)
+const groupSummaries = require("./group-summaries");
+
 // Moderación de contenido
 const moderation = require("./moderation");
 
@@ -102,6 +105,9 @@ const stories = require("./stories");
 // Story Approval (Cloud Functions for secure approval)
 const storyApproval = require("./story-approval");
 
+// Official Stories (bienvenida para usuarios nuevos)
+const officialStories = require("./official-stories");
+
 // Trivia (trivias personales en historias)
 const trivia = require("./trivia");
 
@@ -119,6 +125,9 @@ const taliaAssistant = require("./talia-assistant");
 
 // Wallet de créditos familiar (Fase 1: modo sombra)
 const wallet = require("./wallet");
+
+// Generación de música con IA para historias (Sonauto/Treblo)
+const storyMusic = require("./story-music");
 
 // ❌ Voice Changer (ElevenLabs) - ELIMINADO
 // ❌ Replicate Voice (TTS) - ELIMINADO
@@ -190,6 +199,7 @@ exports.onGroupApprovalRequestCreated = groupsV2.onGroupApprovalRequestCreated;
 exports.onParentChildUnlinkV2 = groupsV2.onParentChildUnlinkV2;
 exports.expireGroupApprovalRequests = groupsV2.expireGroupApprovalRequests;
 exports.onGroupV2MessageCreated = groupsV2.onGroupV2MessageCreated;
+exports.summarizeGroupUnread = groupSummaries.summarizeGroupUnread;
 exports.promoteGroupAdmin = groupsV2.promoteGroupAdmin;
 exports.demoteGroupAdmin = groupsV2.demoteGroupAdmin;
 exports.sendGroupV2Message = groupsV2.sendGroupV2Message; // ✅ Envío de mensajes con moderación
@@ -265,11 +275,15 @@ exports.cleanupOldStickers = stickerFunctions.cleanupOldStickers;
 // Stories
 exports.onStoryApprovalRequestCreated = stories.onStoryApprovalRequestCreated;
 exports.onStoryDeleted = stories.onStoryDeleted;
+exports.onUserCreatedWelcomeStory = officialStories.onUserCreatedWelcomeStory;
 exports.replyToStory = stories.replyToStory;
 exports.likeStory = stories.likeStory;
 exports.getStoryPreview = stories.getStoryPreview;
 
 // Story Approval (Secure Cloud Functions)
+exports.generateStoryMusic = storyMusic.generateStoryMusic;
+exports.getMusicAlignment = storyMusic.getMusicAlignment;
+
 exports.createStory = storyApproval.createStory;
 exports.approveStory = storyApproval.approveStory;
 exports.rejectStory = storyApproval.rejectStory;
@@ -354,6 +368,7 @@ exports.getWalletStatus = wallet.getWalletStatus;
 exports.claimWelcomeBonus = wallet.claimWelcomeBonus;
 exports.claimDailyBonus = wallet.claimDailyBonus;
 exports.earnCreditsFromAd = wallet.earnCreditsFromAd;
+exports.requestCreditsFromParents = wallet.requestCreditsFromParents;
 exports.grantPremiumMonthlyToAll = wallet.grantPremiumMonthlyToAll;
 
 console.log("✅ Todas las funciones exportadas correctamente (incluye Agora V2, Trivia, Talia Assistant, Migrations, Wallet)");

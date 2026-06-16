@@ -81,7 +81,7 @@ class DeleteMessageService {
           .collection('messages')
           .doc(messageId);
 
-      final messageDoc = await messageRef.get();
+      final messageDoc = await messageRef.get().timeout(const Duration(seconds: 8));
 
       if (!messageDoc.exists) {
         return (success: false, message: 'Mensaje no encontrado');
@@ -155,7 +155,7 @@ class DeleteMessageService {
 
       // Actualizar lastMessage del chat si era el último
       try {
-        final chatDoc = await _firestore.collection(collection).doc(chatId).get();
+        final chatDoc = await _firestore.collection(collection).doc(chatId).get().timeout(const Duration(seconds: 8));
 
         if (chatDoc.exists) {
           final chatData = chatDoc.data()!;
@@ -271,7 +271,7 @@ class DeleteMessageService {
           .doc(chatId)
           .collection('messages')
           .doc(messageId)
-          .get();
+          .get().timeout(const Duration(seconds: 8));
 
       if (!messageDoc.exists) {
         return (canDelete: false, reason: 'Mensaje no encontrado');

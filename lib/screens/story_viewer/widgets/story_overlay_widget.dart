@@ -7,6 +7,8 @@ import '../../../controllers/story_viewer_controller.dart';
 import 'story_progress_indicators.dart';
 import 'story_user_header.dart';
 import 'story_reply_input.dart';
+import '../../story_camera_screen.dart';
+import '../../../utils/official.dart';
 // StoryCaptionWidget ya no se usa aquí - caption se renderiza en StoryContentWidget
 
 /// Widget posicionado para campo de respuesta
@@ -32,8 +34,9 @@ class StoryReplySection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Solo mostrar si NO es la historia del usuario actual
-    if (storyUserId == currentUserId) {
+    // No mostrar en la historia propia ni en las oficiales de Talia
+    // (los comunicados/bienvenida no admiten respuesta ni like).
+    if (storyUserId == currentUserId || Official.isOfficialUser(storyUserId)) {
       return SizedBox.shrink();
     }
 
@@ -212,6 +215,11 @@ class StoryOverlayWidget extends StatelessWidget {
                 onResumeTimer: onResumeTimer,
               ),
 
+              // ✨ CTA sutil: solo en historias generadas con IA de OTROS usuarios.
+              // Invita a crear la propia → abre la cámara con auto face-swap.
+              if (currentStory?.aiGenerated == true && !isCurrentUser)
+                _buildAiCta(context),
+
               Spacer(),
 
               // ✅ Caption ahora se renderiza en StoryContentWidget
@@ -235,6 +243,28 @@ class StoryOverlayWidget extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  /// CTA sutil que invita a generar una historia con IA (face-swap).
+  /// Incluye una "X" para cerrarlo; se mantiene cerrado mientras el visor
+  /// siga mostrando esta CTA.
+  Widget _buildAiCta(BuildContext context) {
+    return _AiCtaBanner(
+      onTap: () => _openAiStoryCamera(context),
+    );
+  }
+
+  /// Abre la cámara de historias con auto face-swap. Pausa el timer mientras
+  /// la cámara está abierta y lo reanuda al volver.
+  void _openAiStoryCamera(BuildContext context) {
+    onPauseTimer?.call();
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => const StoryCameraScreen(autoOpenFaceSwap: true),
+          ),
+        )
+        .then((_) => onResumeTimer?.call());
   }
 
   Widget _buildLikesSection(BuildContext context, Story currentStory, bool isCurrentUser) {
@@ -1048,5 +1078,72 @@ class _ViewedByListWidget extends StatelessWidget {
     } catch (e) {
       return [];
     }
+  }
+}
+
+/// CTA sutil que invita a generar una historia con IA (face-swap).
+/// Incluye una "X" para cerrarlo; al cerrarlo se oculta y no vuelve a
+/// mostrarse mientras esta instancia siga viva en el visor.
+class _AiCtaBanner extends StatefulWidget {
+  final VoidCallback onTap;
+
+  const _AiCtaBanner({required this.onTap});
+
+  @override
+  State<_AiCtaBanner> createState() => _AiCtaBannerState();
+}
+
+class _AiCtaBannerState extends State<_AiCtaBanner> {
+  bool _dismissed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, left: 16, right: 16),
+      child: Align(
+        alignment: Alignment.center,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            padding: const EdgeInsets.only(left: 14, right: 6, top: 8, bottom: 8),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.auto_awesome, color: Colors.white, size: 16),
+                const SizedBox(width: 6),
+                const Text(
+                  'Generá tu historia con IA',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _dismissed = true),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 16,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

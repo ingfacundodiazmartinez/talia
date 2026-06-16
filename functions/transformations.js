@@ -10,6 +10,21 @@ const OpenAI = require("openai");
 const sharp = require("sharp");
 const axios = require("axios");
 const { v4: uuidv4 } = require("uuid");
+const wallet = require("./wallet");
+
+// ═══════════════════════════════════════════════════════════════
+// CRÉDITOS — Mapeo de modelo a "reason" del wallet
+// ═══════════════════════════════════════════════════════════════
+//
+// Los precios viven en wallet.js (FEATURE_PRICES). Acá solo mapeamos
+// qué modelo de IA usa qué reason:
+//   - face_swap        → "face_swap"   (1 cr — modelo barato)
+//   - p_image_edit     → "image_edit"  (2 cr — Replicate prunaai)
+//   - nano_banana      → "image_edit"  (2 cr — openai gpt-image-2 low)
+function getSpendReasonForModel(selectedModel) {
+  if (selectedModel === "face_swap") return "face_swap";
+  return "image_edit"; // p_image_edit, nano_banana
+}
 
 // ═══════════════════════════════════════════════════════════════
 // REMOTE CONFIG: FEATURE FLAGS
@@ -212,7 +227,8 @@ function determineAiModel(characterData) {
 
 /**
  * Editar imagen usando GPT-Image-2 de OpenAI (via Replicate), quality "low".
- * Reemplazo de google/nano-banana ($0.039) por openai/gpt-image-2 low ($0.012).
+ * Reemplazo de google/nano-banana ($0.039) por openai/gpt-image-2 low ($0.012):
+ * 3.25× más barato Y calidad verificadamente superior en pruebas (no hay tradeoff).
  *
  * IMPORTANTE: el aiModel key en Firestore sigue siendo "nano_banana" para
  * mantener backward compatibility con characters configurados. Solo el modelo
@@ -534,18 +550,10 @@ exports.transformCharacter = onCall(
       throw new HttpsError("invalid-argument", "imageUrl y characterId son requeridos");
     }
 
-    // ✅ VERIFICAR LÍMITES SEGÚN PLAN
-    const limitCheck = await checkFaceSwapLimit(userId);
-    if (!limitCheck.canUse) {
-      const periodText = limitCheck.period === "daily" ? "hoy" : "este mes";
-      throw new HttpsError(
-        "resource-exhausted",
-        `Has alcanzado el límite de ${limitCheck.limit} transformaciones ${periodText}. ` +
-        `Actualiza a Premium para obtener más transformaciones.`
-      );
-    }
-
     const db = getFirestore();
+
+    // Reservamos el txId fuera del try para que el catch pueda refundear.
+    let spendTxId = null;
 
     try {
       // 1. Obtener datos del personaje
@@ -578,6 +586,19 @@ exports.transformCharacter = onCall(
 
       // 4. Determinar qué modelo usar según configuración del personaje
       const selectedModel = determineAiModel(characterData);
+
+      // ✅ COBRAR CRÉDITOS antes de iniciar la AI.
+      // Si el hijo no tiene padre con saldo, esto tira INSUFFICIENT_CREDITS
+      // (HttpsError "failed-precondition") y nunca llegamos a llamar a Replicate.
+      // Si la AI falla después, refundeamos en el catch usando spendTxId.
+      const spendReason = getSpendReasonForModel(selectedModel);
+      const spendResult = await wallet._internal.spendCredits(userId, spendReason, {
+        characterId,
+        characterName: characterData.name,
+        selectedModel,
+      });
+      spendTxId = spendResult.txId;
+      console.log(`💳 [TransformCharacter] Spend OK: ${spendResult.amount} cr de wallet ${spendResult.walletId}, txId=${spendTxId}, newBalance=${spendResult.newBalance}`);
 
       console.log(`🤖 [TransformCharacter] Modelo seleccionado: ${selectedModel}`);
       if (selectedModel === "face_swap") {
@@ -644,7 +665,8 @@ exports.transformCharacter = onCall(
             const runpodApiKey = process.env.RUNPOD_API_KEY;
             const runpodEndpoint = process.env.RUNPOD_FACE_ENDPOINT;
 
-            const USE_RUNPOD = true;
+            // ✅ Replicate en vez de RunPod (ver createCharacterTransformation).
+            const USE_RUNPOD = false;
 
             if (USE_RUNPOD && runpodApiKey && runpodEndpoint) {
               // ✅ RunPod configurado: usar FaceFusion con GHOST (licencia comercial)
@@ -800,7 +822,6 @@ exports.transformCharacter = onCall(
       return {
         transformedImageUrl: transformedImageUrl,
         characterName: characterData.name,
-        remaining: limitCheck.remaining - 1,
       };
     } catch (error) {
       console.error("❌ [TransformCharacter] Error:", error);
@@ -808,6 +829,17 @@ exports.transformCharacter = onCall(
       // Limpiar archivo temporal incluso si hay error
       if (typeof tempFilePath !== "undefined" && tempFilePath) {
         await cleanupTempFile(tempFilePath).catch(() => {});
+      }
+
+      // Refundear créditos si llegamos a cobrar y la AI falló después.
+      // refundCredits es idempotente (skip si ya hay refund para este originalTxId).
+      if (spendTxId) {
+        try {
+          await wallet._internal.refundCredits(spendTxId, error.message || "transform_failed");
+          console.log(`↩️  [TransformCharacter] Refund OK para txId=${spendTxId}`);
+        } catch (refundErr) {
+          console.error(`⚠️ [TransformCharacter] Refund falló para txId=${spendTxId}: ${refundErr.message}`);
+        }
       }
 
       // Si es un HttpsError, lanzarlo directamente
@@ -853,18 +885,11 @@ exports.createCharacterTransformation = onCall(
       throw new HttpsError("invalid-argument", "imageUrl y characterId son requeridos");
     }
 
-    // ✅ VERIFICAR LÍMITES SEGÚN PLAN
-    const limitCheck = await checkFaceSwapLimit(userId);
-    if (!limitCheck.canUse) {
-      const periodText = limitCheck.period === "daily" ? "hoy" : "este mes";
-      throw new HttpsError(
-        "resource-exhausted",
-        `Has alcanzado el límite de ${limitCheck.limit} transformaciones ${periodText}. ` +
-        `Actualiza a Premium para obtener más transformaciones.`
-      );
-    }
-
     const db = getFirestore();
+
+    // Reservamos el txId fuera del try para que el catch (y el polling async)
+    // puedan refundear si la AI falla después del spend.
+    let spendTxId = null;
 
     try {
       // 1. Obtener datos del personaje
@@ -918,6 +943,18 @@ exports.createCharacterTransformation = onCall(
       const selectedModel = determineAiModel(characterData);
 
       console.log(`🚀 [CreateCharacterTransformation] Modelo seleccionado: ${selectedModel}`);
+
+      // ✅ COBRAR CRÉDITOS antes de iniciar la AI. Si la AI falla en cualquier
+      // path (sync nano_banana, sync RunPod, async polling) → refund.
+      const spendReason = getSpendReasonForModel(selectedModel);
+      const spendResult = await wallet._internal.spendCredits(userId, spendReason, {
+        characterId,
+        characterName: characterData.name,
+        selectedModel,
+        statusDocId,
+      });
+      spendTxId = spendResult.txId;
+      console.log(`💳 [CreateCharacterTransformation] Spend OK: ${spendResult.amount} cr de wallet ${spendResult.walletId}, txId=${spendTxId}, newBalance=${spendResult.newBalance}`);
 
       const transformationTypeMap = {
         "face_swap": "faceSwap",
@@ -1000,6 +1037,9 @@ exports.createCharacterTransformation = onCall(
           if (tempFilePath) {
             await cleanupTempFile(tempFilePath).catch(() => {});
           }
+          // Refund: nano_banana falló después del spend → devolver créditos
+          await refundSpend(spendTxId, nanoBananaError.message);
+          spendTxId = null; // ya refundeado, no doble-refund en outer catch
           throw nanoBananaError;
         }
       } else {
@@ -1042,8 +1082,12 @@ exports.createCharacterTransformation = onCall(
           const runpodApiKey = process.env.RUNPOD_API_KEY;
           const runpodEndpoint = process.env.RUNPOD_FACE_ENDPOINT;
 
-          // TEMP: Forzar Replicate mientras probamos RunPod directamente
-          const USE_RUNPOD = true;
+          // ✅ Replicate en vez de RunPod. RunPod corre SÍNCRONO dentro del callable
+          // (bloquea ~3 min por cold-start del worker GPU) → el cliente cortaba con
+          // DEADLINE_EXCEEDED a los 180s. El path de Replicate es async-decoupled:
+          // crea la predicción, retorna statusDocId al instante y el polling corre en
+          // background actualizando transformation_status; el cliente escucha el doc.
+          const USE_RUNPOD = false;
 
           if (USE_RUNPOD && runpodApiKey && runpodEndpoint) {
             // ✅ RunPod configurado: usar FaceFusion con GHOST (licencia comercial)
@@ -1098,7 +1142,6 @@ exports.createCharacterTransformation = onCall(
                 predictionId: `runpod_faceswap_${statusDocId}`,
                 status: "succeeded",
                 characterName: characterData.name,
-                remaining: limitCheck.remaining - 1,
               };
             } catch (runpodError) {
               console.error(`❌ [CreateCharacterTransformation] Error RunPod: ${runpodError.message}`);
@@ -1110,11 +1153,14 @@ exports.createCharacterTransformation = onCall(
                 aiBackend: "runpod",
                 updatedAt: FieldValue.serverTimestamp(),
               });
+              // Refund: RunPod falló después del spend → devolver créditos
+              await refundSpend(spendTxId, runpodError.message);
+              spendTxId = null; // ya refundeado
               throw runpodError;
             }
           } else {
-            // ⚠️ Fallback a Replicate (codeplugtech/face-swap)
-            console.log(`⚠️ [CreateCharacterTransformation] RunPod no configurado, usando Replicate fallback`);
+            // ✅ Face swap vía Replicate (codeplugtech/face-swap), async + polling.
+            console.log(`🎭 [CreateCharacterTransformation] Usando Replicate face-swap (async)`);
             prediction = await replicate.predictions.create({
               version: "278a81e7ebb22db98bcba54de985d22cc1abeead2754eb1f2af717247be69b34",
               input: {
@@ -1137,8 +1183,15 @@ exports.createCharacterTransformation = onCall(
           updatedAt: FieldValue.serverTimestamp(),
         });
 
-        // 7. Hacer polling en background y actualizar Firestore
-        pollPredictionAndUpdateFirestore(replicate, prediction.id, statusDocRef, characterData.name, tempFilePath)
+        // 7. Hacer polling en background y actualizar Firestore.
+        // Pasamos spendTxId para que el polling refundee si la predicción falla.
+        // Después de lanzar el polling, "transferimos" la responsabilidad del
+        // refund: spendTxId local se nullea para que el outer catch no
+        // refundee también (sería doble refund). refundCredits ES idempotente
+        // pero mejor no contar con eso.
+        const txIdForPolling = spendTxId;
+        spendTxId = null;
+        pollPredictionAndUpdateFirestore(replicate, prediction.id, statusDocRef, characterData.name, tempFilePath, txIdForPolling)
             .catch((error) => {
               console.error(`❌ [PollPrediction] Error: ${error.message}`);
             });
@@ -1168,10 +1221,16 @@ exports.createCharacterTransformation = onCall(
         predictionId: prediction?.id || `nano_banana_${statusDocId}`,
         status: prediction?.status || "succeeded",
         characterName: characterData.name,
-        remaining: limitCheck.remaining - 1,
       };
     } catch (error) {
       console.error("❌ [CreateCharacterTransformation] Error:", error);
+
+      // Refund si se cobró y nadie más se hizo cargo (catch sync ya nullea spendTxId
+      // cuando refundea ahí; path async lo transfiere al polling).
+      if (spendTxId) {
+        await refundSpend(spendTxId, error.message || "create_transformation_failed");
+        spendTxId = null;
+      }
 
       if (error.code) {
         throw error;
@@ -1182,11 +1241,23 @@ exports.createCharacterTransformation = onCall(
   },
 );
 
+// Helper: refund silencioso (no propaga errores, solo logea).
+async function refundSpend(txId, reason) {
+  if (!txId) return;
+  try {
+    await wallet._internal.refundCredits(txId, reason || "operation_failed");
+    console.log(`↩️  [refundSpend] Refund OK para txId=${txId}`);
+  } catch (refundErr) {
+    console.error(`⚠️ [refundSpend] Refund falló para txId=${txId}: ${refundErr.message}`);
+  }
+}
+
 /**
  * Función auxiliar para hacer polling de predicción y actualizar Firestore
  * @param {string|null} tempFilePath - Path del archivo temporal a limpiar cuando termine
+ * @param {string|null} spendTxId - txId del wallet a refundear si la predicción falla
  */
-async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusDocRef, characterName, tempFilePath = null) {
+async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusDocRef, characterName, tempFilePath = null, spendTxId = null) {
   let pollCount = 0;
   const maxPolls = 60; // 60 polls x 2 segundos = 2 minutos máximo
 
@@ -1257,6 +1328,8 @@ async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusD
           console.error(`❌ [PollPrediction] Falló: ${currentPrediction.error}`);
           // Limpiar archivo temporal
           await cleanupTempFile(tempFilePath);
+          // Refund de créditos: la AI falló, devolverle al padre lo que cobramos.
+          await refundSpend(spendTxId, currentPrediction.error || "prediction_failed");
           return; // Terminar polling
         case "canceled":
           await statusDocRef.update({
@@ -1268,6 +1341,8 @@ async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusD
           });
           // Limpiar archivo temporal
           await cleanupTempFile(tempFilePath);
+          // Refund de créditos: cancelado tampoco se cobra.
+          await refundSpend(spendTxId, "prediction_canceled");
 
           console.log(`⚠️ [PollPrediction] Cancelado`);
           return; // Terminar polling
@@ -1295,6 +1370,8 @@ async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusD
 
     // Limpiar archivo temporal
     await cleanupTempFile(tempFilePath);
+    // Refund: timeout no se cobra.
+    await refundSpend(spendTxId, "prediction_timeout");
 
     console.error(`⏰ [PollPrediction] Timeout después de ${pollCount} polls`);
   } catch (error) {
@@ -1316,6 +1393,8 @@ async function pollPredictionAndUpdateFirestore(replicate, predictionId, statusD
     } catch (updateError) {
       console.error(`❌ [PollPrediction] No se pudo actualizar error en Firestore: ${updateError.message}`);
     }
+    // Refund: error durante polling tampoco se cobra.
+    await refundSpend(spendTxId, error.message || "polling_error");
   }
 }
 

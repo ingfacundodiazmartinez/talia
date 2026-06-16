@@ -20,6 +20,10 @@ class ChildHomeController {
   final String childId;
   final BuildContext context;
 
+  /// Rol del usuario, ya verificado por el shell (evita re-leer users/{childId}).
+  /// Si es null, se lee de Firestore como fallback.
+  final String? userRole;
+
   // Servicios
   final LocationService _locationService;
   final NotificationService _notificationService;
@@ -32,6 +36,7 @@ class ChildHomeController {
   ChildHomeController({
     required this.childId,
     required this.context,
+    this.userRole,
     LocationService? locationService,
     NotificationService? notificationService,
     UserRoleService? userRoleService,
@@ -43,29 +48,41 @@ class ChildHomeController {
 
   /// Inicializar todos los servicios y listeners
   Future<void> initialize() async {
-    await _initializeLocationTracking();
+    // ⚡ PERF: el tracking de ubicación NO bloquea el init del shell.
+    // Antes esta cadena (delay 2s + lecturas Firestore) bloqueaba el arranque
+    // completo del home. Corre en background con sus errores contenidos.
+    unawaited(_initializeLocationTracking().catchError((e) {
+      ReleaseLogger.error('Error inicializando tracking de ubicación: $e', tag: 'ChildHomeController');
+    }));
     _listenForChatNotifications();
   }
 
   /// Inicializar tracking de ubicación
   Future<void> _initializeLocationTracking() async {
-    // Esperar un poco para que la app se cargue completamente
+    // Esperar un poco para que la app se cargue completamente antes de
+    // mostrar el dialog de permisos (ya no bloquea el init: corre en background)
     await Future.delayed(Duration(seconds: 2));
 
     // IMPORTANTE: Solo iniciar tracking si el usuario es un niño con padres vinculados
     // Esto evita solicitar permisos innecesarios a usuarios parent o adult
     ReleaseLogger.log('Verificando si debe iniciar tracking de ubicación...', tag: 'ChildHomeController');
 
-    // Verificar el rol del usuario desde Firestore
-    final userDoc = await _firestore.collection('users').doc(childId).get();
-    final userData = userDoc.data();
-    final userRole = userData?['role'] ?? 'child';
+    // ⚡ PERF: usar el rol ya verificado por el shell; solo leer Firestore como fallback
+    String role = userRole ?? '';
+    if (role.isEmpty) {
+      final userDoc = await _firestore
+          .collection('users')
+          .doc(childId)
+          .get()
+          .timeout(const Duration(seconds: 8));
+      role = (userDoc.data()?['role'] ?? 'child') as String;
+    }
 
-    ReleaseLogger.log('Role del usuario: $userRole', tag: 'ChildHomeController');
+    ReleaseLogger.log('Role del usuario: $role', tag: 'ChildHomeController');
 
     // Solo continuar si el usuario es 'child'
-    if (userRole != 'child') {
-      ReleaseLogger.log('Usuario no es child (role: $userRole) - omitiendo tracking de ubicación', tag: 'ChildHomeController');
+    if (role != 'child') {
+      ReleaseLogger.log('Usuario no es child (role: $role) - omitiendo tracking de ubicación', tag: 'ChildHomeController');
       return;
     }
 
@@ -127,9 +144,13 @@ class ChildHomeController {
   }
 
   /// Verificar si el usuario tiene padres vinculados
+  /// .timeout(): una lectura Firestore con socket suspendido se cuelga sin
+  /// tirar error; el timeout garantiza que esta verificación nunca bloquee.
   Future<bool> hasLinkedParents() async {
     try {
-      final linkedParents = await _userRoleService.getLinkedParents(childId);
+      final linkedParents = await _userRoleService
+          .getLinkedParents(childId)
+          .timeout(const Duration(seconds: 8));
       return linkedParents.isNotEmpty;
     } catch (e) {
       ReleaseLogger.error('Error verificando padres vinculados: $e', tag: 'ChildHomeController');
@@ -140,7 +161,9 @@ class ChildHomeController {
   /// Obtener el ID del primer padre vinculado
   Future<String?> getLinkedParentId() async {
     try {
-      final linkedParents = await _userRoleService.getLinkedParents(childId);
+      final linkedParents = await _userRoleService
+          .getLinkedParents(childId)
+          .timeout(const Duration(seconds: 8));
       return linkedParents.isNotEmpty ? linkedParents.first : null;
     } catch (e) {
       ReleaseLogger.error('Error obteniendo padre vinculado: $e', tag: 'ChildHomeController');
