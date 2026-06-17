@@ -178,16 +178,20 @@ class ContactPhotoCacheService {
             '👤 [ProfileCache] Name changed for $userId: $oldName -> $newName');
       }
 
-      // Emitir evento para que los widgets se re-rendericen
-      _profileUpdateController.add(UserProfileUpdateEvent(
-        userId: userId,
-        newPhotoUrl: newPhotoUrl,
-        oldPhotoUrl: oldPhotoUrl,
-        newName: newName,
-        oldName: oldName,
-        photoChanged: photoChanged,
-        nameChanged: nameChanged,
-      ));
+      // Emitir evento para que los widgets se re-rendericen.
+      // Guarda: un snapshot puede llegar después de close() (logout). Evita
+      // "Bad state: Cannot add new events after calling close".
+      if (!_profileUpdateController.isClosed) {
+        _profileUpdateController.add(UserProfileUpdateEvent(
+          userId: userId,
+          newPhotoUrl: newPhotoUrl,
+          oldPhotoUrl: oldPhotoUrl,
+          newName: newName,
+          oldName: oldName,
+          photoChanged: photoChanged,
+          nameChanged: nameChanged,
+        ));
+      }
     }
   }
 
@@ -289,11 +293,16 @@ class ContactPhotoCacheService {
         ReleaseLogger.log(
             '🏷️ [ProfileCache] Alias changed for $contactId: "$oldAlias" -> "$newAlias"');
 
-        _aliasUpdateController.add(AliasUpdateEvent(
-          contactId: contactId,
-          newAlias: newAlias,
-          oldAlias: oldAlias,
-        ));
+        // Guarda: un snapshot del listener puede dispararse después de close()
+        // (logout) o si el controller quedó cerrado. Evita el crash
+        // "Cannot add new events after calling close".
+        if (!_aliasUpdateController.isClosed) {
+          _aliasUpdateController.add(AliasUpdateEvent(
+            contactId: contactId,
+            newAlias: newAlias,
+            oldAlias: oldAlias,
+          ));
+        }
       }
     }
 
@@ -560,13 +569,19 @@ class ContactPhotoCacheService {
     ReleaseLogger.log('🧹 [PhotoCache] Cleared ALL cached photos');
   }
 
-  /// Dispose: Stop all listeners
-  void dispose() {
+  /// Reset para logout: cancela todos los listeners y limpia caches, PERO NO
+  /// cierra los StreamController. Este servicio es un singleton que se reutiliza
+  /// tras re-login; cerrar los controllers (broadcast, final) los dejaría
+  /// inutilizables y el próximo startAliasListener() crashearía con
+  /// "Cannot add new events after calling close". Usar esto en el logout.
+  void resetForLogout() {
     _contactsSubscription?.cancel();
+    _contactsSubscription = null;
 
     for (final subscription in _userPhotoSubscriptions.values) {
       subscription.cancel();
     }
+    _userPhotoSubscriptions.clear();
 
     // ✅ También limpiar lazy listeners
     for (final subscription in _lazyListeners.values) {
@@ -575,18 +590,24 @@ class ContactPhotoCacheService {
     _lazyListeners.clear();
     _listenerRefCount.clear();
     _userProfileCache.clear();
-    _profileUpdateController.close();
 
     // ✅ Limpiar alias listener
     _aliasListener?.cancel();
     _aliasListener = null;
     _aliasCache.clear();
-    _aliasUpdateController.close();
 
-    _userPhotoSubscriptions.clear();
     _trackedUserIds.clear();
     _photoCache.clear();
 
+    ReleaseLogger.log('🧹 [ProfileCache] Reset for logout (controllers kept open)');
+  }
+
+  /// Dispose real: cancela listeners, limpia caches Y cierra los controllers.
+  /// Solo para teardown definitivo (no para logout, ver [resetForLogout]).
+  void dispose() {
+    resetForLogout();
+    _profileUpdateController.close();
+    _aliasUpdateController.close();
     ReleaseLogger.log('🛑 [ProfileCache] Disposed');
   }
 

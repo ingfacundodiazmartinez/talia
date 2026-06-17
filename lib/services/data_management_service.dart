@@ -651,9 +651,11 @@ class DataManagementService {
       // ✅ FIX: Limpiar ContactPhotoCacheService (fotos y nombres de contactos)
       try {
         final photoCache = ContactPhotoCacheService();
-        photoCache.stopAliasListener();
         photoCache.clearAll();
-        photoCache.dispose();
+        // ✅ resetForLogout (no dispose): el singleton se reutiliza tras
+        // re-login. dispose() cerraba los StreamController y el siguiente
+        // startAliasListener() crasheaba con "Cannot add new events after close".
+        photoCache.resetForLogout();
         ReleaseLogger.log('✅ ContactPhotoCacheService cleared', tag: 'DataManagementService');
       } catch (e) {
         ReleaseLogger.log('⚠️ Could not clear ContactPhotoCacheService: $e', tag: 'DataManagementService');

@@ -1277,9 +1277,11 @@ class StoryCameraController {
         musicDisplayMode: musicDisplayMode,
         musicLyricsTimings: musicLyricsTimings,
         onProgressUpdate: (storyId, progress) {
-          // Actualizar progreso en el servicio global
-          _uploadProgressService.updateProgress(storyId, progress);
-          ReleaseLogger.log('📊 Progreso de subida: ${(progress * 100).toInt()}%', tag: 'StoryCameraController');
+          // Defensa: progress podría no ser finito (NaN/Infinity). `.toInt()`
+          // sobre NaN lanza UnsupportedError, así que normalizamos antes.
+          final safe = progress.isFinite ? progress.clamp(0.0, 1.0) : 0.0;
+          _uploadProgressService.updateProgress(storyId, safe);
+          ReleaseLogger.log('📊 Progreso de subida: ${(safe * 100).toInt()}%', tag: 'StoryCameraController');
         },
       );
 

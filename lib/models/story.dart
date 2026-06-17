@@ -6,6 +6,7 @@ enum StoryStatus {
   approved,   // Aprobada y visible para contactos
   rejected,   // Rechazada por el padre
   expired,    // Expirada (24h)
+  failed,     // Falló la subida; se guarda localmente para reintentar
 }
 
 enum StoryVisibility {
@@ -280,6 +281,8 @@ class Story {
         return StoryStatus.rejected;
       case 'expired':
         return StoryStatus.expired;
+      case 'failed':
+        return StoryStatus.failed;
       case 'pending':
       default:
         return StoryStatus.pending;
@@ -364,6 +367,9 @@ class Story {
   // Verificar si la historia está subiendo
   bool get isUploading => status == StoryStatus.uploading;
 
+  // Verificar si la subida falló (se guarda localmente para reintentar)
+  bool get isFailed => status == StoryStatus.failed;
+
   // Obtener texto descriptivo del estado
   String get statusText {
     switch (status) {
@@ -377,6 +383,8 @@ class Story {
         return 'Rechazada';
       case StoryStatus.expired:
         return 'Expirada';
+      case StoryStatus.failed:
+        return 'No se pudo subir';
     }
   }
 

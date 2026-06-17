@@ -23,7 +23,10 @@ import '../services/trivia/trivia_creation_service.dart';
 import '../services/video_cache_service.dart';
 import '../services/deep_link_service.dart';
 import '../services/bottom_nav_visibility.dart';
+import '../services/chats/create_chat_service.dart';
 import '../utils/release_logger.dart';
+import '../utils/official.dart';
+import 'chat_detail_screen.dart';
 import '../widgets/story_native_ad_widget.dart';
 import '../widgets/mood_poll_story_widget.dart';
 import 'story_viewer/widgets/story_content_widget.dart';
@@ -1045,6 +1048,69 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
     }
   }
 
+  /// Reposiciona el PageController de historias en [page] de forma confiable.
+  ///
+  /// Al cambiar de usuario (sobre todo con swipe de vuelta a un usuario ya
+  /// visto), el PageView interno de ese usuario está preservado por key y
+  /// conserva su última página. El controller compartido recién se ata a ese
+  /// PageView en el frame del cambio, así que un solo `jumpToPage` con guarda
+  /// `hasClients` a veces se saltea (queda en la última historia mientras el
+  /// progreso muestra la primera). Reintentamos por unos frames hasta que el
+  /// controller esté atachado y la página sea la correcta.
+  void _resetStoryPageController(int page, {int attempts = 8}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_storyPageController.hasClients && _storyPageController.position.haveDimensions) {
+        final current = _storyPageController.page?.round();
+        if (current != page) {
+          _storyPageController.jumpToPage(page);
+        }
+      } else if (attempts > 0) {
+        _resetStoryPageController(page, attempts: attempts - 1);
+      }
+    });
+  }
+
+  /// Abre el chat con el dueño de la historia actual al tocar su foto.
+  /// Solo para historias de contactos (no propias ni de la cuenta oficial).
+  Future<void> _openChatWithStoryOwner() async {
+    final ownerId = _getCurrentStoryUserId();
+    final me = _controller.currentUserId;
+    if (ownerId == null || ownerId.isEmpty) return;
+    if (ownerId == me) return; // historia propia
+    if (Official.isOfficialUser(ownerId)) return; // cuenta oficial
+
+    String ownerName = '';
+    if (_allUserStories.isNotEmpty && _currentUserIndex < _allUserStories.length) {
+      ownerName = _allUserStories[_currentUserIndex].userName;
+    }
+
+    _pauseStoryTimer();
+    try {
+      final result = await CreateChatService().call(otherUserId: ownerId);
+      if (!mounted) return;
+      if (result.success && result.chatId != null) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ChatDetailScreen(
+              chatId: result.chatId!,
+              contactId: ownerId,
+              contactName: ownerName,
+            ),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result.message)),
+        );
+      }
+    } catch (e) {
+      ReleaseLogger.error('Error abriendo chat desde historia: $e', tag: 'StoryViewer');
+    } finally {
+      if (mounted) _resumeStoryTimer();
+    }
+  }
+
   void _nextStory() {
     // ✅ Usar modelo unificado si está disponible
     final totalItems = _userContentList.isNotEmpty && _currentUserIndex < _userContentList.length
@@ -1183,12 +1249,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         _isCurrentStoryLoaded = false; // Reset para el nuevo item
       });
       // ✅ FIX: Resetear el PageController de historias al índice correcto
-      // Esto evita que se muestre la misma historia repetida
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_storyPageController.hasClients) {
-          _storyPageController.jumpToPage(_currentStoryIndex);
-        }
-      });
+      // (reintenta hasta que el controller esté atachado al nuevo usuario)
+      _resetStoryPageController(_currentStoryIndex);
       _userPageController.nextPage(
         duration: Duration(milliseconds: 300),
         curve: Curves.easeInOut,
@@ -1264,11 +1326,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
         _isCurrentStoryLoaded = false; // Reset para el nuevo item
       });
       // ✅ FIX: Resetear el PageController de historias al índice correcto
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_storyPageController.hasClients) {
-          _storyPageController.jumpToPage(_currentStoryIndex);
-        }
-      });
+      // (reintenta hasta que el controller esté atachado al nuevo usuario)
+      _resetStoryPageController(_currentStoryIndex);
       _userPageController.previousPage(
         duration: Duration(milliseconds: 300),
         curve: Curves.easeInOut,
@@ -2120,11 +2179,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
                 _markCurrentStoryAsViewed();
 
                 // ✅ FIX: Resetear el PageController de historias al índice 0
-                WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (_storyPageController.hasClients) {
-                    _storyPageController.jumpToPage(0);
-                  }
-                });
+                // de forma confiable (reintenta hasta que esté atachado).
+                _resetStoryPageController(0);
 
                 // Si es swipe hacia adelante, verificar si mostrar ad
                 if (isGoingForward) {
@@ -2200,6 +2256,8 @@ class _StoryViewerScreenState extends State<StoryViewerScreen>
               onResumeTimer: _onBottomSheetClosed,
               // ✅ Pasar userContentList para soporte de trivias
               userContentList: _userContentList,
+              // Tocar la foto del contacto abre su chat
+              onAvatarTap: _openChatWithStoryOwner,
             ),
 
             // Campo de respuesta (con botón de like) - Solo mostrar para historias

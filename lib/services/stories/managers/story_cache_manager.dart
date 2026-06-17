@@ -247,6 +247,20 @@ class StoryCacheManager {
     _notifyCacheChange();
   }
 
+  /// Inserta o reemplaza una historia en el cache optimista por su id.
+  /// Útil para historias fallidas (reemplaza la versión uploading por la failed,
+  /// o la agrega si no estaba, ej. al rehidratar tras reiniciar la app).
+  void updateOrAddOptimisticStory(String userId, Story story) {
+    final existing = _optimisticCache[userId];
+    final alreadyThere =
+        existing?.stories.any((s) => s.id == story.id) ?? false;
+    if (alreadyThere) {
+      updateOptimisticStory(userId, story.id, story);
+    } else {
+      addOptimisticStory(userId, story);
+    }
+  }
+
   /// Actualizar historia optimista (ej: cuando upload completa)
   void updateOptimisticStory(String userId, String storyId, Story updatedStory) {
     final userStories = _optimisticCache[userId];

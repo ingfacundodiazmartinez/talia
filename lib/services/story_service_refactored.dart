@@ -103,6 +103,18 @@ class StoryService {
     return _orchestrator.storiesFromCache;
   }
 
+  /// Carga historias fallidas persistidas al cache (al iniciar la app)
+  Future<void> loadFailedStoriesIntoCache() =>
+      _orchestrator.loadFailedStoriesIntoCache();
+
+  /// Reintenta subir una historia fallida
+  Future<bool> retryFailedStory(String storyId) =>
+      _orchestrator.retryFailedStory(storyId);
+
+  /// Descarta una historia fallida
+  Future<void> discardFailedStory(String storyId) =>
+      _orchestrator.discardFailedStory(storyId);
+
   /// Obtener cache actual (snapshot síncrono)
   List<UserStories> getCachedStories() {
     return _orchestrator.getCachedStories();

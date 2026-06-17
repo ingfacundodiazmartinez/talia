@@ -40,6 +40,10 @@ class _StoriesSectionState extends State<StoriesSection> {
     // Forzar inicio de background stream como fallback
     storyService.startBackgroundCacheUpdates();
 
+    // Rehidratar historias que fallaron al subir (persistidas localmente) para
+    // que el usuario pueda reintentarlas aunque haya cerrado la app.
+    storyService.loadFailedStoriesIntoCache();
+
     // CRÍTICO: Usar storiesFromCache que reacciona a los background streams
     _storiesStream = storyService.storiesFromCache;
 
@@ -468,6 +472,9 @@ class _StoriesSectionState extends State<StoriesSection> {
         case StoryStatus.expired:
           borderColor = Colors.grey;
           break;
+        case StoryStatus.failed:
+          borderColor = Colors.red;
+          break;
       }
     } else {
       // Para otros usuarios, usar lógica estándar
@@ -491,6 +498,11 @@ class _StoriesSectionState extends State<StoriesSection> {
     return GestureDetector(
       key: key,
       onTap: () {
+        // Historia propia que falló al subir → ofrecer reintentar / descartar.
+        if (isCurrentUser && latestStory != null && latestStory.isFailed) {
+          _showFailedStorySheet(context, latestStory);
+          return;
+        }
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => StoryViewerScreen(
@@ -648,6 +660,22 @@ class _StoriesSectionState extends State<StoriesSection> {
                         child: Icon(Icons.close, size: 8, color: Colors.white),
                       ),
                     ),
+                  // Falló la subida: ícono de reintento (tocá el ring para reintentar)
+                  if (isCurrentUser && latestStory != null && latestStory.isFailed)
+                    Positioned(
+                      bottom: 2,
+                      right: 2,
+                      child: Container(
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: const Icon(Icons.refresh, size: 9, color: Colors.white),
+                      ),
+                    ),
                   if (!isCurrentUser && userStories.hasUnviewed && !hasActiveTrivias)
                     Positioned(
                       bottom: 2,
@@ -800,9 +828,103 @@ class _StoriesSectionState extends State<StoriesSection> {
         return Colors.red[700];
       case StoryStatus.expired:
         return Colors.grey[600];
+      case StoryStatus.failed:
+        return Colors.red[700];
       case StoryStatus.approved:
         return Theme.of(context).textTheme.bodySmall?.color;
     }
+  }
+
+  /// Hoja de acción para una historia propia que falló al subir.
+  void _showFailedStorySheet(BuildContext context, Story story) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        final cs = Theme.of(sheetContext).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: cs.onSurfaceVariant.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                Row(
+                  children: [
+                    const Icon(Icons.error_outline, color: Colors.red),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Tu historia no se pudo subir',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: cs.onSurface,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Quedó guardada en tu teléfono. Podés reintentar la subida o descartarla.',
+                  style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant),
+                ),
+                const SizedBox(height: 20),
+                FilledButton.icon(
+                  onPressed: () => _retryFailedStory(sheetContext, story.id),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Reintentar'),
+                ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: () => _discardFailedStory(sheetContext, story.id),
+                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  label: const Text('Descartar', style: TextStyle(color: Colors.red)),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _retryFailedStory(BuildContext sheetContext, String storyId) async {
+    final messenger = ScaffoldMessenger.of(context);
+    Navigator.of(sheetContext).pop();
+    try {
+      await storyService.retryFailedStory(storyId);
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Reintentando subir tu historia...')),
+      );
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo subir de nuevo. Quedó guardada para reintentar.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _discardFailedStory(BuildContext sheetContext, String storyId) async {
+    Navigator.of(sheetContext).pop();
+    await storyService.discardFailedStory(storyId);
   }
 }
 

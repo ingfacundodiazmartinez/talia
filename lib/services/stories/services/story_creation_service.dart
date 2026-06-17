@@ -12,6 +12,7 @@ import '../../../models/story.dart';
 import '../../../services/media_compression_service.dart';
 import '../../../services/optimistic_story_media_cache.dart';
 import '../../../utils/release_logger.dart';
+import '../failed_story_store.dart';
 
 /// Servicio especializado para creación y eliminación de historias
 ///
@@ -87,6 +88,7 @@ class StoryCreationService {
 
     // 1. Generar ID temporal
     final tempStoryId = _generateTempStoryId();
+    Story? builtOptimistic;
 
     try {
       // 2. Crear historia optimista
@@ -107,6 +109,7 @@ class StoryCreationService {
         musicDisplayMode: musicDisplayMode,
         musicLyricsTimings: musicLyricsTimings,
       );
+      builtOptimistic = optimisticStory;
 
       // 3. Agregar a cache optimista (aparece inmediatamente en UI)
       _cacheManager.addOptimisticStory(currentUserId, optimisticStory);
@@ -138,11 +141,171 @@ class StoryCreationService {
 
       return tempStoryId;
     } catch (e) {
-      // Si el proceso falló después de crear la historia optimista, limpiarla
-      _cacheManager.removeOptimisticStory(currentUserId, tempStoryId);
-      OptimisticStoryMediaCache().clear(tempStoryId);
+      // En vez de descartar la historia (se perdía al cerrar la app), la
+      // guardamos localmente como "fallida" para poder reintentarla.
+      await _persistFailedStory(
+        tempStoryId: tempStoryId,
+        userId: currentUserId,
+        userName: builtOptimistic?.userName ?? 'Usuario',
+        userPhotoURL: builtOptimistic?.userPhotoURL,
+        mediaType: mediaType,
+        sourceMediaPath: mediaPath,
+        caption: text,
+        aiGenerated: aiGenerated,
+        musicUrl: musicUrl,
+        musicPrompt: musicPrompt,
+        musicLyrics: musicLyrics,
+        musicStartMs: musicStartMs,
+        musicClipMs: musicClipMs,
+        musicTitle: musicTitle,
+        musicDisplayMode: musicDisplayMode,
+        musicLyricsTimings: musicLyricsTimings,
+        error: e.toString(),
+      );
 
-      // Re-lanzar el error original para que el UI pueda manejarlo
+      // Re-lanzar el error original para que el UI pueda mostrar el aviso.
+      rethrow;
+    }
+  }
+
+  /// Guarda una historia fallida en el store persistente y la deja visible en
+  /// el cache optimista con estado `failed` (con botón de reintento en la UI).
+  Future<void> _persistFailedStory({
+    required String tempStoryId,
+    required String userId,
+    required String userName,
+    String? userPhotoURL,
+    required String mediaType,
+    String? sourceMediaPath,
+    String? caption,
+    bool aiGenerated = false,
+    String? musicUrl,
+    String? musicPrompt,
+    String? musicLyrics,
+    int? musicStartMs,
+    int? musicClipMs,
+    String? musicTitle,
+    String? musicDisplayMode,
+    List<Map<String, dynamic>>? musicLyricsTimings,
+    String? error,
+  }) async {
+    try {
+      final record = await FailedStoryStore().save(
+        id: tempStoryId,
+        userId: userId,
+        userName: userName,
+        userPhotoURL: userPhotoURL,
+        mediaType: mediaType,
+        sourceMediaPath: sourceMediaPath,
+        caption: caption,
+        aiGenerated: aiGenerated,
+        musicUrl: musicUrl,
+        musicPrompt: musicPrompt,
+        musicLyrics: musicLyrics,
+        musicStartMs: musicStartMs,
+        musicClipMs: musicClipMs,
+        musicTitle: musicTitle,
+        musicDisplayMode: musicDisplayMode,
+        musicLyricsTimings: musicLyricsTimings ?? const [],
+        createdAtMs: DateTime.now().millisecondsSinceEpoch,
+        error: error,
+      );
+
+      // Mostrar la historia fallida en la UI apuntando al media persistido.
+      if (record.localMediaPath != null) {
+        OptimisticStoryMediaCache().set(tempStoryId, record.localMediaPath!);
+      } else {
+        OptimisticStoryMediaCache().clear(tempStoryId);
+      }
+      _cacheManager.updateOrAddOptimisticStory(userId, record.toStory());
+    } catch (e) {
+      // Si ni siquiera pudimos persistir, al menos removemos la optimista rota.
+      ReleaseLogger.error('No se pudo persistir historia fallida: $e',
+          tag: 'StoryCreation');
+      _cacheManager.removeOptimisticStory(userId, tempStoryId);
+      OptimisticStoryMediaCache().clear(tempStoryId);
+    }
+  }
+
+  /// Carga las historias fallidas persistidas al cache optimista (al iniciar).
+  Future<void> loadFailedStoriesIntoCache() async {
+    final currentUserId = _storyRepository.currentUserId;
+    if (currentUserId == null) return;
+    final records = await FailedStoryStore().getForUser(currentUserId);
+    for (final r in records) {
+      if (r.localMediaPath != null) {
+        OptimisticStoryMediaCache().set(r.id, r.localMediaPath!);
+      }
+      _cacheManager.updateOrAddOptimisticStory(currentUserId, r.toStory());
+    }
+  }
+
+  /// Descarta una historia fallida (la borra del store y de la UI).
+  Future<void> discardFailedStory(String storyId) async {
+    final currentUserId = _storyRepository.currentUserId;
+    await FailedStoryStore().remove(storyId);
+    OptimisticStoryMediaCache().clear(storyId);
+    if (currentUserId != null) {
+      _cacheManager.removeOptimisticStory(currentUserId, storyId);
+    }
+  }
+
+  /// Reintenta subir una historia fallida. Devuelve true si quedó encolada.
+  Future<bool> retryFailedStory(String storyId) async {
+    final currentUserId = _storyRepository.currentUserId;
+    if (currentUserId == null) return false;
+    final records = await FailedStoryStore().getForUser(currentUserId);
+    final matches = records.where((r) => r.id == storyId).toList();
+    if (matches.isEmpty) return false;
+    final r = matches.first;
+
+    // Sacamos la versión fallida de la UI; el flujo de creación agrega una nueva
+    // historia optimista (en estado uploading) con su propio id.
+    _cacheManager.removeOptimisticStory(currentUserId, storyId);
+
+    try {
+      if (r.isMusicOnly) {
+        if (r.musicUrl == null) throw Exception('musicUrl ausente');
+        await createMusicOnlyStory(
+          musicUrl: r.musicUrl!,
+          musicPrompt: r.musicPrompt,
+          musicLyrics: r.musicLyrics,
+          musicStartMs: r.musicStartMs,
+          musicClipMs: r.musicClipMs,
+          musicTitle: r.musicTitle,
+          musicDisplayMode: r.musicDisplayMode,
+          musicLyricsTimings: r.musicLyricsTimings,
+          caption: r.caption,
+        );
+      } else {
+        final path = r.localMediaPath;
+        if (path == null || !await File(path).exists()) {
+          throw Exception('El archivo de la historia ya no está disponible');
+        }
+        await createStory(
+          mediaType: r.mediaType,
+          mediaPath: path,
+          text: r.caption,
+          aiGenerated: r.aiGenerated,
+          musicUrl: r.musicUrl,
+          musicPrompt: r.musicPrompt,
+          musicLyrics: r.musicLyrics,
+          musicStartMs: r.musicStartMs,
+          musicClipMs: r.musicClipMs,
+          musicTitle: r.musicTitle,
+          musicDisplayMode: r.musicDisplayMode,
+          musicLyricsTimings: r.musicLyricsTimings,
+        );
+      }
+      // Éxito: borrar el registro fallido persistido.
+      await FailedStoryStore().remove(storyId);
+      return true;
+    } catch (e) {
+      // createStory/createMusicOnlyStory ya re-persistió el fallo con un id
+      // nuevo; borramos el registro viejo para no duplicar.
+      await FailedStoryStore().remove(storyId);
+      ReleaseLogger.warning('Reintento de historia falló de nuevo: $e',
+          tag: 'StoryCreation');
       rethrow;
     }
   }
@@ -526,8 +689,12 @@ class StoryCreationService {
 
     final tempStoryId = _generateTempStoryId();
 
+    String failUserName = 'Usuario';
+    String? failUserPhoto;
     try {
       final userInfo = await _contactRepository.getUserInfo(currentUserId);
+      failUserName = userInfo?['name'] ?? 'Usuario';
+      failUserPhoto = userInfo?['photoURL'];
       final now = DateTime.now();
       final expiresAt = now.add(Duration(hours: 24));
 
@@ -604,7 +771,25 @@ class StoryCreationService {
 
       return tempStoryId;
     } catch (e) {
-      _cacheManager.removeOptimisticStory(currentUserId, tempStoryId);
+      // Guardar como fallida para reintentar (la canción ya está en Storage).
+      await _persistFailedStory(
+        tempStoryId: tempStoryId,
+        userId: currentUserId,
+        userName: failUserName,
+        userPhotoURL: failUserPhoto,
+        mediaType: 'music',
+        caption: caption,
+        aiGenerated: true,
+        musicUrl: musicUrl,
+        musicPrompt: musicPrompt,
+        musicLyrics: musicLyrics,
+        musicStartMs: musicStartMs,
+        musicClipMs: musicClipMs,
+        musicTitle: musicTitle,
+        musicDisplayMode: musicDisplayMode,
+        musicLyricsTimings: musicLyricsTimings,
+        error: e.toString(),
+      );
       ReleaseLogger.error('Error creando música story: $e', tag: 'StoryCreation');
       rethrow;
     }

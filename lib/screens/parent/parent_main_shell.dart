@@ -10,6 +10,7 @@ import 'group_invitations_screen.dart';
 import '../chat_detail_screen.dart';
 import '../../groups/groups.dart'; // Groups V2
 import '../story_approval_screen.dart';
+import '../story_notification_loader_screen.dart';
 import '../trivia/trivia_results_screen.dart';
 import 'dashboard/widgets/child_notifications_screen.dart';
 import '../../controllers/parent_main_shell_controller.dart';
@@ -348,9 +349,28 @@ class _ParentMainShellState extends State<ParentMainShell> {
 
       ReleaseLogger.log('Story notification tap: type=$type, storyId=$storyId, ownerId=$storyOwnerId', tag: 'ParentMainShell');
 
-      // Navegar al dashboard donde las historias son visibles
-      // El StoryViewerScreen requiere cargar las historias del usuario primero
-      // Por ahora, llevamos al usuario al dashboard para ver historias
+      // "X tiene una nueva historia": abrir la historia directamente, pero a
+      // través de una pantalla de loading que primero se asegura de que la
+      // historia esté detectada en el cache (la recién creada puede no haber
+      // sincronizado aún). Antes esto mandaba al dashboard.
+      if (type == 'new_story' &&
+          storyId != null && storyId.isNotEmpty &&
+          storyOwnerId != null && storyOwnerId.isNotEmpty) {
+        // Asegurar que estamos en el dashboard de fondo (al cerrar la historia
+        // queda en un lugar coherente).
+        setState(() => _selectedIndex = 0);
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => StoryNotificationLoaderScreen(
+              storyId: storyId,
+              ownerId: storyOwnerId,
+            ),
+          ),
+        );
+        return;
+      }
+
+      // Resto de tipos (story_approved/rejected/reply): comportamiento previo.
       setState(() => _selectedIndex = 0);
     } catch (e) {
       ReleaseLogger.error('Error handling story notification tap: $e', tag: 'ParentMainShell');

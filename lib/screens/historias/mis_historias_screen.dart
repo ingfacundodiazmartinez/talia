@@ -201,6 +201,8 @@ class _MisHistoriasScreenState extends State<MisHistoriasScreen> {
         return 'Expirada';
       case StoryStatus.uploading:
         return 'Subiendo...';
+      case StoryStatus.failed:
+        return 'No se pudo subir';
       case StoryStatus.approved:
         return '';
     }

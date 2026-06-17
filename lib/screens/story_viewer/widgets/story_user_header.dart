@@ -19,6 +19,7 @@ class StoryUserHeader extends StatefulWidget {
   final VoidCallback onClose;
   final VoidCallback? onPauseTimer; // ✅ Pausar timer al abrir menú
   final VoidCallback? onResumeTimer; // ✅ Reanudar timer al cerrar menú
+  final VoidCallback? onAvatarTap; // Tocar la foto del contacto abre su chat
 
   const StoryUserHeader({
     super.key,
@@ -33,6 +34,7 @@ class StoryUserHeader extends StatefulWidget {
     required this.onClose,
     this.onPauseTimer,
     this.onResumeTimer,
+    this.onAvatarTap,
   });
 
   @override
@@ -119,8 +121,14 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          // Avatar con borde para mejor visibilidad
-          Container(
+          // Avatar con borde. Tocarlo abre el chat del contacto (no en
+          // historias propias ni en la cuenta oficial de Talia).
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: (widget.onAvatarTap != null && !widget.isCurrentUser && !_isOfficial)
+                ? widget.onAvatarTap
+                : null,
+            child: Container(
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               boxShadow: [
@@ -156,6 +164,7 @@ class _StoryUserHeaderState extends State<StoryUserHeader> {
                         shadows: _textShadows,
                       ),
                     ),
+            ),
             ),
           ),
           const SizedBox(width: 12),

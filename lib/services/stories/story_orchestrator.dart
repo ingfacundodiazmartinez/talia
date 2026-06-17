@@ -178,6 +178,18 @@ class StoryOrchestrator {
     );
   }
 
+  /// Carga historias fallidas persistidas al cache (al iniciar la app)
+  Future<void> loadFailedStoriesIntoCache() =>
+      _creationService.loadFailedStoriesIntoCache();
+
+  /// Reintenta subir una historia fallida
+  Future<bool> retryFailedStory(String storyId) =>
+      _creationService.retryFailedStory(storyId);
+
+  /// Descarta una historia fallida
+  Future<void> discardFailedStory(String storyId) =>
+      _creationService.discardFailedStory(storyId);
+
   /// Crear historia de mood (respuesta a encuesta)
   Future<String> createMoodStory({
     required String emoji,

@@ -81,6 +81,7 @@ class StoryOverlayWidget extends StatelessWidget {
   final Function(DateTime) formatStoryTime;
   final VoidCallback? onPauseTimer;
   final VoidCallback? onResumeTimer;
+  final VoidCallback? onAvatarTap;
 
   // ✅ Parámetros opcionales para soporte de trivias
   final List<UserContent>? userContentList;
@@ -104,6 +105,7 @@ class StoryOverlayWidget extends StatelessWidget {
     this.onPauseTimer,
     this.onResumeTimer,
     this.userContentList,
+    this.onAvatarTap,
   });
 
   @override
@@ -213,6 +215,8 @@ class StoryOverlayWidget extends StatelessWidget {
                 // ✅ Pausar/reanudar timer para el menú de opciones
                 onPauseTimer: onPauseTimer,
                 onResumeTimer: onResumeTimer,
+                // Tocar la foto del contacto abre su chat
+                onAvatarTap: onAvatarTap,
               ),
 
               // ✨ CTA sutil: solo en historias generadas con IA de OTROS usuarios.

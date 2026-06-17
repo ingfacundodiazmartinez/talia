@@ -1418,7 +1418,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
       ReleaseLogger.log('Pending report $pendingReportId: $status ($progress%) - $progressMessage', tag: 'ReportsScreen');
 
       if (status == 'completed') {
-        // Refresh UI to show the new report
+        final noData = data['noData'] == true;
+        if (noData) {
+          // El reporte terminó pero no había actividad suficiente. Avisar para
+          // que el padre no quede esperando indefinidamente.
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'No hubo suficiente actividad de $childName esta semana para un reporte',
+              ),
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+        // Refresh UI to show the new report (si lo hay)
         setState(() {});
       } else if (status == 'failed') {
         ScaffoldMessenger.of(context).showSnackBar(

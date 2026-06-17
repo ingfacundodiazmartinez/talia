@@ -766,6 +766,66 @@ exports.generateChildReport = onCall(
 // ═══════════════════════════════════════════════════════════════
 
 /**
+ * Envía una notificación push al padre sobre su reporte. Centralizado para
+ * usarlo tanto en el camino de éxito como en el de "sin datos" (antes el
+ * noData salía sin avisar y el padre quedaba esperando para siempre).
+ */
+async function sendReportNotification(db, parentId, { title, body, data }) {
+  try {
+    const parentDoc = await db.collection("users").doc(parentId).get();
+    if (!parentDoc.exists || !parentDoc.data().fcmToken) {
+      console.log(`⚠️ Padre ${parentId} sin fcmToken; no se envía notificación`);
+      return;
+    }
+
+    // Preferencias de sonido/vibración → canal Android.
+    let soundEnabled = true;
+    let vibrationEnabled = true;
+    try {
+      const prefsDoc = await db.collection("notification_preferences").doc(parentId).get();
+      if (prefsDoc.exists) {
+        soundEnabled = prefsDoc.data().soundEnabled !== false;
+        vibrationEnabled = prefsDoc.data().vibrationEnabled !== false;
+      }
+    } catch (e) { /* defaults */ }
+
+    let channelId;
+    if (soundEnabled && vibrationEnabled) {
+      channelId = "talia_sound_vibration";
+    } else if (soundEnabled && !vibrationEnabled) {
+      channelId = "talia_sound_only";
+    } else if (!soundEnabled && vibrationEnabled) {
+      channelId = "talia_vibration_only";
+    } else {
+      channelId = "talia_silent";
+    }
+
+    await getMessaging().send({
+      token: parentDoc.data().fcmToken,
+      notification: { title, body },
+      data: data,
+      android: {
+        priority: "high",
+        notification: { channelId, clickAction: "FLUTTER_NOTIFICATION_CLICK" },
+      },
+      apns: {
+        headers: { "apns-priority": "10" },
+        payload: {
+          aps: {
+            alert: { title, body },
+            ...(soundEnabled && { sound: "default" }),
+          },
+        },
+      },
+    });
+    console.log(`📱 Notificación enviada a padre ${parentId}`);
+  } catch (notifError) {
+    console.error(`⚠️ Error enviando notificación:`, notifError);
+    // No fallar el reporte por esto.
+  }
+}
+
+/**
  * Trigger: Cuando se crea un pending_report, procesar en background
  */
 exports.onPendingReportCreated = onDocumentCreated(
@@ -961,6 +1021,18 @@ exports.onPendingReportCreated = onDocumentCreated(
           progressMessage: "No hay datos para analizar",
           completedAt: new Date(),
           noData: true,
+        });
+        // ✅ Avisar igual al padre: antes salíamos sin notificar y el padre
+        // quedaba esperando para siempre la notificación prometida.
+        await sendReportNotification(db, parentId, {
+          title: "Reporte de " + childName,
+          body: `No hubo suficiente actividad de ${childName} esta semana para generar un reporte.`,
+          data: {
+            type: "report_no_data",
+            reportId: reportId,
+            childId: childId,
+            childName: childName,
+          },
         });
         return; // Salir sin error, pero sin generar reporte
       }
@@ -1166,71 +1238,16 @@ exports.onPendingReportCreated = onDocumentCreated(
       console.log(`✅ Pending report ${reportId} marcado como completado`);
 
       // 10. Enviar notificación push al padre
-      try {
-        const parentDoc = await db.collection("users").doc(parentId).get();
-        if (parentDoc.exists && parentDoc.data().fcmToken) {
-          // ✅ Fetch user notification preferences
-          let notificationPrefs = { soundEnabled: true, vibrationEnabled: true };
-          try {
-            const prefsDoc = await db.collection("notification_preferences").doc(parentId).get();
-            if (prefsDoc.exists) {
-              notificationPrefs.soundEnabled = prefsDoc.data().soundEnabled !== false;
-              notificationPrefs.vibrationEnabled = prefsDoc.data().vibrationEnabled !== false;
-            }
-          } catch (e) { /* use defaults */ }
-
-          // ✅ Select channel based on combination of sound/vibration preferences
-          let channelId;
-          if (notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
-            channelId = "talia_sound_vibration";
-          } else if (notificationPrefs.soundEnabled && !notificationPrefs.vibrationEnabled) {
-            channelId = "talia_sound_only";
-          } else if (!notificationPrefs.soundEnabled && notificationPrefs.vibrationEnabled) {
-            channelId = "talia_vibration_only";
-          } else {
-            channelId = "talia_silent";
-          }
-
-          const messaging = getMessaging();
-          await messaging.send({
-            token: parentDoc.data().fcmToken,
-            notification: {
-              title: "Reporte listo",
-              body: `El reporte de ${childName} ya está disponible`,
-            },
-            data: {
-              type: "report_ready",
-              reportId: finalReportId,
-              childId: childId,
-              childName: childName,
-            },
-            android: {
-              priority: "high",
-              notification: {
-                channelId: channelId,
-                clickAction: "FLUTTER_NOTIFICATION_CLICK",
-              },
-            },
-            apns: {
-              headers: { "apns-priority": "10" },
-              payload: {
-                aps: {
-                  alert: {
-                    title: "Reporte listo",
-                    body: `El reporte de ${childName} ya está disponible`,
-                  },
-                  // badge manejado por la app, no desde server
-                  ...(notificationPrefs.soundEnabled && { sound: "default" }),
-                },
-              },
-            },
-          });
-          console.log(`📱 Notificación enviada a padre ${parentId}`);
-        }
-      } catch (notifError) {
-        console.error(`⚠️ Error enviando notificación:`, notifError);
-        // No fallar por esto
-      }
+      await sendReportNotification(db, parentId, {
+        title: "Reporte listo",
+        body: `El reporte de ${childName} ya está disponible`,
+        data: {
+          type: "report_ready",
+          reportId: finalReportId,
+          childId: childId,
+          childName: childName,
+        },
+      });
 
       console.log(`✅ Reporte ${finalReportId} generado exitosamente`);
 

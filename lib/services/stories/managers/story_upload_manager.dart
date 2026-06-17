@@ -60,11 +60,19 @@ class StoryUploadManager {
         // Escuchar progress
         uploadTask.snapshotEvents.listen(
           (taskSnapshot) {
-            final progress = taskSnapshot.bytesTransferred / taskSnapshot.totalBytes;
+            // Firebase reporta totalBytes == 0 en el primer snapshot (o con
+            // archivos vacíos). 0/0 = NaN, y luego `NaN.toInt()` en los
+            // consumidores lanza UnsupportedError (crash). Guardamos y clampeamos.
+            final total = taskSnapshot.totalBytes;
+            final progress = total > 0
+                ? (taskSnapshot.bytesTransferred / total).clamp(0.0, 1.0)
+                : 0.0;
             onProgressUpdate(progress);
-            progressController.add(progress);
+            if (!progressController.isClosed) progressController.add(progress);
           },
-          onError: (error) => progressController.addError(error),
+          onError: (error) {
+            if (!progressController.isClosed) progressController.addError(error);
+          },
         );
       }
 
