@@ -26,8 +26,10 @@ WORKDIR /app/ACE-Step-1.5
 RUN uv sync --no-dev
 RUN uv pip install runpod hf_transfer
 
-# Hornear pesos del modelo en la imagen (sin network volume → multi-DC).
-RUN uv run python -c "from huggingface_hub import snapshot_download; snapshot_download('ACE-Step/acestep-v15-xl-turbo'); snapshot_download('ACE-Step/Ace-Step1.5')"
+# NOTA: el modelo NO se hornea (excedía el límite de build de 30 min de RunPod
+# al exportar ~25GB). Se baja en el cold start vía HF (en la red de RunPod tarda
+# ~66s) a HF_HOME=/opt/hf. La imagen queda ~8GB → el build entra en los 30 min.
+# Sin network volume → multi-DC. hf_transfer acelera la descarga.
 
 # Handler inline (igual contrato que la box).
 RUN cat > /app/ACE-Step-1.5/rp_handler.py <<'PYEOF'
@@ -103,7 +105,7 @@ def handler(job):
         if ref_path:
             task_type = "cover"
             src_audio = ref_path
-            audio_cover_strength = cover_strength
+            audio_cover_strength = 0.6 + 0.4 * cover_strength
 
     params = GenerationParams(
         caption=caption, lyrics=lyrics, duration=duration,

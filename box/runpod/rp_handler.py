@@ -88,7 +88,9 @@ def handler(job):
         if ref_path:
             task_type = "cover"
             src_audio = ref_path
-            audio_cover_strength = cover_strength
+            # Mapear el slider (0..1) a un rango alto (piso 0.6) para que el
+            # cover siga la referencia (default del GUI de ACE-Step = 1.0).
+            audio_cover_strength = 0.6 + 0.4 * cover_strength
 
     params = GenerationParams(
         caption=caption, lyrics=lyrics, duration=duration,
